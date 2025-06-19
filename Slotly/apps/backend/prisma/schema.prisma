@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
   output   = "../src/generated/prisma"
@@ -12,4 +6,135 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String     @id @default(uuid())
+  email       String     @unique
+  password    String
+  name        String
+  role        Role       @default(CUSTOMER)
+  phone       String?
+  bookings    Booking[]
+  businesses  Business[] @relation("OwnerBusinesses")
+  createdAt   DateTime   @default(now())
+}
+
+enum Role {
+  ADMIN
+  BUSINESS_OWNER
+  STAFF
+  CUSTOMER
+}
+
+model Business {
+  id           String     @id @default(uuid())
+  name         String
+  description  String?
+  ownerId      String
+  owner        User       @relation("OwnerBusinesses", fields: [ownerId], references: [id])
+  staff        User[]     @relation("BusinessStaff")
+  services     Service[]
+  bookings     Booking[]
+  subscription Subscription?
+  createdAt    DateTime   @default(now())
+}
+
+model Service {
+  id          String    @id @default(uuid())
+  name        String
+  price       Int
+  duration    Int       // in minutes
+  businessId  String
+  business    Business  @relation(fields: [businessId], references: [id])
+  bookings    Booking[]
+  createdAt   DateTime  @default(now())
+}
+
+model Booking {
+  id          String     @id @default(uuid())
+  userId      String
+  user        User       @relation(fields: [userId], references: [id])
+  serviceId   String
+  service     Service    @relation(fields: [serviceId], references: [id])
+  businessId  String
+  business    Business   @relation(fields: [businessId], references: [id])
+  time        DateTime
+  status      BookingStatus @default(PENDING)
+  payment     Payment?
+  createdAt   DateTime   @default(now())
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+model Payment {
+  id         String    @id @default(uuid())
+  bookingId  String    @unique
+  booking    Booking   @relation(fields: [bookingId], references: [id])
+  amount     Int
+  method     PaymentMethod
+  status     PaymentStatus
+  fee        Int       // platform fee (2–3%)
+  createdAt  DateTime  @default(now())
+}
+
+enum PaymentMethod {
+  MPESA
+  AIRTEL_MONEY
+  CARD
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+model Subscription {
+  id           String          @id @default(uuid())
+  businessId   String          @unique
+  business     Business        @relation(fields: [businessId], references: [id])
+  plan         SubscriptionPlan
+  startDate    DateTime
+  endDate      DateTime
+  isActive     Boolean         @default(true)
+}
+
+enum SubscriptionPlan {
+  BASIC
+  STANDARD
+  PREMIUM
+}
+
+model AdCampaign {
+  id          String    @id @default(uuid())
+  businessId  String
+  business    Business  @relation(fields: [businessId], references: [id])
+  title       String
+  budget      Int
+  startDate   DateTime
+  endDate     DateTime
+  isActive    Boolean   @default(true)
+}
+
+model Reminder {
+  id         String    @id @default(uuid())
+  bookingId  String    @unique
+  booking    Booking   @relation(fields: [bookingId], references: [id])
+  sendAt     DateTime
+  sent       Boolean   @default(false)
+  method     ReminderMethod
+}
+
+enum ReminderMethod {
+  EMAIL
+  SMS
+  PUSH
 }
