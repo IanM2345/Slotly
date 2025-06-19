@@ -1,25 +1,25 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '../../../generated/prisma';
+import { PrismaClient } from '@/generated/prisma';
 import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
 // UPDATE user
-export async function PUT(request, { params }) {
+export async function PUT(request, context) {
   try {
     const data = await request.json();
-    console.log('Data received for update:', data);
-
+    const userId = context.params.id;
     const { name, email, role } = data;
-    const userId = params.id;
+
+    // Check for email conflict
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing && existing.id !== userId) {
+      return NextResponse.json({ error: 'Email already in use' }, { status: 409 });
+    }
 
     const updatedUser = await prisma.user.update({
       where: { id: userId },
-      data: {
-        name,
-        email,
-        role,
-      },
+      data: { name, email, role },
     });
 
     return NextResponse.json(updatedUser);
@@ -30,9 +30,9 @@ export async function PUT(request, { params }) {
 }
 
 // DELETE user
-export async function DELETE(request, { params }) {
+export async function DELETE(request, context) {
   try {
-    const userId = params.id;
+    const userId = context.params.id;
 
     const deletedUser = await prisma.user.delete({
       where: { id: userId },
