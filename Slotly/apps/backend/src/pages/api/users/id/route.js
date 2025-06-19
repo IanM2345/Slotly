@@ -1,36 +1,36 @@
-import {NextResponse} from 'next/server';
-import {PrismaClient} from '../../../generated/prisma'; 
-
+import { NextResponse } from 'next/server';
+import { PrismaClient } from '../../../generated/prisma';
 import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
-export async function PUT (request, {params}){
+// UPDATE user
+export async function PUT(request, { params }) {
+  try {
+    const data = await request.json();
+    console.log('Data received for update:', data);
 
-    try{
-        const data = await request.json();
-        console.log('Data received for update:', data);
+    const { name, email, role } = data;
+    const userId = params.id;
 
-        const {name, email, role} = data;
-
-        const userId = params.id;
-
-        const updatedUser =await prisma.user.update({
-            where: {id},
-            data: {
-                name,
-                email,
-                role
-            },
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        name,
+        email,
+        role,
+      },
     });
 
     return NextResponse.json(updatedUser);
-}catch (error) {
+  } catch (error) {
     console.error('Error updating user:', error);
-    return NextResponse.json({error: 'Internal Server Error'}, {status: 500});
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
-export async function DELETE (request, {params}){
+
+// DELETE user
+export async function DELETE(request, { params }) {
   try {
     const userId = params.id;
 
