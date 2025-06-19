@@ -33,6 +33,8 @@ model Business {
   services     Service[]
   subscription Subscription?
   staff        User[]        @relation("BusinessStaff")
+
+  @@unique([name, ownerId]) 
 }
 
 model Service {

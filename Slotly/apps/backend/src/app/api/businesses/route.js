@@ -1,0 +1,69 @@
+import {NextResponse} from 'next/server';
+import {PrismaClient} from '@/generated/prisma'; 
+
+const prisma = new PrismaClient();
+
+// New business
+export async function POST(request) {
+    try{
+        const data = await request.json();
+
+        const {name,description,ownerId} = data;
+
+        if(!name || !description || !ownerId) {
+            return NextResponse.json(
+                { error: 'Name, description, and ownerId are required.' },
+                { status: 400 }
+            );
+        }
+
+        // Check for existing business with the same name
+        const existingBusiness = await prisma.business.findFirst({
+            where: {
+                name,
+               ownerId
+         }
+              });
+
+         if (existingBusiness) {
+          return NextResponse.json(
+          { error: 'You already have a business with this name.' },
+          { status: 409 }
+         );
+        }
+
+        const newBusiness = await prisma.business.create({
+            data: {
+                name,
+                description,
+                ownerId
+            },
+        });
+
+        return NextResponse.json(newBusiness, { status: 201 });
+    } catch (error) {
+        console.error('Error creating business:', error);
+        return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    }
+
+    
+}
+export async function GET(){
+
+        try{
+            const businesses = await prisma.business.findMany({
+                include: {
+                    owner: true,
+                    staff: true,
+                    services: true,
+                    subscription: true
+                },
+            });
+
+            return NextResponse.json(businesses, { status: 200 });
+        } catch (error) {
+            console.error('Error fetching businesses:', error);
+            return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+        }
+    }
+    
