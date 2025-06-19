@@ -4,22 +4,102 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
 model User {
-  id          String     @id @default(uuid())
-  email       String     @unique
-  password    String
-  name        String
-  role        Role       @default(CUSTOMER)
-  phone       String?
-  bookings    Booking[]
-  businesses  Business[] @relation("OwnerBusinesses")
-  staffof Business[] @relation("BusinessStaff")
-  createdAt   DateTime   @default(now())
+  id         String     @id @default(uuid())
+  email      String     @unique
+  password   String
+  name       String
+  role       Role       @default(CUSTOMER)
+  phone      String?
+  createdAt  DateTime   @default(now())
+  bookings   Booking[]
+  businesses Business[] @relation("OwnerBusinesses")
+  staffOf    Business[] @relation("BusinessStaff")
+}
 
+model Business {
+  id           String        @id @default(uuid())
+  name         String
+  description  String?
+  ownerId      String
+  createdAt    DateTime      @default(now())
+  adCampaigns  AdCampaign[]
+  bookings     Booking[]
+  owner        User          @relation("OwnerBusinesses", fields: [ownerId], references: [id])
+  services     Service[]
+  subscription Subscription?
+  staff        User[]        @relation("BusinessStaff")
+}
+
+model Service {
+  id         String    @id @default(uuid())
+  name       String
+  price      Int
+  duration   Int
+  businessId String
+  createdAt  DateTime  @default(now())
+  bookings   Booking[]
+  business   Business  @relation(fields: [businessId], references: [id])
+}
+
+model Booking {
+  id         String        @id @default(uuid())
+  userId     String
+  serviceId  String
+  businessId String
+  time       DateTime
+  status     BookingStatus @default(PENDING)
+  createdAt  DateTime      @default(now())
+  business   Business      @relation(fields: [businessId], references: [id])
+  service    Service       @relation(fields: [serviceId], references: [id])
+  user       User          @relation(fields: [userId], references: [id])
+  payment    Payment?
+  reminder   Reminder?
+}
+
+model Payment {
+  id        String        @id @default(uuid())
+  bookingId String        @unique
+  amount    Int
+  method    PaymentMethod
+  status    PaymentStatus
+  fee       Int
+  createdAt DateTime      @default(now())
+  booking   Booking       @relation(fields: [bookingId], references: [id])
+}
+
+model Subscription {
+  id         String           @id @default(uuid())
+  businessId String           @unique
+  plan       SubscriptionPlan
+  startDate  DateTime
+  endDate    DateTime
+  isActive   Boolean          @default(true)
+  business   Business         @relation(fields: [businessId], references: [id])
+}
+
+model AdCampaign {
+  id         String   @id @default(uuid())
+  businessId String
+  title      String
+  budget     Int
+  startDate  DateTime
+  endDate    DateTime
+  isActive   Boolean  @default(true)
+  business   Business @relation(fields: [businessId], references: [id])
+}
+
+model Reminder {
+  id        String         @id @default(uuid())
+  bookingId String         @unique
+  sendAt    DateTime
+  sent      Boolean        @default(false)
+  method    ReminderMethod
+  booking   Booking        @relation(fields: [bookingId], references: [id])
 }
 
 enum Role {
@@ -29,62 +109,11 @@ enum Role {
   CUSTOMER
 }
 
-model Business {
-  id           String     @id @default(uuid())
-  name         String
-  description  String?
-  ownerId      String
-  owner        User       @relation("OwnerBusinesses", fields: [ownerId], references: [id])
-  staff        User[]     @relation("BusinessStaff")
-  services     Service[]
-  bookings     Booking[]
-  subscription Subscription?
-  adCampaigns AdCampaign[]
-  createdAt    DateTime   @default(now())
-}
-
-model Service {
-  id          String    @id @default(uuid())
-  name        String
-  price       Int
-  duration    Int       // in minutes
-  businessId  String
-  business    Business  @relation(fields: [businessId], references: [id])
-  bookings    Booking[]
-  createdAt   DateTime  @default(now())
-}
-
-model Booking {
-  id          String     @id @default(uuid())
-  userId      String
-  user        User       @relation(fields: [userId], references: [id])
-  serviceId   String
-  service     Service    @relation(fields: [serviceId], references: [id])
-  businessId  String
-  business    Business   @relation(fields: [businessId], references: [id])
-  time        DateTime
-  status      BookingStatus @default(PENDING)
-  payment     Payment?
-  reminder Reminder?
-  createdAt   DateTime   @default(now())
-}
-
 enum BookingStatus {
   PENDING
   CONFIRMED
   CANCELLED
   COMPLETED
-}
-
-model Payment {
-  id         String    @id @default(uuid())
-  bookingId  String    @unique
-  booking    Booking   @relation(fields: [bookingId], references: [id])
-  amount     Int
-  method     PaymentMethod
-  status     PaymentStatus
-  fee        Int       // platform fee (2–3%)
-  createdAt  DateTime  @default(now())
 }
 
 enum PaymentMethod {
@@ -101,40 +130,10 @@ enum PaymentStatus {
   REFUNDED
 }
 
-model Subscription {
-  id           String          @id @default(uuid())
-  businessId   String          @unique
-  business     Business        @relation(fields: [businessId], references: [id])
-  plan         SubscriptionPlan
-  startDate    DateTime
-  endDate      DateTime
-  isActive     Boolean         @default(true)
-}
-
 enum SubscriptionPlan {
   BASIC
   STANDARD
   PREMIUM
-}
-
-model AdCampaign {
-  id          String    @id @default(uuid())
-  businessId  String
-  business    Business  @relation(fields: [businessId], references: [id])
-  title       String
-  budget      Int
-  startDate   DateTime
-  endDate     DateTime
-  isActive    Boolean   @default(true)
-}
-
-model Reminder {
-  id         String    @id @default(uuid())
-  bookingId  String    @unique
-  booking    Booking   @relation(fields: [bookingId], references: [id])
-  sendAt     DateTime
-  sent       Boolean   @default(false)
-  method     ReminderMethod
 }
 
 enum ReminderMethod {
