@@ -6,6 +6,11 @@ import jwt from 'jsonwebtoken';
 const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET;
 
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET is not set in .env');
+}
+
+
 export async function POST(request) {
   try {
     const { email, phone, password } = await request.json();
@@ -41,17 +46,20 @@ export async function POST(request) {
       { expiresIn: '7d' }
     );
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       message: 'Login successful',
-      token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role
-      }
+      user: { id: user.id, name: user.name, role: user.role }
     });
+
+    response.cookies.set('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 60 * 60 * 24 * 7, 
+    });
+
+    return response;
 
   } catch (error) {
     console.error('Login error:', error);
