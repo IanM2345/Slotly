@@ -8,27 +8,25 @@ if (!JWT_SECRET) {
 }
 
 export function verifyToken(request) {
-  const token = request.cookies.get('token')?.value;
+  const authHeader = request.headers.get('authorization');
+  console.log('Authorization header:', authHeader); // debug
 
-  if (!token) {
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return { valid: false, error: 'No token provided' };
   }
 
+  const token = authHeader.split(' ')[1];
+
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+    console.log('Decoded JWT:', decoded); // debug
     return { valid: true, decoded };
   } catch (err) {
+    console.error('JWT verification failed:', err); // debug
     return { valid: false, error: 'Invalid token' };
   }
 }
 
 
 
-export function requireAuth(request) {
-  const { valid, decoded, error } = verifyToken(request);
-  if (!valid) {
-    return NextResponse.json({ error }, { status: 401 });
-  }
 
-  return decoded; 
-}

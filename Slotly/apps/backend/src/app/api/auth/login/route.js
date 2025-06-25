@@ -51,15 +51,13 @@ export async function POST(request) {
       user: { id: user.id, name: user.name, role: user.role }
     });
 
-    response.cookies.set('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/',
-      maxAge: 60 * 60 * 24 * 7, 
-    });
+    return NextResponse.json({
+       message: 'Login successful',
+       token, 
+       user: { id: user.id, name: user.name, role: user.role }
+    }, { status: 200 });
 
-    return response;
+   
 
   } catch (error) {
     console.error('Login error:', error);

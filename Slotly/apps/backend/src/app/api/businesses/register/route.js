@@ -75,6 +75,12 @@ export async function POST(request) {
     return NextResponse.json({ message: 'Business registration successful' }, { status: 201 });
 
   } catch (error) {
+    if (error.code === 'P2002') {
+    return NextResponse.json(
+      { error: 'A business with this name already exists for this user.' },
+      { status: 409 }
+    );
+  }
     console.error('Error during business registration:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
