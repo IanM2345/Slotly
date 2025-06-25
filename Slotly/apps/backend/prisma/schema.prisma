@@ -105,6 +105,22 @@ model Reminder {
   booking   Booking        @relation(fields: [bookingId], references: [id])
 }
 
+model BusinessVerification {
+  id                String   @id @default(uuid())
+  businessId        String   @unique
+  type              String   
+  idNumber          String
+  licenseUrl        String?
+  regNumber         String?
+  idPhotoUrl        String
+  selfieWithIdUrl   String?
+  status            VerificationStatus @default(PENDING)
+  reviewedAt        DateTime?
+  createdAt         DateTime           @default(now())
+  business          Business           @relation(fields: [businessId], references: [id])
+}
+
+
 enum Role {
   ADMIN
   BUSINESS_OWNER
@@ -144,3 +160,10 @@ enum ReminderMethod {
   SMS
   PUSH
 }
+
+enum VerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+

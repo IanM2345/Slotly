@@ -23,6 +23,7 @@ export function verifyToken(request) {
 }
 
 
+
 export function requireAuth(request) {
   const { valid, decoded, error } = verifyToken(request);
   if (!valid) {
