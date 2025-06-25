@@ -119,6 +119,23 @@ model BusinessVerification {
   business          Business           @relation(fields: [businessId], references: [id])
 }
 
+model StaffEnrollment {
+  id             String            @id @default(uuid())
+  userId         String
+  businessId     String
+  idNumber       String
+  idPhotoUrl     String
+  selfieWithIdUrl String
+  status         EnrollmentStatus @default(PENDING)
+  submittedAt    DateTime         @default(now())
+  reviewedAt     DateTime?
+
+  user           User             @relation(fields: [userId], references: [id])
+  business       Business         @relation(fields: [businessId], references: [id])
+
+  @@unique([userId, businessId]) // Prevent duplicate applications
+}
+
 
 enum Role {
   ADMIN
@@ -166,3 +183,8 @@ enum VerificationStatus {
   REJECTED
 }
 
+enum EnrollmentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
