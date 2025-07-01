@@ -23,12 +23,13 @@ model User {
 
   favoriteBusinesses Favorite[] @relation("FavoriteOwner")
   favoritedAsStaff   Favorite[] @relation("FavoriteStaff")
-  
+
   userCoupons UserCoupon[]
 
   referralsMade   Referral[] @relation("Referrer")
   referralsReceived Referral? @relation("Referred")
 
+    reviews     Review[]
 }
 
 model Business {
@@ -47,6 +48,9 @@ model Business {
   staffEnrollments     StaffEnrollment[]
 
   favoritedBy Favorite[] @relation("FavoriteBusiness")
+
+    reviews     Review[]
+
 }
 
 model Service {
@@ -200,6 +204,21 @@ model Referral {
 
   referrer       User     @relation("Referrer", fields: [referrerId], references: [id])
   referredUser   User     @relation("Referred", fields: [referredUserId], references: [id])
+}
+
+model Review {
+  id         String   @id @default(uuid())
+  userId     String
+  businessId String
+  rating     Int
+  comment    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user       User     @relation(fields: [userId], references: [id])
+  business   Business @relation(fields: [businessId], references: [id])
+
+  @@unique([userId, businessId]) 
 }
 
 
