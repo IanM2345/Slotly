@@ -9,33 +9,38 @@ datasource db {
 }
 
 model User {
-  id         String     @id @default(uuid())
-  email      String     @unique
-  password   String
-  name       String
-  role       Role       @default(CUSTOMER)
-  phone      String?
-  createdAt  DateTime   @default(now())
-  bookings   Booking[]
-  businesses Business[] @relation("OwnerBusinesses")
-  staffOf    Business[] @relation("BusinessStaff")
+  id               String            @id @default(uuid())
+  email            String            @unique
+  password         String
+  name             String
+  role             Role              @default(CUSTOMER)
+  phone            String?
+  createdAt        DateTime          @default(now())
+  bookings         Booking[]
+  businesses       Business[]        @relation("OwnerBusinesses")
+  staffOf          Business[]        @relation("BusinessStaff")
   staffEnrollments StaffEnrollment[]
+
+  favoriteBusinesses Favorite[] @relation("FavoriteOwner")
+  favoritedAsStaff   Favorite[] @relation("FavoriteStaff")
 }
 
 model Business {
-  id           String        @id @default(uuid())
-  name         String        @unique
-  description  String?
-  ownerId      String
-  createdAt    DateTime      @default(now())
-  adCampaigns  AdCampaign[]
-  bookings     Booking[]
-  owner        User          @relation("OwnerBusinesses", fields: [ownerId], references: [id])
-  services     Service[]
-  subscription Subscription?
-  staff        User[]        @relation("BusinessStaff")
+  id                   String                @id @default(uuid())
+  name                 String                @unique
+  description          String?
+  ownerId              String
+  createdAt            DateTime              @default(now())
+  adCampaigns          AdCampaign[]
+  bookings             Booking[]
+  owner                User                  @relation("OwnerBusinesses", fields: [ownerId], references: [id])
+  services             Service[]
+  subscription         Subscription?
+  staff                User[]                @relation("BusinessStaff")
   businessVerification BusinessVerification?
-  staffEnrollments StaffEnrollment[]
+  staffEnrollments     StaffEnrollment[]
+
+  favoritedBy Favorite[] @relation("FavoriteBusiness")
 }
 
 model Service {
@@ -50,21 +55,21 @@ model Service {
 }
 
 model Booking {
-  id         String        @id @default(uuid())
-  userId     String
-  serviceId  String
-  businessId String
-  startTime   DateTime
-  endTime     DateTime
-  status     BookingStatus @default(PENDING)
-  createdAt  DateTime      @default(now())
-  business   Business      @relation(fields: [businessId], references: [id])
-  service    Service       @relation(fields: [serviceId], references: [id])
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  cancellationDeadlineMinutes Int @default(120) 
-  lateCancellationFee         Int @default(5000)
-  payment    Payment?
-  reminder   Reminder?
+  id                          String        @id @default(uuid())
+  userId                      String
+  serviceId                   String
+  businessId                  String
+  startTime                   DateTime
+  endTime                     DateTime
+  status                      BookingStatus @default(PENDING)
+  createdAt                   DateTime      @default(now())
+  business                    Business      @relation(fields: [businessId], references: [id])
+  service                     Service       @relation(fields: [serviceId], references: [id])
+  user                        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cancellationDeadlineMinutes Int           @default(120)
+  lateCancellationFee         Int           @default(5000)
+  payment                     Payment?
+  reminder                    Reminder?
 }
 
 model Payment {
@@ -109,30 +114,30 @@ model Reminder {
 }
 
 model BusinessVerification {
-  id                String   @id @default(uuid())
-  businessId        String   @unique
-  type              String   
-  idNumber          String
-  licenseUrl        String?
-  regNumber         String?
-  idPhotoUrl        String
-  selfieWithIdUrl   String?
-  status            VerificationStatus @default(PENDING)
-  reviewedAt        DateTime?
-  createdAt         DateTime           @default(now())
-  business          Business           @relation(fields: [businessId], references: [id])
+  id              String             @id @default(uuid())
+  businessId      String             @unique
+  type            String
+  idNumber        String
+  licenseUrl      String?
+  regNumber       String?
+  idPhotoUrl      String
+  selfieWithIdUrl String?
+  status          VerificationStatus @default(PENDING)
+  reviewedAt      DateTime?
+  createdAt       DateTime           @default(now())
+  business        Business           @relation(fields: [businessId], references: [id])
 }
 
 model StaffEnrollment {
-  id             String            @id @default(uuid())
-  userId         String
-  businessId     String
-  idNumber       String
-  idPhotoUrl     String
+  id              String           @id @default(uuid())
+  userId          String
+  businessId      String
+  idNumber        String
+  idPhotoUrl      String
   selfieWithIdUrl String
-  status         EnrollmentStatus @default(PENDING)
-  submittedAt    DateTime         @default(now())
-  reviewedAt     DateTime?
+  status          EnrollmentStatus @default(PENDING)
+  submittedAt     DateTime         @default(now())
+  reviewedAt      DateTime?
 
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
@@ -140,6 +145,21 @@ model StaffEnrollment {
   @@unique([userId, businessId]) // Prevent duplicate applications
 }
 
+model Favorite {
+  id         String  @id @default(uuid())
+  userId     String
+  businessId String?
+  staffId    String?
+
+  user     User      @relation("FavoriteOwner", fields: [userId], references: [id])
+  business Business? @relation("FavoriteBusiness", fields: [businessId], references: [id]) // ✅ Add relation name
+  staff    User?     @relation("FavoriteStaff", fields: [staffId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, businessId])
+  @@unique([userId, staffId])
+}
 
 enum Role {
   ADMIN
@@ -155,7 +175,6 @@ enum BookingStatus {
   COMPLETED
   RESCHEDULED
 }
-
 
 enum PaymentMethod {
   MPESA
