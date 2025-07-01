@@ -72,7 +72,17 @@ export async function POST(request) {
       data: { role: 'BUSINESS_OWNER' },
     });
 
-    return NextResponse.json({ message: 'Business registration successful' }, { status: 201 });
+    return NextResponse.json({
+          message: 'Business registration successful',
+          business: {
+            id: business.id,
+            name: business.name,
+            description: business.description,
+            ownerId: business.ownerId,
+            createdAt: business.createdAt
+         }
+    }, { status: 201 });
+
 
   } catch (error) {
     if (error.code === 'P2002') {

@@ -19,6 +19,7 @@ model User {
   bookings   Booking[]
   businesses Business[] @relation("OwnerBusinesses")
   staffOf    Business[] @relation("BusinessStaff")
+  staffEnrollments StaffEnrollment[]
 }
 
 model Business {
@@ -34,6 +35,7 @@ model Business {
   subscription Subscription?
   staff        User[]        @relation("BusinessStaff")
   businessVerification BusinessVerification?
+  staffEnrollments StaffEnrollment[]
 }
 
 model Service {
@@ -58,7 +60,7 @@ model Booking {
   createdAt  DateTime      @default(now())
   business   Business      @relation(fields: [businessId], references: [id])
   service    Service       @relation(fields: [serviceId], references: [id])
-  user       User          @relation(fields: [userId], references: [id])
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   payment    Payment?
   reminder   Reminder?
 }
@@ -130,8 +132,8 @@ model StaffEnrollment {
   submittedAt    DateTime         @default(now())
   reviewedAt     DateTime?
 
-  user           User             @relation(fields: [userId], references: [id])
-  business       Business         @relation(fields: [businessId], references: [id])
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
   @@unique([userId, businessId]) // Prevent duplicate applications
 }
