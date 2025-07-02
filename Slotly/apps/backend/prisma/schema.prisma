@@ -26,14 +26,16 @@ model User {
 
   userCoupons UserCoupon[]
 
-  referralsMade   Referral[] @relation("Referrer")
-  referralsReceived Referral? @relation("Referred")
+  referralsMade     Referral[] @relation("Referrer")
+  referralsReceived Referral?  @relation("Referred")
 
-    reviews     Review[]
+  reviews Review[]
 
-    notifications Notification[]
+  notifications Notification[]
 
-    staffBookings Booking[] @relation("StaffBookings")
+  staffBookings Booking[] @relation("StaffBookings")
+
+  availabilitySlots Availability[]
 }
 
 model Business {
@@ -53,8 +55,7 @@ model Business {
 
   favoritedBy Favorite[] @relation("FavoriteBusiness")
 
-    reviews     Review[]
-
+  reviews Review[]
 }
 
 model Service {
@@ -71,7 +72,7 @@ model Service {
 model Booking {
   id                          String        @id @default(uuid())
   userId                      String
-  staffId                     String?       
+  staffId                     String?
   serviceId                   String
   businessId                  String
   startTime                   DateTime
@@ -87,7 +88,6 @@ model Booking {
   payment                     Payment?
   reminder                    Reminder?
 }
-
 
 model Payment {
   id        String        @id @default(uuid())
@@ -179,27 +179,27 @@ model Favorite {
 }
 
 model Coupon {
-  id            String       @id @default(uuid())
-  code          String       @unique
-  description   String?
-  discount      Int          
-  isPercentage  Boolean      @default(false) 
-  expiresAt     DateTime
-  createdAt     DateTime     @default(now())
+  id           String   @id @default(uuid())
+  code         String   @unique
+  description  String?
+  discount     Int
+  isPercentage Boolean  @default(false)
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
 
-  userCoupons   UserCoupon[]
+  userCoupons UserCoupon[]
 }
 
 model UserCoupon {
-  id         String   @id @default(uuid())
-  userId     String
-  couponId   String
-  usedAt     DateTime?
+  id       String    @id @default(uuid())
+  userId   String
+  couponId String
+  usedAt   DateTime?
 
-  user       User     @relation(fields: [userId], references: [id])
-  coupon     Coupon   @relation(fields: [couponId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+  coupon Coupon @relation(fields: [couponId], references: [id])
 
-  @@unique([userId, couponId]) 
+  @@unique([userId, couponId])
 }
 
 model Referral {
@@ -209,8 +209,8 @@ model Referral {
   createdAt      DateTime @default(now())
   rewardIssued   Boolean  @default(false)
 
-  referrer       User     @relation("Referrer", fields: [referrerId], references: [id])
-  referredUser   User     @relation("Referred", fields: [referredUserId], references: [id])
+  referrer     User @relation("Referrer", fields: [referrerId], references: [id])
+  referredUser User @relation("Referred", fields: [referredUserId], references: [id])
 }
 
 model Review {
@@ -222,22 +222,34 @@ model Review {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  user       User     @relation(fields: [userId], references: [id])
-  business   Business @relation(fields: [businessId], references: [id])
+  user     User     @relation(fields: [userId], references: [id])
+  business Business @relation(fields: [businessId], references: [id])
 
-  @@unique([userId, businessId]) 
+  @@unique([userId, businessId])
 }
 
 model Notification {
-  id          String           @id @default(uuid())
-  userId      String
-  type        NotificationType
-  title       String
-  message     String
-  read        Boolean          @default(false)
-  createdAt   DateTime         @default(now())
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
 
-  user        User             @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Availability {
+  id        String   @id @default(uuid())
+  staffId   String
+  startTime DateTime
+  endTime   DateTime
+  createdAt DateTime @default(now())
+
+  staff User @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@index([staffId, startTime, endTime])
 }
 
 enum NotificationType {
