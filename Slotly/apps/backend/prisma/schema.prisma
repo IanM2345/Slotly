@@ -30,6 +30,8 @@ model User {
   referralsReceived Referral? @relation("Referred")
 
     reviews     Review[]
+
+    notifications Notification[]
 }
 
 model Business {
@@ -221,6 +223,23 @@ model Review {
   @@unique([userId, businessId]) 
 }
 
+model Notification {
+  id          String           @id @default(uuid())
+  userId      String
+  type        NotificationType
+  title       String
+  message     String
+  read        Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+
+  user        User             @relation(fields: [userId], references: [id])
+}
+
+enum NotificationType {
+  BOOKING
+  COUPON
+  REFERRAL
+}
 
 enum Role {
   ADMIN
