@@ -49,6 +49,25 @@ export async function POST(request) {
       return NextResponse.json({ error: 'startTime and endTime are required' }, { status: 400 });
     }
 
+    const overlappingTimeOff = await prisma.timeOffRequest.findFirst({
+      where: {
+        staffId: decoded.userId,
+        status: 'APPROVED',
+        OR: [
+          {
+            startDate: { lte: new Date(endTime) },
+            endDate: { gte: new Date(startTime) }
+          }
+        ]
+      }
+    });
+
+    if (overlappingTimeOff) {
+      return NextResponse.json({
+        error: 'This availability overlaps with an approved time-off request'
+      }, { status: 400 });
+    }
+
     const slot = await prisma.availability.create({
       data: {
         staffId: decoded.userId,

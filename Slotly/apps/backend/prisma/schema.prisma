@@ -36,6 +36,8 @@ model User {
   staffBookings Booking[] @relation("StaffBookings")
 
   availabilitySlots Availability[]
+
+  timeOffRequests TimeOffRequest[]
 }
 
 model Business {
@@ -251,6 +253,28 @@ model Availability {
 
   @@index([staffId, startTime, endTime])
 }
+
+model TimeOffRequest {
+  id          String   @id @default(uuid())
+  staffId     String
+  reason      String?
+  startDate   DateTime
+  endDate     DateTime
+  status      TimeOffStatus @default(PENDING)
+  createdAt   DateTime @default(now())
+  reviewedAt  DateTime?
+
+  staff User @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@index([staffId, startDate, endDate])
+}
+
+enum TimeOffStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 
 enum NotificationType {
   BOOKING
