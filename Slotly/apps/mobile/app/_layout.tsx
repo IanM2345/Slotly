@@ -19,7 +19,7 @@ export const unstable_settings = {
 };
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
-SplashScreen.preventAutoHideAsync();
+
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
@@ -29,6 +29,8 @@ export default function RootLayout() {
 
   // Expo Router uses Error Boundaries to catch errors in the navigation tree.
   useEffect(() => {
+    SplashScreen.preventAutoHideAsync(); // moved inside
+
     if (error) throw error;
   }, [error]);
 

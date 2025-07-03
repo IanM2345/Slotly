@@ -1,33 +1,53 @@
 import React, { useState } from 'react';
-import { View, TextInput, Button } from 'react-native';
-import { addDoc, collection } from 'firebase/firestore';
-import { db, auth } from '../../firebase/config';
+import { View, Text, TextInput, Button, Platform } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 export default function BookingScreen({ navigation }) {
   const [details, setDetails] = useState('');
+  const [date, setDate] = useState(new Date());
+  const [show, setShow] = useState(false);
 
-  const handleBooking = async () => {
-    try {
-      await addDoc(collection(db, 'bookings'), {
-        user: auth.currentUser.email,
-        details,
-        createdAt: new Date()
-      });
-      alert('Booking created!');
-      navigation.goBack();
-    } catch (error) {
-      alert(error.message);
-    }
+  const onChange = (event, selectedDate) => {
+    const currentDate = selectedDate || date;
+    setShow(Platform.OS === 'ios'); // keep open on iOS
+    setDate(currentDate);
+  };
+
+  const showDatepicker = () => {
+    setShow(true);
+  };
+
+  const handleBooking = () => {
+    alert(`Mock Booking for:\n${details}\n${date.toLocaleString()}`);
+    navigation.goBack();
   };
 
   return (
     <View style={{ padding: 20 }}>
       <TextInput
-        placeholder="Enter booking details"
+        placeholder="Booking details"
         value={details}
         onChangeText={setDetails}
+        style={{ marginBottom: 20 }}
       />
-      <Button title="Submit Booking" onPress={handleBooking} />
+
+      <Button onPress={showDatepicker} title="Pick Date & Time" />
+
+      {show && (
+        <DateTimePicker
+          value={date}
+          mode="datetime"
+          is24Hour={true}
+          display="default"
+          onChange={onChange}
+        />
+      )}
+
+      <Text style={{ marginVertical: 10 }}>
+        Selected: {date.toLocaleString()}
+      </Text>
+
+      <Button title="Confirm Booking" onPress={handleBooking} />
     </View>
   );
 }
