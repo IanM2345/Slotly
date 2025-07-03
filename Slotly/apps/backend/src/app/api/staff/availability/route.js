@@ -1,33 +1,32 @@
-
-import {NextResponse} from 'next/server';
-import {PrismaClient}  from '@generated/prisma';
-import {verifyToken} from '@/middleware/auth';
+import { NextResponse } from 'next/server';
+import { PrismaClient } from '@generated/prisma';
+import { verifyToken } from '@/middleware/auth';
 
 const prisma = new PrismaClient();
 
-export async function GET(request){
-    try{
-        const authHeader = request.headers.get('authorization');
-        if(!authHeader?.startsWith('Bearer ')){
-            return NextResponse.json({erorr: 'Unauthorized'}, {status: 401});
-        }
-
-        const token = authHeader.split(' ')[1];
-        const {valid, decoded} = await verifyToken(token);
-        if(!valid || decoded.role !== 'STAFF'){
-            return NextResponse.json({error: 'Unauthorized'}, {status: 401});
-        }
-
-        const slots = await prisma.availability.findMany({
-            where: {staffId: decoded.userId},
-            orderBy: {startTime:'asc'}
-        });
-
-        return NextResponse.json({availability: slots}, {status: 200});
-    } catch(error){
-        console.error('GET availability error:',error);
-        return NextResponse.json({error: 'Internal Server Error'}, {status: 500});
+export async function GET(request) {
+  try {
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+
+    const token = authHeader.split(' ')[1];
+    const { valid, decoded } = await verifyToken(token);
+    if (!valid || decoded.role !== 'STAFF') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const slots = await prisma.availability.findMany({
+      where: { staffId: decoded.userId },
+      orderBy: { startTime: 'asc' }
+    });
+
+    return NextResponse.json({ availability: slots }, { status: 200 });
+  } catch (error) {
+    console.error('GET availability error:', error);
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+  }
 }
 
 export async function POST(request) {
@@ -44,21 +43,19 @@ export async function POST(request) {
     }
 
     const { startTime, endTime } = await request.json();
-
     if (!startTime || !endTime) {
       return NextResponse.json({ error: 'startTime and endTime are required' }, { status: 400 });
     }
+
+    const start = new Date(startTime);
+    const end = new Date(endTime);
 
     const overlappingTimeOff = await prisma.timeOffRequest.findFirst({
       where: {
         staffId: decoded.userId,
         status: 'APPROVED',
-        OR: [
-          {
-            startDate: { lte: new Date(endTime) },
-            endDate: { gte: new Date(startTime) }
-          }
-        ]
+        startDate: { lte: end },
+        endDate: { gte: start }
       }
     });
 
@@ -71,8 +68,8 @@ export async function POST(request) {
     const slot = await prisma.availability.create({
       data: {
         staffId: decoded.userId,
-        startTime: new Date(startTime),
-        endTime: new Date(endTime)
+        startTime: start,
+        endTime: end
       }
     });
 
