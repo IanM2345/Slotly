@@ -51,6 +51,7 @@ model Business {
   owner                User                  @relation("OwnerBusinesses", fields: [ownerId], references: [id])
   services             Service[]
   subscription         Subscription?
+  logoUrl              String? 
   staff                User[]                @relation("BusinessStaff")
   businessVerification BusinessVerification?
   staffEnrollments     StaffEnrollment[]
@@ -59,6 +60,18 @@ model Business {
 
   reviews Review[]
 }
+
+model ServiceImage {
+  id         String   @id @default(uuid())
+  url        String
+  serviceId  String
+  createdAt  DateTime @default(now())
+
+  service Service @relation(fields: [serviceId], references: [id])
+
+  @@index([serviceId])
+}
+
 
 model Service {
   id         String    @id @default(uuid())
@@ -69,6 +82,8 @@ model Service {
   createdAt  DateTime  @default(now())
   bookings   Booking[]
   business   Business  @relation(fields: [businessId], references: [id])
+
+  images     ServiceImage[]
 }
 
 model Booking {
