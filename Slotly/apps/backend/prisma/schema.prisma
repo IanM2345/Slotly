@@ -38,6 +38,8 @@ model User {
   availabilitySlots Availability[]
 
   timeOffRequests TimeOffRequest[]
+
+  servicesProvided Service[] @relation("ServiceStaff")
 }
 
 model Business {
@@ -78,12 +80,15 @@ model Service {
   name       String
   price      Int
   duration   Int
+  category   String?
+  available  Boolean   @default(true)
   businessId String
   createdAt  DateTime  @default(now())
   bookings   Booking[]
   business   Business  @relation(fields: [businessId], references: [id])
-
   images     ServiceImage[]
+
+  staff User[] @relation("ServiceStaff")
 }
 
 model Booking {
