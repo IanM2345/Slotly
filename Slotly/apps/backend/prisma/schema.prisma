@@ -58,6 +58,8 @@ model Business {
   businessVerification BusinessVerification?
   staffEnrollments     StaffEnrollment[]
 
+   coupons              Coupon[] 
+
   favoritedBy Favorite[] @relation("FavoriteBusiness")
 
   reviews Review[]
@@ -208,6 +210,9 @@ model Coupon {
   isPercentage Boolean  @default(false)
   expiresAt    DateTime
   createdAt    DateTime @default(now())
+
+  businessId   String
+  business     Business @relation(fields: [businessId], references: [id])
 
   userCoupons UserCoupon[]
 }
