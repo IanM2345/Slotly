@@ -1,4 +1,3 @@
-
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verfiyToken } from '@/middleware/auth';
@@ -28,27 +27,39 @@ async function getBusinessFromToken(request) {
   return { business };
 }
 
-export async function DELETE(request) {
+export async function GET(request) {
   try {
     const { business, error, status } = await getBusinessFromToken(request);
     if (error) return NextResponse.json({ error }, { status });
 
-    const { serviceId, staffId } = await request.json();
-
-    if (!serviceId || !staffId) {
-      return NextResponse.json({ error: 'Missing serviceId or staffId' }, { status: 400 });
-    }
-
-    await prisma.service.update({
-      where: { id: serviceId },
-      data: {
-        staff: {
-          disconnect: { id: staffId },
+    const allStaff = await prisma.user.findMany({
+      where: {
+        staffOf: {
+          some: {
+            id: business.id,
+          },
+        },
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        servicesProvided: {
+          where: {
+            businessId: business.id,
+          },
+          select: {
+            id: true,
+            name: true,
+          },
         },
       },
     });
 
-    return NextResponse.json({ message: 'Staff unassigned from service' }, { status: 200 });
+    const assigned = allStaff.filter((staff) => staff.servicesProvided.length > 0);
+    const unassigned = allStaff.filter((staff) => staff.servicesProvided.length === 0);
+
+    return NextResponse.json({ assigned, unassigned }, { status: 200 });
   } catch (err) {
     console.error(err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
