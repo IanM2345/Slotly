@@ -63,6 +63,8 @@ model Business {
   favoritedBy Favorite[] @relation("FavoriteBusiness")
 
   reviews Review[]
+
+    serviceBundles ServiceBundle[]
 }
 
 model ServiceImage {
@@ -91,6 +93,8 @@ model Service {
   images     ServiceImage[]
 
   staff User[] @relation("ServiceStaff")
+
+  includedInBundles ServiceInBundle[]
 }
 
 model Booking {
@@ -293,6 +297,36 @@ model TimeOffRequest {
 
   @@index([staffId, startDate, endDate])
 }
+
+model ServiceBundle {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  price       Int
+  duration    Int       
+  businessId  String
+  createdAt   DateTime  @default(now())
+
+  business Business @relation(fields: [businessId], references: [id])
+  services ServiceInBundle[]
+
+  @@index([businessId])
+}
+
+model ServiceInBundle {
+  id              String   @id @default(uuid())
+  bundleId        String
+  serviceId       String
+  position        Int      
+
+  bundle  ServiceBundle @relation(fields: [bundleId], references: [id])
+  service Service       @relation(fields: [serviceId], references: [id])
+
+  @@unique([bundleId, serviceId])
+  @@index([bundleId])
+}
+
+
 
 enum TimeOffStatus {
   PENDING
