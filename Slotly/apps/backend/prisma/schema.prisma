@@ -65,6 +65,8 @@ model Business {
   reviews Review[]
 
     serviceBundles ServiceBundle[]
+
+      monthlyReports MonthlyReport[]
 }
 
 model ServiceImage {
@@ -327,6 +329,17 @@ model ServiceInBundle {
   @@index([bundleId])
 }
 
+model MonthlyReport {
+  id         String   @id @default(uuid())
+  businessId String
+  period     String   
+  fileUrl    String   
+  createdAt  DateTime @default(now())
+
+  business Business @relation(fields: [businessId], references: [id])
+
+  @@unique([businessId, period])
+}
 
 
 enum TimeOffStatus {
