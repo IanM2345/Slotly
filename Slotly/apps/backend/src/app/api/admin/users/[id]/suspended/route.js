@@ -1,4 +1,3 @@
-
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
@@ -14,15 +13,56 @@ export async function PATCH(request, { params }) {
   }
 
   const userId = params.id;
-  const { suspendedUntil } = await request.json(); // e.g. "2025-07-15T23:59:00Z"
+  const body = await request.json();
+  const { suspendedUntil, reason, unsuspend } = body;
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { suspended: true, suspendedUntil: true },
+  });
+
+  if (!user) {
+    return NextResponse.json({ error: 'User not found' }, { status: 404 });
+  }
+
+  if (unsuspend === true) {
+    if (!user.suspended) {
+      return NextResponse.json({ message: 'User is not suspended' }, { status: 200 });
+    }
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        suspended: false,
+        suspendedUntil: null,
+      },
+    });
+
+    await prisma.suspensionLog.create({
+      data: {
+        userId,
+        adminId: decoded.id,
+        action: 'UNSUSPEND',
+        reason: reason || 'No reason provided',
+      },
+    });
+
+    return NextResponse.json({ message: 'User has been unsuspended' }, { status: 200 });
+  }
 
   if (!suspendedUntil) {
-    return NextResponse.json({ error: 'Missing suspendedUntil timestamp' }, { status: 400 });
+    return NextResponse.json({ error: 'Missing suspendedUntil timestamp or unsuspend flag' }, { status: 400 });
   }
 
   const untilDate = new Date(suspendedUntil);
-  if (isNaN(untilDate.getTime())) {
-    return NextResponse.json({ error: 'Invalid date format' }, { status: 400 });
+
+  if (isNaN(untilDate.getTime()) || untilDate.getTime() < Date.now()) {
+    return NextResponse.json({ error: 'Suspension date must be a valid future timestamp' }, { status: 400 });
+  }
+
+ 
+  if (user.suspended && user.suspendedUntil?.toISOString() === untilDate.toISOString()) {
+    return NextResponse.json({ message: 'User is already suspended until that date' }, { status: 200 });
   }
 
   await prisma.user.update({
@@ -33,5 +73,16 @@ export async function PATCH(request, { params }) {
     },
   });
 
-  return NextResponse.json({ message: `User suspended until ${untilDate.toISOString()}` }, { status: 200 });
+  await prisma.suspensionLog.create({
+    data: {
+      userId,
+      adminId: decoded.id,
+      action: 'SUSPEND',
+      reason: reason || 'No reason provided',
+    },
+  });
+
+  return NextResponse.json({
+    message: `User suspended until ${untilDate.toISOString()}`,
+  }, { status: 200 });
 }
