@@ -16,6 +16,8 @@ model User {
   role             Role              @default(CUSTOMER)
   phone            String?
   createdAt        DateTime          @default(now())
+  suspended       Boolean  @default(false)
+  suspendedUntil  DateTime?
   bookings         Booking[]
   businesses       Business[]        @relation("OwnerBusinesses")
   staffOf          Business[]        @relation("BusinessStaff")
