@@ -221,30 +221,35 @@ model Favorite {
 }
 
 model Coupon {
-  id           String   @id @default(uuid())
-  code         String   @unique
-  description  String?
-  discount     Int
-  isPercentage Boolean  @default(false)
-  expiresAt    DateTime
-  createdAt    DateTime @default(now())
+  id              String     @id @default(uuid())
+  code            String     @unique
+  description     String?
+  discount        Int        // can be flat or percentage
+  isPercentage    Boolean    @default(false)
+  expiresAt       DateTime
+  createdAt       DateTime   @default(now())
+  createdByAdmin  Boolean    @default(false)
 
-  businessId   String
-  business     Business @relation(fields: [businessId], references: [id])
+  usageLimit      Int        @default(1)     
+  timesUsed       Int        @default(0)     
+  minimumSpend    Int?                      
 
-  userCoupons UserCoupon[]
+  businessId      String
+  business        Business   @relation(fields: [businessId], references: [id])
+
+  userCoupons     UserCoupon[]
 }
 
 model UserCoupon {
-  id       String    @id @default(uuid())
-  userId   String
-  couponId String
-  usedAt   DateTime?
+  id        String     @id @default(uuid())
+  userId    String
+  couponId  String
+  usedAt    DateTime?
 
-  user   User   @relation(fields: [userId], references: [id])
-  coupon Coupon @relation(fields: [couponId], references: [id])
+  user      User       @relation(fields: [userId], references: [id])
+  coupon    Coupon     @relation(fields: [couponId], references: [id])
 
-  @@unique([userId, couponId])
+  @@unique([userId, couponId]) 
 }
 
 model Referral {

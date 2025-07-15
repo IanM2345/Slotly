@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "Coupon" ADD COLUMN     "createdByAdmin" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "minimumSpend" INTEGER,
+ADD COLUMN     "timesUsed" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "usageLimit" INTEGER NOT NULL DEFAULT 1;

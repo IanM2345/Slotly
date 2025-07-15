@@ -1,69 +1,58 @@
 
+import { NextResponse } from 'next/server';
+import { PrismaClient } from '@/generated/prisma';
+import { verifyToken } from '@/middleware/auth';
 
-import { NextResponse } from 'next/server'
-import { PrismaClient } from '@/generated/prisma'
-import { verifyToken } from '@/middleware/auth'
-
-const prisma = new PrismaClient()
-
-export async function GET(request) {
-  try {
-    const token = request.headers.get('authorization')?.split(' ')[1]
-    const admin = await verifyToken(token)
-    if (!admin || admin.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
-    }
-
-    const { searchParams } = new URL(request.url)
-    const onlyFlagged = searchParams.get('flagged') === 'true'
-
-    const coupons = await prisma.coupon.findMany({
-      where: onlyFlagged ? { description: { contains: 'FLAGGED', mode: 'insensitive' } } : {},
-      include: {
-        business: true,
-        userCoupons: {
-          include: {
-            user: {
-              select: { id: true, name: true, email: true },
-            },
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    })
-
-    return NextResponse.json({ coupons })
-  } catch (err) {
-    console.error('[ADMIN_GET_COUPONS]', err)
-    return NextResponse.json({ error: 'Failed to fetch coupons' }, { status: 500 })
-  }
-}
+const prisma = new PrismaClient();
 
 export async function POST(request) {
   try {
-    const token = request.headers.get('authorization')?.split(' ')[1]
-    const admin = await verifyToken(token)
-    if (!admin || admin.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
+    const token = request.headers.get('Authorization')?.replace('Bearer ', '');
+    const decoded = verifyToken(token);
+    if (!decoded || decoded.role !== 'ADMIN') {
+      return NextResponse.json({ message: 'Unauthorized' }, { status: 403 });
     }
 
-    const body = await request.json()
-    const { code, description, discount, isPercentage, expiresAt, businessId } = body
+    const body = await request.json();
+    const {
+      code,
+      description,
+      discount,
+      isPercentage,
+      expiresAt,
+      usageLimit,
+      businessId,
+      minimumSpend
+    } = body;
 
-    const newCoupon = await prisma.coupon.create({
+    
+    if (!code || !discount || !expiresAt || !businessId) {
+      return NextResponse.json({ message: 'Missing requestuired fields' }, { status: 400 });
+    }
+
+    
+    const existing = await prisma.coupon.findUnique({ where: { code } });
+    if (existing) {
+      return NextResponse.json({ message: 'Coupon code already exists' }, { status: 409 });
+    }
+
+    const coupon = await prisma.coupon.create({
       data: {
         code,
         description,
         discount,
         isPercentage,
         expiresAt: new Date(expiresAt),
+        usageLimit: usageLimit || 1,
+        minimumSpend,
         businessId,
-      },
-    })
+        createdByAdmin: true,
+      }
+    });
 
-    return NextResponse.json({ coupon: newCoupon }, { status: 201 })
-  } catch (err) {
-    console.error('[ADMIN_CREATE_COUPON]', err)
-    return NextResponse.json({ error: 'Failed to create coupon' }, { status: 500 })
+    return NextResponse.json({ message: 'Coupon created', coupon }, { status: 201 });
+  } catch (error) {
+    console.error('[ADMIN_COUPON_CREATE]', error);
+    return NextResponse.json({ message: 'Internal Server Error' }, { status: 500 });
   }
 }
