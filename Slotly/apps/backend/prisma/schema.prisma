@@ -4,115 +4,47 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "mongodb"
   url      = env("DATABASE_URL")
 }
 
 model User {
-  id               String            @id @default(uuid())
-  email            String            @unique
+  id               String   @id @default(auto()) @map("_id") @db.ObjectId
+  email            String   @unique
   password         String
   name             String
-  role             Role              @default(CUSTOMER)
+  role             Role     @default(CUSTOMER)
   phone            String?
-  createdAt        DateTime          @default(now())
-  suspended       Boolean  @default(false)
-  suspendedUntil  DateTime?
-   burned           Boolean  @default(false)
-  bookings         Booking[]
-  businesses       Business[]        @relation("OwnerBusinesses")
-  staffOf          Business[]        @relation("BusinessStaff")
-  staffEnrollments StaffEnrollment[]
-
-  favoriteBusinesses Favorite[] @relation("FavoriteOwner")
-  favoritedAsStaff   Favorite[] @relation("FavoriteStaff")
-
-  userCoupons UserCoupon[]
-
-  referralsMade     Referral[] @relation("Referrer")
-  referralsReceived Referral?  @relation("Referred")
-
-  reviews Review[]
-
-  notifications Notification[]
-
-  staffBookings Booking[] @relation("StaffBookings")
-
-  availabilitySlots Availability[]
-
-  timeOffRequests TimeOffRequest[]
-
-    suspendedLogs SuspensionLog[] @relation("SuspendedUser")
-  adminActions   SuspensionLog[] @relation("SuspendingAdmin")
-
-  servicesProvided Service[] @relation("ServiceStaff")
+  createdAt        DateTime @default(now())
+  suspended        Boolean  @default(false)
+  suspendedUntil   DateTime?
+  burned           Boolean  @default(false)
 }
 
 model Business {
-  id                   String                @id @default(uuid())
-  name                 String                @unique
-  description          String?
-  ownerId              String
-  createdAt            DateTime              @default(now())
-  adCampaigns          AdCampaign[]
-  bookings             Booking[]
-  owner                User                  @relation("OwnerBusinesses", fields: [ownerId], references: [id])
-  services             Service[]
-  subscription         Subscription?
-  logoUrl              String? 
-  staff                User[]                @relation("BusinessStaff")
-  businessVerification BusinessVerification?
-  staffEnrollments     StaffEnrollment[]
-
-
-   coupons              Coupon[] 
-
-  favoritedBy Favorite[] @relation("FavoriteBusiness")
-
-  reviews Review[]
-
-    serviceBundles ServiceBundle[]
-
-      monthlyReports MonthlyReport[]
-
-     suspended     Boolean          @default(false)
-     suspendedUntil DateTime?
-  suspendedLogs SuspensionLog[] @relation("SuspendedBusiness")
-  
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  name           String   @unique
+  description    String?
+  ownerId        String
+  createdAt      DateTime @default(now())
+  logoUrl        String?
+  suspended      Boolean  @default(false)
+  suspendedUntil DateTime?
 }
-
-model ServiceImage {
-  id         String   @id @default(uuid())
-  url        String
-  serviceId  String
-  createdAt  DateTime @default(now())
-
-  service Service @relation(fields: [serviceId], references: [id])
-
-  @@index([serviceId])
-}
-
 
 model Service {
-  id         String    @id @default(uuid())
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
   name       String
   price      Int
   duration   Int
   category   String?
-  available  Boolean   @default(true)
+  available  Boolean  @default(true)
   businessId String
-  createdAt  DateTime  @default(now())
-  bookings   Booking[]
-  business   Business  @relation(fields: [businessId], references: [id])
-  images     ServiceImage[]
-
-  staff User[] @relation("ServiceStaff")
-
-  includedInBundles ServiceInBundle[]
+  createdAt  DateTime @default(now())
 }
 
 model Booking {
-  id                          String        @id @default(uuid())
+  id                          String        @id @default(auto()) @map("_id") @db.ObjectId
   userId                      String
   staffId                     String?
   serviceId                   String
@@ -121,59 +53,126 @@ model Booking {
   endTime                     DateTime
   status                      BookingStatus @default(PENDING)
   createdAt                   DateTime      @default(now())
-  business                    Business      @relation(fields: [businessId], references: [id])
-  service                     Service       @relation(fields: [serviceId], references: [id])
-  user                        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  staff                       User?         @relation("StaffBookings", fields: [staffId], references: [id]) // NEW
   cancellationDeadlineMinutes Int           @default(120)
   lateCancellationFee         Int           @default(5000)
-  payment                     Payment?
-  reminder                    Reminder?
 }
 
 model Payment {
-  id        String        @id @default(uuid())
+  id        String        @id @default(auto()) @map("_id") @db.ObjectId
   bookingId String        @unique
   amount    Int
   method    PaymentMethod
   status    PaymentStatus
   fee       Int
   createdAt DateTime      @default(now())
-  booking   Booking       @relation(fields: [bookingId], references: [id])
 }
 
 model Subscription {
-  id         String           @id @default(uuid())
+  id         String           @id @default(auto()) @map("_id") @db.ObjectId
   businessId String           @unique
   plan       SubscriptionPlan
   startDate  DateTime
   endDate    DateTime
   isActive   Boolean          @default(true)
-  business   Business         @relation(fields: [businessId], references: [id])
+}
+
+model Reminder {
+  id        String         @id @default(auto()) @map("_id") @db.ObjectId
+  bookingId String         @unique
+  sendAt    DateTime
+  sent      Boolean        @default(false)
+  method    ReminderMethod
+}
+
+model Review {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId     String
+  businessId String
+  rating     Int
+  comment    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  flagged    Boolean  @default(false)
+}
+
+model Coupon {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  code            String   @unique
+  description     String?
+  discount        Int
+  isPercentage    Boolean  @default(false)
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+  createdByAdmin  Boolean  @default(false)
+  usageLimit      Int      @default(1)
+  timesUsed       Int      @default(0)
+  minimumSpend    Int?
+  businessId      String
+}
+
+model UserCoupon {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String
+  couponId  String
+  usedAt    DateTime?
+}
+
+model Referral {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  referrerId     String
+  referredUserId String   @unique
+  createdAt      DateTime @default(now())
+  rewardIssued   Boolean  @default(false)
+}
+
+model Notification {
+  id        String           @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String
+  type      NotificationType
+  title     String
+  message   String
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+}
+
+model Availability {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  staffId   String
+  startTime DateTime
+  endTime   DateTime
+  createdAt DateTime @default(now())
+}
+
+model TimeOffRequest {
+  id          String        @id @default(auto()) @map("_id") @db.ObjectId
+  staffId     String
+  reason      String?
+  startDate   DateTime
+  endDate     DateTime
+  status      TimeOffStatus @default(PENDING)
+  createdAt   DateTime      @default(now())
+  reviewedAt  DateTime?
 }
 
 model AdCampaign {
-  id         String   @id @default(uuid())
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
   businessId String
   title      String
   budget     Int
   startDate  DateTime
   endDate    DateTime
   isActive   Boolean  @default(true)
-  business   Business @relation(fields: [businessId], references: [id])
 }
 
-model Reminder {
-  id        String         @id @default(uuid())
-  bookingId String         @unique
-  sendAt    DateTime
-  sent      Boolean        @default(false)
-  method    ReminderMethod
-  booking   Booking        @relation(fields: [bookingId], references: [id])
+model ServiceImage {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  url       String
+  serviceId String
+  createdAt DateTime @default(now())
 }
 
 model BusinessVerification {
-  id              String             @id @default(uuid())
+  id              String             @id @default(auto()) @map("_id") @db.ObjectId
   businessId      String             @unique
   type            String
   idNumber        String
@@ -184,11 +183,10 @@ model BusinessVerification {
   status          VerificationStatus @default(PENDING)
   reviewedAt      DateTime?
   createdAt       DateTime           @default(now())
-  business        Business           @relation(fields: [businessId], references: [id])
 }
 
 model StaffEnrollment {
-  id              String           @id @default(uuid())
+  id              String           @id @default(auto()) @map("_id") @db.ObjectId
   userId          String
   businessId      String
   idNumber        String
@@ -197,189 +195,48 @@ model StaffEnrollment {
   status          EnrollmentStatus @default(PENDING)
   submittedAt     DateTime         @default(now())
   reviewedAt      DateTime?
-
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, businessId]) // Prevent duplicate applications
-}
-
-model Favorite {
-  id         String  @id @default(uuid())
-  userId     String
-  businessId String?
-  staffId    String?
-
-  user     User      @relation("FavoriteOwner", fields: [userId], references: [id])
-  business Business? @relation("FavoriteBusiness", fields: [businessId], references: [id]) // ✅ Add relation name
-  staff    User?     @relation("FavoriteStaff", fields: [staffId], references: [id])
-
-  createdAt DateTime @default(now())
-
-  @@unique([userId, businessId])
-  @@unique([userId, staffId])
-}
-
-model Coupon {
-  id              String     @id @default(uuid())
-  code            String     @unique
-  description     String?
-  discount        Int        // can be flat or percentage
-  isPercentage    Boolean    @default(false)
-  expiresAt       DateTime
-  createdAt       DateTime   @default(now())
-  createdByAdmin  Boolean    @default(false)
-
-  usageLimit      Int        @default(1)     
-  timesUsed       Int        @default(0)     
-  minimumSpend    Int?                      
-
-  businessId      String
-  business        Business   @relation(fields: [businessId], references: [id])
-
-  userCoupons     UserCoupon[]
-}
-
-model UserCoupon {
-  id        String     @id @default(uuid())
-  userId    String
-  couponId  String
-  usedAt    DateTime?
-
-  user      User       @relation(fields: [userId], references: [id])
-  coupon    Coupon     @relation(fields: [couponId], references: [id])
-
-  @@unique([userId, couponId]) 
-}
-
-model Referral {
-  id             String   @id @default(uuid())
-  referrerId     String
-  referredUserId String   @unique
-  createdAt      DateTime @default(now())
-  rewardIssued   Boolean  @default(false)
-
-  referrer     User @relation("Referrer", fields: [referrerId], references: [id])
-  referredUser User @relation("Referred", fields: [referredUserId], references: [id])
-}
-
-model Review {
-  id         String   @id @default(uuid())
-  userId     String
-  businessId String
-  rating     Int
-  comment    String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-   flagged    Boolean  @default(false)
-
-  user     User     @relation(fields: [userId], references: [id])
-  business Business @relation(fields: [businessId], references: [id])
-
-  @@unique([userId, businessId])
-}
-
-model Notification {
-  id        String           @id @default(uuid())
-  userId    String
-  type      NotificationType
-  title     String
-  message   String
-  read      Boolean          @default(false)
-  createdAt DateTime         @default(now())
-
-  user User @relation(fields: [userId], references: [id])
-}
-
-model Availability {
-  id        String   @id @default(uuid())
-  staffId   String
-  startTime DateTime
-  endTime   DateTime
-  createdAt DateTime @default(now())
-
-  staff User @relation(fields: [staffId], references: [id], onDelete: Cascade)
-
-  @@index([staffId, startTime, endTime])
-}
-
-model TimeOffRequest {
-  id          String   @id @default(uuid())
-  staffId     String
-  reason      String?
-  startDate   DateTime
-  endDate     DateTime
-  status      TimeOffStatus @default(PENDING)
-  createdAt   DateTime @default(now())
-  reviewedAt  DateTime?
-
-  staff User @relation(fields: [staffId], references: [id], onDelete: Cascade)
-
-  @@index([staffId, startDate, endDate])
 }
 
 model ServiceBundle {
-  id          String   @id @default(uuid())
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
   name        String
   description String?
   price       Int
-  duration    Int       
+  duration    Int
   businessId  String
-  createdAt   DateTime  @default(now())
-
-  business Business @relation(fields: [businessId], references: [id])
-  services ServiceInBundle[]
-
-  @@index([businessId])
+  createdAt   DateTime @default(now())
 }
 
 model ServiceInBundle {
-  id              String   @id @default(uuid())
-  bundleId        String
-  serviceId       String
-  position        Int      
-
-  bundle  ServiceBundle @relation(fields: [bundleId], references: [id])
-  service Service       @relation(fields: [serviceId], references: [id])
-
-  @@unique([bundleId, serviceId])
-  @@index([bundleId])
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  bundleId  String
+  serviceId String
+  position  Int
 }
 
 model MonthlyReport {
-  id         String   @id @default(uuid())
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
   businessId String
-  period     String   
-  fileUrl    String   
+  period     String
+  fileUrl    String
   createdAt  DateTime @default(now())
-
-  business Business @relation(fields: [businessId], references: [id])
-
-  @@unique([businessId, period])
 }
 
 model SuspensionLog {
-  id         String   @id @default(uuid())
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
   userId     String?
   businessId String?
   adminId    String
   reason     String?
-  action     String   
+  action     String
   timestamp  DateTime @default(now())
-
-  user     User?     @relation("SuspendedUser", fields: [userId], references: [id])
-  business Business? @relation("SuspendedBusiness", fields: [businessId], references: [id])
-  admin    User      @relation("SuspendingAdmin", fields: [adminId], references: [id])
 }
-
-
 
 enum TimeOffStatus {
   PENDING
   APPROVED
   REJECTED
 }
-
 
 enum NotificationType {
   BOOKING
