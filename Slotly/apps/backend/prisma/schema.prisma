@@ -42,7 +42,7 @@ model User {
 
   timeOffRequests TimeOffRequest[]
 
-   suspendedLogs SuspensionLog[] @relation("SuspendedUser")
+    suspendedLogs SuspensionLog[] @relation("SuspendedUser")
   adminActions   SuspensionLog[] @relation("SuspendingAdmin")
 
   servicesProvided Service[] @relation("ServiceStaff")
@@ -64,6 +64,7 @@ model Business {
   businessVerification BusinessVerification?
   staffEnrollments     StaffEnrollment[]
 
+
    coupons              Coupon[] 
 
   favoritedBy Favorite[] @relation("FavoriteBusiness")
@@ -73,6 +74,11 @@ model Business {
     serviceBundles ServiceBundle[]
 
       monthlyReports MonthlyReport[]
+
+     suspended     Boolean          @default(false)
+     suspendedUntil DateTime?
+  suspendedLogs SuspensionLog[] @relation("SuspendedBusiness")
+  
 }
 
 model ServiceImage {
@@ -349,15 +355,18 @@ model MonthlyReport {
 
 model SuspensionLog {
   id         String   @id @default(uuid())
-  userId     String
+  userId     String?
+  businessId String?
   adminId    String
   reason     String?
   action     String   
   timestamp  DateTime @default(now())
 
-  user   User @relation("SuspendedUser", fields: [userId], references: [id])
-  admin  User @relation("SuspendingAdmin", fields: [adminId], references: [id])
+  user     User?     @relation("SuspendedUser", fields: [userId], references: [id])
+  business Business? @relation("SuspendedBusiness", fields: [businessId], references: [id])
+  admin    User      @relation("SuspendingAdmin", fields: [adminId], references: [id])
 }
+
 
 
 enum TimeOffStatus {
