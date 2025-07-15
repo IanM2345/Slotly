@@ -40,7 +40,7 @@ export default function ExploreScreen() {
          <TouchableOpacity
   key={id}
   style={styles.card}
-  onPress={() => router.push('/profile')}// 
+  onPress={() => router.push('/service-details')}
 >
   <Image
     source={{ uri: 'https://via.placeholder.com/150x100.png?text=Service+Image' }}
