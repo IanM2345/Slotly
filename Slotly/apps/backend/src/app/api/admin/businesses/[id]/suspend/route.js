@@ -1,8 +1,9 @@
-
-
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
 import { verifyToken } from '@/middleware/auth'
+import { createNotification } from '@/shared/notifications/createNotification'
+import { sendNotification } from '@/shared/notifications/sendNotification'
+import { sendAdminEmailLog } from '@/shared/notifications/sendAdminEmailLog'
 
 const prisma = new PrismaClient()
 
@@ -31,7 +32,9 @@ export async function PATCH(req, { params }) {
       return NextResponse.json({ error: 'Business is already suspended' }, { status: 400 })
     }
 
-    const untilDate = suspendedUntil ? new Date(suspendedUntil) : null
+    const untilDate = suspendedUntil
+      ? new Date(suspendedUntil)
+      : new Date(new Date().setDate(new Date().getDate() + 30))
 
     await prisma.$transaction([
       prisma.business.update({
@@ -42,13 +45,11 @@ export async function PATCH(req, { params }) {
         },
       }),
 
-      
       prisma.service.updateMany({
         where: { businessId },
         data: { available: false },
       }),
 
-      
       prisma.booking.updateMany({
         where: {
           businessId,
@@ -60,7 +61,6 @@ export async function PATCH(req, { params }) {
         },
       }),
 
-    
       prisma.suspensionLog.create({
         data: {
           businessId,
@@ -68,9 +68,28 @@ export async function PATCH(req, { params }) {
           adminId: admin.id,
           reason: reason || 'Suspended by admin',
           action: 'BUSINESS_SUSPENSION',
+          timestamp: new Date(),
         },
       }),
     ])
+
+    await createNotification({
+      userId: business.ownerId,
+      type: 'SYSTEM',
+      title: 'Business Suspended',
+      message: `Your business has been suspended${untilDate ? ` until ${untilDate.toDateString()}` : ''}. Reason: ${reason || 'No reason provided.'}`,
+    })
+
+    await sendNotification({
+      userId: business.ownerId,
+      type: 'SYSTEM',
+      message: `Your business has been suspended. Please check admin panel for details.`,
+    })
+
+    await sendAdminEmailLog({
+      subject: 'Business Suspended',
+      message: `Admin ${admin.name} (${admin.id}) suspended business "${business.name}" (${businessId}) until ${untilDate.toISOString()}. Reason: ${reason || 'N/A'}`,
+    })
 
     return NextResponse.json({ message: 'Business suspended successfully' }, { status: 200 })
   } catch (error) {

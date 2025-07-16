@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
 import { verifyToken } from '@/middleware/auth'
+import { createNotification } from '@/shared/notifications/createNotification'
+import { sendNotification } from '@/shared/notifications/sendNotification'
+import { sendAdminEmailLog } from '@/shared/notifications/sendAdminEmailLog'
 
 const prisma = new PrismaClient()
 
@@ -17,7 +20,10 @@ export async function PATCH(req, { params }) {
 
     const business = await prisma.business.findUnique({
       where: { id: businessId },
-      include: { businessVerification: true },
+      include: {
+        businessVerification: true,
+        owner: true,
+      },
     })
 
     if (!business) {
@@ -27,7 +33,7 @@ export async function PATCH(req, { params }) {
     if (!business.businessVerification) {
       return NextResponse.json({ error: 'No verification submitted' }, { status: 400 })
     }
-
+s
     await prisma.businessVerification.update({
       where: { businessId },
       data: {
@@ -36,8 +42,25 @@ export async function PATCH(req, { params }) {
       },
     })
 
-    return NextResponse.json({ message: 'Business approved successfully' }, { status: 200 })
+    await createNotification({
+      userId: business.ownerId,
+      type: 'SYSTEM',
+      title: 'Business Approved',
+      message: `Your business "${business.name}" has been approved.`,
+    })
 
+    await sendNotification({
+      userId: business.ownerId,
+      type: 'SYSTEM',
+      message: `Your business "${business.name}" has been approved.`,
+    })
+
+    await sendAdminEmailLog({
+      subject: 'Business Approved',
+      message: `Business "${business.name}" (${business.id}) was approved by Admin ${user.name} (${user.id}).`,
+    })
+
+    return NextResponse.json({ message: 'Business approved successfully' }, { status: 200 })
   } catch (err) {
     console.error('[APPROVE_BUSINESS_ERROR]', err)
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })

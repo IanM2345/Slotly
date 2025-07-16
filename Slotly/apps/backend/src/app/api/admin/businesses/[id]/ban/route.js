@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
 import { verifyToken } from '@/middleware/auth'
+import { createNotification } from '@/shared/notifications/createNotification'
+import { sendNotification } from '@/shared/notifications/sendNotification'
+import { sendAdminEmailLog } from '@/shared/notifications/sendAdminEmailLog'
 
 const prisma = new PrismaClient()
 
@@ -15,10 +18,13 @@ export async function PATCH(req, { params }) {
 
     const businessId = params.id
     const body = await req.json()
-    const { reason, durationInDays } = body 
+    const { reason, durationInDays } = body
 
     const business = await prisma.business.findUnique({
       where: { id: businessId },
+      include: {
+        owner: true, 
+      },
     })
 
     if (!business) {
@@ -29,28 +35,49 @@ export async function PATCH(req, { params }) {
       return NextResponse.json({ error: 'Business is already suspended' }, { status: 400 })
     }
 
+    const suspendedUntil = new Date()
+    suspendedUntil.setDate(suspendedUntil.getDate() + (durationInDays || 7)) // default 7 days
 
     await prisma.business.update({
       where: { id: businessId },
       data: {
         suspended: true,
+        suspendedUntil,
       },
     })
-
 
     await prisma.suspensionLog.create({
       data: {
         businessId,
         userId: business.ownerId,
         adminId: admin.id,
-        action: 'BUSINESS_SUSPENSION',
         reason: reason || null,
+        action: 'BUSINESS_SUSPENSION',
+        timestamp: new Date(),
       },
+    })
+
+    await createNotification({
+      userId: business.ownerId,
+      type: 'SYSTEM',
+      title: 'Business Suspended',
+      message: `Your business "${business.name}" has been suspended for ${durationInDays || 7} days.`,
+    })
+
+    await sendNotification({
+      userId: business.ownerId,
+      type: 'SYSTEM',
+      message: `Your business "${business.name}" has been suspended.`,
+    })
+
+    await sendAdminEmailLog({
+      subject: 'Business Suspension',
+      message: `Business "${business.name}" (${business.id}) was suspended by Admin ${admin.name} (${admin.id}) for ${durationInDays || 7} days.\nReason: ${reason || 'No reason provided'}`,
     })
 
     return NextResponse.json({ message: 'Business suspended successfully' }, { status: 200 })
   } catch (error) {
-    console.error('[BUSINESS_BAN_ERROR]', error)
+    console.error('[BUSINESS_SUSPEND_ERROR]', error)
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
   }
 }
