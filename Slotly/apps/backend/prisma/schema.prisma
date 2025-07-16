@@ -240,7 +240,14 @@ enum TimeOffStatus {
 
 enum NotificationType {
   BOOKING
+  PAYMENT
   COUPON
+  APPLICATION
+  TIME_OFF
+  STAFF_ASSIGNMENT
+  SYSTEM
+  REVIEW
+  SUBSCRIPTION
   REFERRAL
 }
 
