@@ -1,3 +1,5 @@
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import bcrypt from 'bcryptjs';
@@ -58,7 +60,6 @@ export async function POST(request) {
     if (phone) await sendOTPviaSMS(phone, otp);
     if (email) await sendOTPviaEmail(email, otp);
 
-  
     if (referralCode) {
       const referrer = await prisma.user.findFirst({
         where: { referralCode }
@@ -88,6 +89,7 @@ export async function POST(request) {
       userId: newUser.id  
     }, { status: 201 });
   } catch (error) {
+    Sentry.captureException(error, { tags: { route: 'SIGNUP' } });
     console.error('Error during signup:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

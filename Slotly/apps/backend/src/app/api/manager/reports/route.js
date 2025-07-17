@@ -1,3 +1,5 @@
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
@@ -5,28 +7,34 @@ import { verifyToken } from '@/middleware/auth';
 const prisma = new PrismaClient();
 
 async function getBusinessFromToken(request) {
-  const authHeader = request.headers.get('authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return { error: 'Unauthorized', status: 401 };
+  try {
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return { error: 'Unauthorized', status: 401 };
+    }
+
+    const token = authHeader.split(' ')[1];
+    const { valid, decoded } = await verifyToken(token);
+    if (!valid || decoded.role !== 'BUSINESS_OWNER') {
+      return { error: 'Forbidden', status: 403 };
+    }
+
+    const business = await prisma.business.findFirst({
+      where: { ownerId: decoded.userId },
+    });
+
+    if (!business) {
+      return { error: 'Business not found', status: 404 };
+    }
+
+    Sentry.setUser({ id: decoded.userId, role: decoded.role });
+
+    return { business };
+  } catch (error) {
+    Sentry.captureException(error);
+    return { error: 'Token validation error', status: 500 };
   }
-
-  const token = authHeader.split(' ')[1];
-  const { valid, decoded } = await verifyToken(token);
-  if (!valid || decoded.role !== 'BUSINESS_OWNER') {
-    return { error: 'Forbidden' }, { status: 403 };
-  }
-
-  const business = await prisma.business.findFirst({
-    where: { ownerId: decoded.userId },
-  });
-
-  if (!business) {
-    return { error: 'Business not found' }, { status: 404 };
-  }
-
-  return { business };
 }
-
 
 export async function GET(request) {
   try {
@@ -34,7 +42,7 @@ export async function GET(request) {
     if (error) return NextResponse.json({ error }, { status });
 
     const { searchParams } = new URL(request.url);
-    const period = searchParams.get('period'); // optional: "2025-06"
+    const period = searchParams.get('period'); 
 
     const whereClause = {
       businessId: business.id,
@@ -48,6 +56,7 @@ export async function GET(request) {
 
     return NextResponse.json({ reports }, { status: 200 });
   } catch (err) {
+    Sentry.captureException(err);
     console.error('GET /manager/reports error:', err);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }

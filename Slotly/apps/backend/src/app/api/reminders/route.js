@@ -1,3 +1,5 @@
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 
@@ -26,6 +28,7 @@ export async function POST(request) {
 
     return NextResponse.json(reminder, { status: 201 });
   } catch (error) {
+    Sentry.captureException?.(error);
     console.error('Error creating reminder:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
@@ -38,7 +41,8 @@ export async function GET(request) {
     const bookingId = searchParams.get('bookingId');
 
     const filters = {};
-    if (sent !== null) filters.sent = sent === 'true';
+    if (sent?.toLowerCase() === 'true') filters.sent = true;
+    else if (sent?.toLowerCase() === 'false') filters.sent = false;
     if (bookingId) filters.bookingId = bookingId;
 
     const reminders = await prisma.reminder.findMany({
@@ -57,6 +61,7 @@ export async function GET(request) {
 
     return NextResponse.json(reminders, { status: 200 });
   } catch (error) {
+    Sentry.captureException?.(error);
     console.error('Error fetching reminders:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

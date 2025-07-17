@@ -1,9 +1,10 @@
-
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs'
 
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
 import { verifyToken } from '@/middleware/auth'
-import { generateMonthlyReport } from '@/lib/reports' // To Be Implemnetd
+import { generateMonthlyReport } from '@/lib/reports' // To Be Implemented
 
 const prisma = new PrismaClient()
 
@@ -17,6 +18,18 @@ export async function POST(request, { params }) {
     }
 
     const { businessId } = params
+
+    if (!businessId) {
+      Sentry.captureMessage('Missing businessId in report regeneration', { level: 'warning' })
+      return NextResponse.json({ error: 'Missing businessId' }, { status: 400 })
+    }
+
+    // Optional: Actually check if the business exists
+    const business = await prisma.business.findUnique({ where: { id: businessId } })
+    if (!business) {
+      Sentry.captureMessage(`Tried to regenerate report for non-existent business: ${businessId}`, { level: 'warning' })
+      return NextResponse.json({ error: 'Business not found' }, { status: 404 })
+    }
 
     const { period, fileUrl } = await generateMonthlyReport(businessId)
 
@@ -37,6 +50,7 @@ export async function POST(request, { params }) {
 
     return NextResponse.json({ message: 'Report regenerated', report: newReport })
   } catch (error) {
+    Sentry.captureException(error, { tags: { section: 'ADMIN_REGENERATE_REPORT' } })
     console.error('[ADMIN_REGENERATE_REPORT]', error)
     return NextResponse.json({ error: 'Failed to regenerate report' }, { status: 500 })
   }

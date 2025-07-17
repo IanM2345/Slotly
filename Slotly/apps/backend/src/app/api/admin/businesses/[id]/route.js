@@ -1,3 +1,5 @@
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
@@ -32,11 +34,13 @@ export async function GET(request, { params }) {
 
     return NextResponse.json({ business });
   } catch (error) {
+    Sentry.captureException(error, {
+      extra: { route: 'GET /admin/business/[id]', businessId }
+    });
     console.error('Failed to fetch business:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
-
 
 export async function DELETE(request, { params }) {
   const token = request.headers.get('authorization')?.split(' ')[1];
@@ -55,7 +59,6 @@ export async function DELETE(request, { params }) {
       return NextResponse.json({ error: 'Business not found' }, { status: 404 });
     }
 
-
     await prisma.business.update({
       where: { id: businessId },
       data: {
@@ -68,6 +71,9 @@ export async function DELETE(request, { params }) {
 
     return NextResponse.json({ message: 'Business burned (soft-deleted) successfully' });
   } catch (error) {
+    Sentry.captureException(error, {
+      extra: { route: 'DELETE /admin/business/[id]', businessId }
+    });
     console.error('Failed to burn business:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

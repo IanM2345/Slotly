@@ -1,4 +1,5 @@
-
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
 import { verifyToken } from '@/middleware/auth'
@@ -56,6 +57,7 @@ export async function GET(req) {
 
     return NextResponse.json({ staff })
   } catch (error) {
+    Sentry.captureException(error, { tags: { route: 'ADMIN_SEARCH_STAFF' } })
     console.error('[ADMIN_SEARCH_STAFF]', error)
     return NextResponse.json({ error: 'Failed to search staff' }, { status: 500 })
   }

@@ -1,3 +1,5 @@
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
@@ -5,28 +7,35 @@ import { verifyToken } from '@/middleware/auth';
 const prisma = new PrismaClient();
 
 async function getBusinessFromToken(request) {
-  const authHeader = request.headers.get('authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return { error: 'Unauthorized', status: 401 };
+  try {
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return { error: 'Unauthorized', status: 401 };
+    }
+
+    const token = authHeader.split(' ')[1];
+    const { valid, decoded } = await verifyToken(token);
+    if (!valid || decoded.role !== 'BUSINESS_OWNER') {
+      return { error: 'Forbidden', status: 403 };
+    }
+
+    const business = await prisma.business.findFirst({
+      where: { ownerId: decoded.userId },
+    });
+
+    if (!business) {
+      return { error: 'Business not found', status: 404 };
+    }
+
+   
+    Sentry.setUser({ id: decoded.userId, role: decoded.role });
+
+    return { business };
+  } catch (err) {
+    Sentry.captureException(err);
+    return { error: 'Token validation error', status: 500 };
   }
-
-  const token = authHeader.split(' ')[1];
-  const { valid, decoded } = await verifyToken(token);
-  if (!valid || decoded.role !== 'BUSINESS_OWNER') {
-    return { error: 'Forbidden' }, { status: 403 };
-  }
-
-  const business = await prisma.business.findFirst({
-    where: { ownerId: decoded.userId },
-  });
-
-  if (!business) {
-    return { error: 'Business not found' }, { status: 404 };
-  }
-
-  return { business };
 }
-
 
 export async function GET(request) {
   try {
@@ -36,20 +45,18 @@ export async function GET(request) {
     const reviews = await prisma.review.findMany({
       where: { businessId: business.id },
       include: {
-        user: {
-          select: { id: true, name: true },
-        },
+        user: { select: { id: true, name: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
 
     return NextResponse.json({ reviews }, { status: 200 });
   } catch (err) {
+    Sentry.captureException(err);
     console.error('GET /manager/reviews error:', err);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
-
 
 export async function PATCH(request) {
   try {
@@ -63,7 +70,6 @@ export async function PATCH(request) {
       return NextResponse.json({ error: 'Review ID is required' }, { status: 400 });
     }
 
-    
     const review = await prisma.review.findFirst({
       where: {
         id: reviewId,
@@ -82,6 +88,7 @@ export async function PATCH(request) {
 
     return NextResponse.json({ message: 'Review flagged for moderation', review: updated }, { status: 200 });
   } catch (err) {
+    Sentry.captureException(err);
     console.error('PATCH /manager/reviews error:', err);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }

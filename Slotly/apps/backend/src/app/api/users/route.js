@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@/generated/prisma'; 
+import { PrismaClient } from '@/generated/prisma';
 import bcrypt from 'bcryptjs';
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 
 const prisma = new PrismaClient();
 
@@ -29,18 +31,22 @@ export async function POST(request) {
       },
     });
 
-    return NextResponse.json({
-      id: newUser.id,
-      email: newUser.email,
-      name: newUser.name,
-      role: newUser.role,
-    }, { status: 201 });
-
+    return NextResponse.json(
+      {
+        id: newUser.id,
+        email: newUser.email,
+        name: newUser.name,
+        role: newUser.role,
+      },
+      { status: 201 }
+    );
   } catch (error) {
     console.error('Error creating user:', error);
+    Sentry.captureException(error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
+
 
 export async function GET() {
   try {
@@ -57,6 +63,7 @@ export async function GET() {
     return NextResponse.json(users);
   } catch (error) {
     console.error('Error fetching users:', error);
+    Sentry.captureException(error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }

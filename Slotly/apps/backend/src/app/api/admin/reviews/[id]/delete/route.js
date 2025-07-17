@@ -1,3 +1,6 @@
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs'
+
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
 import { verifyToken } from '@/middleware/auth'
@@ -40,6 +43,7 @@ export async function DELETE(req, { params }) {
 
     return NextResponse.json({ message: 'Review deleted' })
   } catch (error) {
+    Sentry.captureException(error, { tags: { route: 'ADMIN_DELETE_REVIEW' } })
     console.error('[ADMIN_DELETE_REVIEW]', error)
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
   }

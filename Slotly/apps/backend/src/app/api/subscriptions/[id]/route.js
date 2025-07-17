@@ -1,9 +1,10 @@
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 
 const prisma = new PrismaClient();
 
-// Get a subscription by ID
 export async function GET(request, { params }) {
   try {
     const { id } = params;
@@ -19,12 +20,12 @@ export async function GET(request, { params }) {
 
     return NextResponse.json(subscription, { status: 200 });
   } catch (error) {
+    Sentry.captureException?.(error);
     console.error('Error fetching subscription:', error);
     return NextResponse.json({ error: 'Failed to fetch subscription' }, { status: 500 });
   }
 }
 
-// Update a subscription
 export async function PUT(request, { params }) {
   try {
     const { id } = params;
@@ -52,12 +53,12 @@ export async function PUT(request, { params }) {
 
     return NextResponse.json(updated, { status: 200 });
   } catch (error) {
+    Sentry.captureException?.(error);
     console.error('Error updating subscription:', error);
     return NextResponse.json({ error: 'Failed to update subscription' }, { status: 500 });
   }
 }
 
-// Delete a subscription
 export async function DELETE(request, { params }) {
   try {
     const { id } = params;
@@ -73,6 +74,7 @@ export async function DELETE(request, { params }) {
 
     return NextResponse.json(deleted, { status: 200 });
   } catch (error) {
+    Sentry.captureException?.(error);
     console.error('Error deleting subscription:', error);
     return NextResponse.json({ error: 'Failed to delete subscription' }, { status: 500 });
   }

@@ -1,7 +1,8 @@
-
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@generated/prisma';
+import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 
 const prisma = new PrismaClient();
 
@@ -29,7 +30,7 @@ export async function GET(request) {
       where: { userId },
       orderBy: { createdAt: 'desc' },
       skip,
-      take: limit
+      take: limit,
     });
 
     const total = await prisma.notification.count({ where: { userId } });
@@ -37,6 +38,7 @@ export async function GET(request) {
     return NextResponse.json({ page, limit, total, notifications }, { status: 200 });
   } catch (error) {
     console.error('Error fetching notifications:', error);
+    Sentry.captureException(error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
@@ -64,16 +66,17 @@ export async function PATCH(request) {
     const updated = await prisma.notification.updateMany({
       where: {
         id: { in: notificationIds },
-        userId
+        userId,
       },
       data: {
-        read
-      }
+        read,
+      },
     });
 
     return NextResponse.json({ count: updated.count }, { status: 200 });
   } catch (error) {
     console.error('Error updating notifications:', error);
+    Sentry.captureException(error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
@@ -102,8 +105,8 @@ export async function DELETE(request) {
     const deleted = await prisma.notification.deleteMany({
       where: {
         id: notificationId,
-        userId
-      }
+        userId,
+      },
     });
 
     if (deleted.count === 0) {
@@ -113,6 +116,7 @@ export async function DELETE(request) {
     return NextResponse.json({ message: 'Notification dismissed' }, { status: 200 });
   } catch (error) {
     console.error('Error deleting notification:', error);
+    Sentry.captureException(error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }

@@ -1,3 +1,5 @@
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 
@@ -15,7 +17,6 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: 'Forbidden: Staff only' }, { status: 403 });
     }
 
-   
     const service = await prisma.service.findUnique({
       where: { id: serviceId },
       include: { business: { include: { staff: true } } },
@@ -38,6 +39,7 @@ export async function PUT(request, { params }) {
 
     return NextResponse.json(updated, { status: 200 });
   } catch (error) {
+    Sentry.captureException?.(error);
     console.error('Error updating service:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
@@ -75,6 +77,7 @@ export async function DELETE(request, { params }) {
 
     return NextResponse.json({ message: 'Service deleted successfully' }, { status: 200 });
   } catch (error) {
+    Sentry.captureException?.(error);
     console.error('Error deleting service:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

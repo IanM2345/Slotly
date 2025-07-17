@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
 import bcrypt from 'bcrypt';
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 
 const prisma = new PrismaClient();
 
@@ -13,7 +15,7 @@ export async function GET(request) {
     }
 
     const token = authHeader.split(' ')[1];
-    const { valid, decoded } = verifyToken(token);
+    const { valid, decoded } = await verifyToken(token);
 
     if (!valid || !decoded || decoded.role !== 'CUSTOMER') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -38,6 +40,7 @@ export async function GET(request) {
     return NextResponse.json(user, { status: 200 });
   } catch (error) {
     console.error('Error fetching user:', error);
+    Sentry.captureException(error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
@@ -50,7 +53,7 @@ export async function PATCH(request) {
     }
 
     const token = authHeader.split(' ')[1];
-    const { valid, decoded } = verifyToken(token);
+    const { valid, decoded } = await verifyToken(token);
 
     if (!valid || !decoded || decoded.role !== 'CUSTOMER') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -66,7 +69,10 @@ export async function PATCH(request) {
     let hashedPassword = undefined;
     if (password) {
       if (password.length < 6) {
-        return NextResponse.json({ error: 'Password must be at least 6 characters long' }, { status: 400 });
+        return NextResponse.json(
+          { error: 'Password must be at least 6 characters long' },
+          { status: 400 }
+        );
       }
       hashedPassword = await bcrypt.hash(password, 10);
     }
@@ -91,40 +97,41 @@ export async function PATCH(request) {
     return NextResponse.json(updatedUser, { status: 200 });
   } catch (error) {
     console.error('Error updating user:', error);
+    Sentry.captureException(error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
 
 export async function DELETE(request) {
-    try{
+  try {
     const authHeader = request.headers.get('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const token = authHeader.split(' ')[1];
-    const { valid, decoded } = verifyToken(token);
+    const { valid, decoded } = await verifyToken(token);
 
     if (!valid || !decoded || decoded.role !== 'CUSTOMER') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     await prisma.staffEnrollment.deleteMany({
-        where: { userId: decoded.id },
+      where: { userId: decoded.id },
     });
 
     await prisma.booking.deleteMany({
-        where: { userId: decoded.id },
+      where: { userId: decoded.id },
     });
 
     await prisma.user.delete({
-        where: {id:decoded.id},
+      where: { id: decoded.id },
     });
 
     return NextResponse.json({ message: 'User deleted successfully' }, { status: 200 });
-}catch (error) {
+  } catch (error) {
     console.error('Error deleting user:', error);
+    Sentry.captureException(error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
-
 }

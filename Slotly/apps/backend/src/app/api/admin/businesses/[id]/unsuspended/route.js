@@ -1,3 +1,5 @@
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
 import { verifyToken } from '@/middleware/auth'
@@ -71,6 +73,9 @@ export async function PATCH(req, { params }) {
 
     return NextResponse.json({ message: 'Business unsuspended successfully' }, { status: 200 })
   } catch (error) {
+    Sentry.captureException(error, {
+      extra: { route: 'PATCH /admin/business/unsuspend', params }
+    })
     console.error('[BUSINESS_UNSUSPEND_ERROR]', error)
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
   }

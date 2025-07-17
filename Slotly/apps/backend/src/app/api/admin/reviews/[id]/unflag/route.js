@@ -1,3 +1,6 @@
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs'
+
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
 import { verifyToken } from '@/middleware/auth'
@@ -53,6 +56,7 @@ export async function PATCH(req, { params }) {
 
     return NextResponse.json({ message: 'Review unflagged', review: updated })
   } catch (error) {
+    Sentry.captureException(error, { tags: { route: 'ADMIN_UNFLAG_REVIEW' } })
     console.error('[ADMIN_UNFLAG_REVIEW]', error)
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
   }

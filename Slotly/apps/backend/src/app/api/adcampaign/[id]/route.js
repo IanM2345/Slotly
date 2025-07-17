@@ -1,5 +1,7 @@
+import '@/sentry.server.config'; 
 import { NextResponse } from 'next/server';
 import prisma from '@/generated/prisma';
+import * as Sentry from '@sentry/nextjs';
 
 export async function GET(request, { params }) {
   try {
@@ -20,6 +22,9 @@ export async function GET(request, { params }) {
 
     return NextResponse.json(ad);
   } catch (error) {
+    Sentry.captureException(error, {
+      extra: { route: 'GET /adCampaign/:id', params },
+    });
     console.error('Error fetching ad campaign:', error);
     return NextResponse.json({ error: 'Failed to fetch ad campaign' }, { status: 500 });
   }
@@ -49,6 +54,9 @@ export async function PUT(request, { params }) {
 
     return NextResponse.json(updated);
   } catch (error) {
+    Sentry.captureException(error, {
+      extra: { route: 'PUT /adCampaign/:id', params },
+    });
     console.error('Error updating ad campaign:', error);
     return NextResponse.json({ error: 'Failed to update ad campaign' }, { status: 500 });
   }
@@ -69,6 +77,9 @@ export async function DELETE(request, { params }) {
 
     return NextResponse.json(deleted);
   } catch (error) {
+    Sentry.captureException(error, {
+      extra: { route: 'DELETE /adCampaign/:id', params },
+    });
     console.error('Error deleting ad campaign:', error);
     return NextResponse.json({ error: 'Failed to delete ad campaign' }, { status: 500 });
   }

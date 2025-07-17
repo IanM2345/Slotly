@@ -1,17 +1,28 @@
+import '@/sentry.server.config'; 
+import * as Sentry from '@sentry/nextjs';
+
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
-import { authenticaterequestuest } from '@/middleware/auth';
+import { authenticateRequest } from '@/middleware/auth'; 
 
 const prisma = new PrismaClient();
 
 export async function GET(request) {
-  const auth = await authenticaterequestuest(request);
+  const auth = await authenticateRequest(request);
   if (!auth.valid || auth.decoded.role !== 'ADMIN') {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   try {
-    const [userCounts, businessCounts, bookingStats, revenueStats, subscriptionStats, reviewStats, referralStats] = await Promise.all([
+    const [
+      userCounts,
+      businessCounts,
+      bookingStats,
+      revenueStats,
+      subscriptionStats,
+      reviewStats,
+      referralStats
+    ] = await Promise.all([
 
       prisma.user.groupBy({
         by: ['role'],
@@ -78,6 +89,7 @@ export async function GET(request) {
 
     return NextResponse.json(response);
   } catch (error) {
+    Sentry.captureException(error, { tags: { section: 'ADMIN_DASHBOARD_METRICS' } });
     console.error('Dashboard metrics error:', error);
     return NextResponse.json({ error: 'Failed to fetch dashboard metrics' }, { status: 500 });
   }

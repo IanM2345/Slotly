@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 
 const prisma = new PrismaClient();
 
@@ -20,7 +22,6 @@ export async function GET(request) {
     const userId = decoded.userId;
     const now = new Date();
 
-    
     const userCoupons = await prisma.userCoupon.findMany({
       where: { userId },
       include: {
@@ -44,7 +45,6 @@ export async function GET(request) {
       }
     }
 
-  
     const referrals = await prisma.referral.findMany({
       where: {
         referrerId: userId,
@@ -54,26 +54,24 @@ export async function GET(request) {
     });
 
     if (referrals.length >= 10) {
-     
       const milestoneCode = `REF-BONUS-${userId}`;
       const alreadyRewarded = await prisma.userCoupon.findFirst({
         where: {
           userId,
-          coupon: { code: milestoneCode }
-        }
+          coupon: { code: milestoneCode },
+        },
       });
 
       if (!alreadyRewarded) {
-       
         const rewardCoupon = await prisma.coupon.create({
           data: {
             code: milestoneCode,
             description: 'Referral Milestone Bonus Coupon',
-            discount: 20,           
-            isPercentage: true,     
+            discount: 20,
+            isPercentage: true,
             usageLimit: 1,
-            expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), 
-            createdByAdmin: true,   
+            expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+            createdByAdmin: true,
           },
         });
 
@@ -84,7 +82,7 @@ export async function GET(request) {
           },
         });
 
-        const referralIds = referrals.map(r => r.id);
+        const referralIds = referrals.map((r) => r.id);
         await prisma.referral.updateMany({
           where: { id: { in: referralIds } },
           data: { rewardIssued: true },
@@ -94,7 +92,8 @@ export async function GET(request) {
           data: {
             userId,
             title: 'Referral Milestone Achieved!',
-            message: 'You’ve earned a bonus coupon for referring 10 users with 2+ bookings each!',
+            message:
+              'You’ve earned a bonus coupon for referring 10 users with 2+ bookings each!',
           },
         });
 
@@ -113,15 +112,10 @@ export async function GET(request) {
       }
     }
 
-    return NextResponse.json(
-      { available, used, expired },
-      { status: 200 }
-    );
+    return NextResponse.json({ available, used, expired }, { status: 200 });
   } catch (error) {
     console.error('Error fetching user coupons:', error);
-    return NextResponse.json(
-      { error: 'Internal Server Error' },
-      { status: 500 }
-    );
+    Sentry.captureException(error);
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }

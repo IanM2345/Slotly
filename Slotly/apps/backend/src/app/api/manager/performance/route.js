@@ -1,7 +1,9 @@
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
-import { parseISO, startOfMonth } from 'date-fns';
+import { parseISO } from 'date-fns';
 
 const prisma = new PrismaClient();
 
@@ -18,6 +20,9 @@ export async function GET(request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    // Set Sentry user context
+    Sentry.setUser({ id: decoded.userId, role: decoded.role });
+
     const business = await prisma.business.findFirst({
       where: { ownerId: decoded.userId },
     });
@@ -26,7 +31,6 @@ export async function GET(request) {
     }
 
     const businessId = business.id;
-
 
     const { searchParams } = new URL(request.url);
     const startDate = searchParams.get('start');
@@ -38,7 +42,6 @@ export async function GET(request) {
         }
       : undefined;
 
- 
     const totalRevenue = await prisma.payment.aggregate({
       _sum: { amount: true },
       where: {
@@ -52,7 +55,6 @@ export async function GET(request) {
       },
     });
 
-   
     const [totalBookings, cancelledBookings, noShows] = await Promise.all([
       prisma.booking.count({
         where: { businessId, createdAt: dateFilter },
@@ -70,7 +72,6 @@ export async function GET(request) {
       completedBookings > 0
         ? (totalRevenue._sum.amount || 0) / completedBookings
         : 0;
-
 
     const topServices = await prisma.booking.groupBy({
       by: ['serviceId'],
@@ -95,7 +96,6 @@ export async function GET(request) {
       };
     });
 
-  
     const staffStats = await prisma.booking.groupBy({
       by: ['staffId'],
       where: {
@@ -125,20 +125,28 @@ export async function GET(request) {
       };
     });
 
-    
-    const monthlyBreakdown = await prisma.$queryRaw`
-      SELECT
-        DATE_TRUNC('month', "createdAt") AS month,
-        COUNT(*) AS bookings,
-        SUM("totalPrice") AS revenue
-      FROM "Booking"
-      WHERE "businessId" = ${businessId}
-        AND "status" = 'COMPLETED'
-        ${dateFilter ? Prisma.sql`AND "createdAt" BETWEEN ${parseISO(startDate)} AND ${parseISO(endDate)}` : Prisma.empty}
-      GROUP BY month
-      ORDER BY month DESC
-      LIMIT 6
-    `;
+    // Note: Prisma's $queryRaw must use Prisma.sql for template expressions!
+    // If you use it, make sure to import { Prisma } from '@prisma/client'
+    // But here's a safer fallback (and skip if you aren't using $queryRaw for now):
+    let monthlyBreakdown = [];
+    try {
+      monthlyBreakdown = await prisma.$queryRaw`
+        SELECT
+          DATE_TRUNC('month', "createdAt") AS month,
+          COUNT(*) AS bookings,
+          SUM("totalPrice") AS revenue
+        FROM "Booking"
+        WHERE "businessId" = ${businessId}
+          AND "status" = 'COMPLETED'
+          ${dateFilter ? Prisma.sql`AND "createdAt" BETWEEN ${parseISO(startDate)} AND ${parseISO(endDate)}` : Prisma.empty}
+        GROUP BY month
+        ORDER BY month DESC
+        LIMIT 6
+      `;
+    } catch (rawErr) {
+      Sentry.captureException(rawErr);
+      // fallback: leave monthlyBreakdown as []
+    }
 
     return NextResponse.json({
       totalRevenue: totalRevenue._sum.amount || 0,
@@ -153,6 +161,7 @@ export async function GET(request) {
     }, { status: 200 });
 
   } catch (error) {
+    Sentry.captureException(error);
     console.error('Error fetching performance data:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }

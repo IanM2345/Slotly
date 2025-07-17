@@ -1,3 +1,5 @@
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/lib/auth';
@@ -99,13 +101,14 @@ export async function POST(request) {
 
     return NextResponse.json({ booking, discountApplied }, { status: 201 });
   } catch (error) {
+    Sentry.captureException(error);
     console.error('[BOOKING_CREATE]', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
 export async function GET(request) {
-  const { valid, decoded, error } = verifyToken(request);
+  const { valid, decoded, error } = await verifyToken(request);
   if (!valid) return NextResponse.json({ error }, { status: 401 });
 
   try {
@@ -126,6 +129,7 @@ export async function GET(request) {
 
     return NextResponse.json(bookings);
   } catch (error) {
+    Sentry.captureException(error);
     console.error('Error fetching bookings:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }

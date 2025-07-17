@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 
 const prisma = new PrismaClient();
 
-// GET - List all reviews made by the logged-in user
+
 export async function GET(request) {
   try {
     const authHeader = request.headers.get('authorization');
@@ -36,11 +38,12 @@ export async function GET(request) {
     return NextResponse.json(reviews, { status: 200 });
   } catch (error) {
     console.error('Error fetching reviews:', error);
+    Sentry.captureException(error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
 
-// POST - Create or update a review
+
 export async function POST(request) {
   try {
     const authHeader = request.headers.get('authorization');
@@ -56,7 +59,10 @@ export async function POST(request) {
 
     const { businessId, rating, comment } = await request.json();
     if (!businessId || typeof rating !== 'number') {
-      return NextResponse.json({ error: 'Business ID and rating are required' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Business ID and rating are required' },
+        { status: 400 }
+      );
     }
 
     const existing = await prisma.review.findUnique({
@@ -96,11 +102,12 @@ export async function POST(request) {
     return NextResponse.json(review, { status: 201 });
   } catch (error) {
     console.error('Error creating/updating review:', error);
+    Sentry.captureException(error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
 
-// DELETE - Delete a review
+
 export async function DELETE(request) {
   try {
     const authHeader = request.headers.get('authorization');
@@ -135,6 +142,7 @@ export async function DELETE(request) {
     return NextResponse.json({ message: 'Review deleted' }, { status: 200 });
   } catch (error) {
     console.error('Error deleting review:', error);
+    Sentry.captureException(error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }

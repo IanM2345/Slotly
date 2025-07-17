@@ -1,3 +1,5 @@
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import bcrypt from 'bcryptjs';
@@ -41,7 +43,6 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
     }
 
-    
     if (user.suspended) {
       await sendNotification({
         userId: user.id,
@@ -68,7 +69,6 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Account suspended. Contact support.' }, { status: 403 });
     }
 
-  
     const otp = generateOTP();
     const hashedOTP = await bcrypt.hash(otp, 8);
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000); 
@@ -85,13 +85,13 @@ export async function POST(request) {
       await sendOTPviaEmail(user.email, otp);
     }
 
-    
     return NextResponse.json({
       message: 'OTP sent to your registered contact. Please verify to complete login.',
       user: { id: user.id, name: user.name, role: user.role }
     }, { status: 200 });
 
   } catch (error) {
+    Sentry.captureException(error, { tags: { route: 'LOGIN' } });
     console.error('Login error:', error);
     return NextResponse.json({ error: 'Login failed' }, { status: 500 });
   }

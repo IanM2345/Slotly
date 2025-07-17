@@ -1,4 +1,5 @@
-
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs'
 
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
@@ -28,6 +29,7 @@ export async function GET(request) {
 
     return NextResponse.json({ reports })
   } catch (error) {
+    Sentry.captureException(error, { tags: { section: 'ADMIN_VIEW_REPORTS' } })
     console.error('[ADMIN_VIEW_REPORTS]', error)
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
   }

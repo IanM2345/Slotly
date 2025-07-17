@@ -1,9 +1,10 @@
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
 
 const prisma = new PrismaClient();
-
 
 async function getBusinessFromToken(request) {
   const authHeader = request.headers.get('authorization');
@@ -23,12 +24,11 @@ async function getBusinessFromToken(request) {
   });
 
   if (!business) {
-    return { error: 'Business not found' }, { status: 404 };
+    return { error: 'Business not found', status: 404 }; 
   }
 
   return { business };
 }
-
 
 export async function POST(request) {
   try {
@@ -67,11 +67,11 @@ export async function POST(request) {
 
     return NextResponse.json(bundle, { status: 201 });
   } catch (err) {
+    Sentry.captureException(err);
     console.error('POST /manager/bundles error:', err);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
-
 
 export async function GET(request) {
   try {
@@ -94,11 +94,11 @@ export async function GET(request) {
 
     return NextResponse.json({ bundles }, { status: 200 });
   } catch (err) {
+    Sentry.captureException(err);
     console.error('GET /manager/bundles error:', err);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
-
 
 export async function DELETE(request) {
   try {
@@ -112,7 +112,6 @@ export async function DELETE(request) {
       return NextResponse.json({ error: 'Bundle ID is required' }, { status: 400 });
     }
 
-    
     const bundle = await prisma.serviceBundle.findFirst({
       where: {
         id,
@@ -127,13 +126,13 @@ export async function DELETE(request) {
       return NextResponse.json({ error: 'Bundle not found' }, { status: 404 });
     }
 
-    
     await prisma.serviceBundle.delete({
       where: { id },
     });
 
     return NextResponse.json({ message: 'Bundle deleted successfully' }, { status: 200 });
   } catch (err) {
+    Sentry.captureException(err);
     console.error('DELETE /manager/bundles error:', err);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }

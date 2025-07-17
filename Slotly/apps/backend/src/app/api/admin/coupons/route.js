@@ -1,3 +1,6 @@
+import '@/sentry.server.config'; 
+import * as Sentry from '@sentry/nextjs';
+
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
@@ -56,7 +59,7 @@ export async function POST(request) {
 
     const business = await prisma.business.findUnique({
       where: { id: businessId },
-      include: { managers: true }, // assumes you have a managers relation
+      include: { managers: true },
     });
 
     if (business && business.managers && business.managers.length > 0) {
@@ -81,6 +84,7 @@ export async function POST(request) {
 
     return NextResponse.json({ message: 'Coupon created', coupon }, { status: 201 });
   } catch (error) {
+    Sentry.captureException(error, { tags: { section: 'ADMIN_COUPON_CREATE' } });
     console.error('[ADMIN_COUPON_CREATE]', error);
     return NextResponse.json({ message: 'Internal Server Error' }, { status: 500 });
   }

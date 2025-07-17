@@ -1,3 +1,5 @@
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
@@ -68,6 +70,7 @@ export async function POST(request) {
 
     return NextResponse.json(newCoupon, { status: 201 });
   } catch (err) {
+    Sentry.captureException(err);
     console.error('POST /manager/coupons error:', err);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
@@ -148,6 +151,7 @@ export async function GET(request) {
 
     return NextResponse.json({ coupons: response }, { status: 200 });
   } catch (err) {
+    Sentry.captureException(err);
     console.error('GET /manager/coupons error:', err);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
@@ -188,6 +192,7 @@ export async function DELETE(request) {
 
     return NextResponse.json({ message: 'Coupon deleted successfully' }, { status: 200 });
   } catch (err) {
+    Sentry.captureException(err);
     console.error('DELETE /manager/coupons error:', err);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }

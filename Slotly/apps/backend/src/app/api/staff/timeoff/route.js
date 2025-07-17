@@ -1,9 +1,11 @@
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@generated/prisma';
 import { verifyToken } from '@/middleware/auth';
+import { createNotification } from '@/shared/notifications/createNotification'; 
 
 const prisma = new PrismaClient();
-
 
 export async function GET(request) {
   try {
@@ -25,11 +27,11 @@ export async function GET(request) {
 
     return NextResponse.json({ timeOffRequests: requests }, { status: 200 });
   } catch (error) {
+    Sentry.captureException(error);
     console.error('GET /timeoff error:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
-
 
 export async function POST(request) {
   try {
@@ -64,8 +66,8 @@ export async function POST(request) {
             reason,
           }
         });
-   
-        await createNotification({
+        
+        await createNotification?.({
           userId: business.ownerId,
           type: 'TIME_OFF',
           title: 'New Staff Time Off Request',
@@ -78,11 +80,11 @@ export async function POST(request) {
 
     return NextResponse.json(requests.length === 1 ? requests[0] : requests, { status: 201 });
   } catch (error) {
+    Sentry.captureException(error);
     console.error('POST /timeoff error:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
-
 
 export async function DELETE(request) {
   try {
@@ -119,6 +121,7 @@ export async function DELETE(request) {
 
     return NextResponse.json({ message: 'Request canceled' }, { status: 200 });
   } catch (error) {
+    Sentry.captureException(error);
     console.error('DELETE /timeoff error:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }

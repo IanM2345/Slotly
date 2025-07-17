@@ -1,9 +1,11 @@
-import { NextResponse } from 'next/server';
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs';
+import { NextResponse } from 'next/server'; 
 import { PrismaClient } from '@/generated/prisma';
 
 const prisma = new PrismaClient();
 
-// Update a business
+
 export async function PUT(request, { params }) {
   try {
     const businessId = params.id;
@@ -17,12 +19,13 @@ export async function PUT(request, { params }) {
 
     return NextResponse.json(updatedBusiness);
   } catch (error) {
+    Sentry.captureException(error);
     console.error('Error updating business:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
 
-// Delete a business
+
 export async function DELETE(request, { params }) {
   try {
     const businessId = params.id;
@@ -33,6 +36,7 @@ export async function DELETE(request, { params }) {
 
     return NextResponse.json({ message: 'Business deleted successfully' });
   } catch (error) {
+    Sentry.captureException(error);
     console.error('Error deleting business:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }

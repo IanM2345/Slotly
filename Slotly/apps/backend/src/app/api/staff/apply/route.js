@@ -1,7 +1,9 @@
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
-import { createNotification } from '@/lib/createNotification'; 
+import { createNotification } from '@/shared/notifications/createNotification'; 
 
 const prisma = new PrismaClient();
 
@@ -13,7 +15,7 @@ export async function POST(req) {
     }
 
     const token = authHeader.split(' ')[1];
-    const { valid, decoded } = verifyToken(token);
+    const { valid, decoded } = await verifyToken(token);
 
     if (!valid || decoded.role !== 'CUSTOMER') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -68,6 +70,7 @@ export async function POST(req) {
 
     return NextResponse.json(newApplication, { status: 201 });
   } catch (error) {
+    Sentry.captureException?.(error);
     console.error('Error processing application:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }

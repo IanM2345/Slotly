@@ -1,7 +1,9 @@
-
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 import {NextResponse} from 'next/server';
 import {PrismaClient} from '@/generated/prisma';
 import {verifyToken} from '@/middleware/auth';
+import { createNotification } from '@/shared/notifications/createNotification';
 
 const prisma = new PrismaClient();
 
@@ -18,7 +20,7 @@ export async function GET(request) {
     }
 
     const business = await prisma.business.findFirst({
-        where: {iownerId: decoded.userId},
+        where: { ownerId: decoded.userId },    // fixed typo here
         select:{id: true},
     });
 
@@ -45,7 +47,8 @@ export async function GET(request) {
     });
 
     return NextResponse.json({timeOffRequests: requests}, {status: 200});
- }catch (error) {
+ } catch (error) {
+    Sentry.captureException(error);
     console.error('GET /timeoff error:', error);
     return NextResponse.json({error: 'Internal Server Error'}, {status: 500});
   }
@@ -64,7 +67,7 @@ export async function PATCH(request) {
     }
 
     const business = await prisma.business.findFirst({
-      where: { ownerId: decoded.userId }, 
+      where: { ownerId: decoded.userId },
       select: { id: true },
     });
 
@@ -115,6 +118,7 @@ export async function PATCH(request) {
 
     return NextResponse.json({updated},{status: 200});
   } catch (error) {
+    Sentry.captureException(error);
     console.error('PATCH /timeoff error:', error);
     return NextResponse.json({error: 'Internal Server Error'}, {status: 500});
   }
@@ -177,6 +181,7 @@ export async function PUT(request) {
 
     return NextResponse.json({ updated }, { status: 200 });
   } catch (error) {
+    Sentry.captureException(error);
     console.error('PUT /manager/timeoff error:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
@@ -225,6 +230,7 @@ export async function DELETE(request) {
 
     return NextResponse.json({ message: 'Time-off forcibly rejected', updated }, { status: 200 });
   } catch (error) {
+    Sentry.captureException(error);
     console.error('DELETE /manager/timeoff error:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }

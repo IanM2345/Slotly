@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 
 const prisma = new PrismaClient();
 
@@ -30,11 +32,11 @@ export async function GET(request) {
             createdAt: true,
             bookings: {
               where: { status: 'COMPLETED' },
-              select: { id: true }
-            }
-          }
-        }
-      }
+              select: { id: true },
+            },
+          },
+        },
+      },
     });
 
     const validReferrals = referrals.filter(r => r.referredUser.bookings.length >= 2);
@@ -42,9 +44,8 @@ export async function GET(request) {
     const alreadyRewarded = validReferrals.every(r => r.rewardIssued === true);
 
     if (milestoneMet && !alreadyRewarded) {
-
       const couponCode = `REF-${Date.now()}`;
-      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); 
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
       const coupon = await prisma.coupon.create({
         data: {
@@ -56,15 +57,15 @@ export async function GET(request) {
           createdByAdmin: false,
           usageLimit: 1,
           timesUsed: 0,
-          businessId: '', 
-        }
+          businessId: '',
+        },
       });
 
       await prisma.userCoupon.create({
         data: {
           userId,
-          couponId: coupon.id
-        }
+          couponId: coupon.id,
+        },
       });
 
       await prisma.notification.create({
@@ -73,7 +74,7 @@ export async function GET(request) {
           type: 'REFERRAL',
           title: '🎉 Referral Reward Unlocked!',
           message: `You referred 10 users who completed 2+ bookings. You've earned a KES 200 coupon: ${couponCode}`,
-        }
+        },
       });
 
       const admins = await prisma.user.findMany({ where: { role: 'ADMIN' } });
@@ -90,9 +91,9 @@ export async function GET(request) {
 
       await prisma.referral.updateMany({
         where: {
-          id: { in: validReferrals.map(r => r.id) }
+          id: { in: validReferrals.map(r => r.id) },
         },
-        data: { rewardIssued: true }
+        data: { rewardIssued: true },
       });
     }
 
@@ -103,13 +104,13 @@ export async function GET(request) {
       email: r.referredUser.email,
       joinedAt: r.referredUser.createdAt,
       completedBookings: r.referredUser.bookings.length,
-      rewardIssued: r.rewardIssued
+      rewardIssued: r.rewardIssued,
     }));
 
     return NextResponse.json(response, { status: 200 });
-
   } catch (error) {
     console.error('Referral milestone error:', error);
+    Sentry.captureException(error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }

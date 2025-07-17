@@ -1,9 +1,11 @@
+import '@/sentry.server.config'; 
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
 import { verifyToken } from '@/middleware/auth'
 import { createNotification } from '@/shared/notifications/createNotification'
 import { sendNotification } from '@/shared/notifications/sendNotification'
 import { sendAdminEmailLog } from '@/shared/notifications/sendAdminEmailLog'
+import * as Sentry from '@sentry/nextjs'
 
 const prisma = new PrismaClient()
 
@@ -41,7 +43,7 @@ export async function PATCH(req, { params }) {
     }
 
     const suspendedUntil = new Date()
-    suspendedUntil.setDate(suspendedUntil.getDate() + 30) // Optional default suspension after rejection
+    suspendedUntil.setDate(suspendedUntil.getDate() + 30) 
 
     await prisma.businessVerification.update({
       where: { businessId },
@@ -90,6 +92,9 @@ export async function PATCH(req, { params }) {
 
     return NextResponse.json({ message: 'Business rejected and suspended successfully' }, { status: 200 })
   } catch (error) {
+    Sentry.captureException(error, {
+      extra: { route: 'PATCH /admin/business/reject', params }
+    })
     console.error('[BUSINESS_REJECT_ERROR]', error)
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
   }

@@ -1,30 +1,37 @@
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
-import { verfiyToken } from '@/middleware/auth';
+import { verifyToken } from '@/middleware/auth';
 
 const prisma = new PrismaClient();
 
 async function getBusinessFromRequest(request) {
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return { error: 'Unauthorized', status: 401 };
+  try {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return { error: 'Unauthorized', status: 401 };
+    }
+
+    const token = authHeader.split(' ')[1];
+    const { valid, decoded } = await verifyToken(token);
+    if (!valid || decoded.role !== 'BUSINESS_OWNER') {
+      return { error: 'Unauthorized', status: 403 };
+    }
+
+    const business = await prisma.business.findFirst({
+      where: { ownerId: decoded.userId },
+    });
+
+    if (!business) return { error: 'Business not found', status: 404 };
+
+    Sentry.setUser({ id: decoded.userId, role: decoded.role });
+    return { business };
+  } catch (err) {
+    Sentry.captureException(err);
+    return { error: 'Token validation error', status: 500 };
   }
-
-  const token = authHeader.split(' ')[1];
-  const { valid, decoded } = await verfiyToken(token);
-  if (!valid || decoded.role !== 'BUSINESS_OWNER') {
-    return { error: 'Unauthorized', status: 403 };
-  }
-
-  const business = await prisma.business.findFirst({
-    where: { ownerId: decoded.userId },
-  });
-
-  if (!business) return { error: 'Business not found', status: 404 };
-
-  return { business };
 }
-
 
 export async function POST(request) {
   try {
@@ -50,6 +57,7 @@ export async function POST(request) {
 
     return NextResponse.json(newService, { status: 201 });
   } catch (error) {
+    Sentry.captureException(error);
     console.error('Error creating service:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
@@ -70,11 +78,11 @@ export async function GET(request) {
 
     return NextResponse.json(services, { status: 200 });
   } catch (error) {
+    Sentry.captureException(error);
     console.error('Error fetching services:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
-
 
 export async function PUT(request) {
   try {
@@ -102,11 +110,11 @@ export async function PUT(request) {
 
     return NextResponse.json(updated, { status: 200 });
   } catch (error) {
+    Sentry.captureException(error);
     console.error('Error updating service:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
-
 
 export async function DELETE(request) {
   try {
@@ -125,11 +133,11 @@ export async function DELETE(request) {
     await prisma.service.delete({ where: { id } });
     return NextResponse.json({ message: 'Service deleted' }, { status: 200 });
   } catch (error) {
+    Sentry.captureException(error);
     console.error('Error deleting service:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
-
 
 export async function PATCH(request) {
   try {
@@ -153,6 +161,7 @@ export async function PATCH(request) {
 
     return NextResponse.json(updated, { status: 200 });
   } catch (error) {
+    Sentry.captureException(error);
     console.error('Error toggling service availability:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }

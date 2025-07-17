@@ -1,3 +1,6 @@
+import '@/sentry.server.config'; 
+import * as Sentry from '@sentry/nextjs';
+
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { authenticateRequest } from '@/middleware/auth';
@@ -20,9 +23,7 @@ export async function GET(req) {
     orderBy: { createdAt: 'desc' },
   });
 
-  return NextResponse.json({
-    flaggedReviews,
-  });
+  return NextResponse.json({ flaggedReviews });
 }
 
 export async function PATCH(req) {
@@ -65,11 +66,34 @@ export async function PATCH(req) {
         }
 
         if (action === 'unflag') {
-          await prisma.review.update({
+          const review = await prisma.review.update({
             where: { id },
             data: { flagged: false },
+            include: {
+              business: true,
+              user: true,
+            },
           });
-          return NextResponse.json({ message: `Review ${id} unflagged.` });
+
+          
+          if (review.business?.ownerId) {
+            await createNotification({
+              userId: review.business.ownerId,
+              type: 'REVIEW',
+              title: 'Review Unflagged',
+              message: `A previously flagged review on "${review.business.name}" has been unflagged.`,
+            });
+          }
+          if (review.user?.id) {
+            await createNotification({
+              userId: review.user.id,
+              type: 'REVIEW',
+              title: 'Your review was unflagged',
+              message: 'Your review was cleared by admin and is now visible again.',
+            });
+          }
+
+          return NextResponse.json({ message: `Review ${id} unflagged and parties notified.` });
         }
 
         return NextResponse.json({ error: 'Unsupported action' }, { status: 400 });
@@ -78,6 +102,7 @@ export async function PATCH(req) {
         return NextResponse.json({ error: 'Unsupported flag type' }, { status: 400 });
     }
   } catch (error) {
+    Sentry.captureException(error, { tags: { section: 'ADMIN_FLAG_REVIEW' } });
     console.error('Flag/unflag failed:', error);
     return NextResponse.json({ error: 'Failed to flag/unflag item' }, { status: 500 });
   }

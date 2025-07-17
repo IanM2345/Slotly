@@ -1,59 +1,90 @@
-
-import { createNotification } from "./createNotification";
-
-import {sendSMS} from "@/lib/twilioClient";
+import { createNotification } from './createNotification';
+import { sendSMS } from '@/lib/twilioClient';
+import * as Sentry from '@sentry/nextjs';
+import '@/sentry.server.config';
 
 /**
- * Dispatches a notification to a user based on provided channels.
+ * Dispatches a notification to a user across one or more channels.
  *
  * @param {Object} options
- * @param {string} options.userId - The user receiving the notification
+ * @param {string} options.userId - Target user ID
  * @param {string} options.type - NotificationType enum value
- * @param {string} options.title - Title of the notification
- * @param {string} options.message - Body of the notification
- * @param {Object} [options.meta] - Optional extra metadata
- * @param {boolean} [options.inApp=true] - Log to DB
+ * @param {string} options.title - Notification title
+ * @param {string} options.message - Notification body
+ * @param {Object} [options.meta] - Optional metadata
+ * @param {boolean} [options.inApp=true] - Create in-app notification
  * @param {boolean} [options.sms=false] - Send SMS via Twilio
- * @param {boolean} [options.email=false] - Send email (stub for now)
- * @param {string} [options.phone] - Required if SMS is true
- * @param {string} [options.emailAddress] - Required if email is true
+ * @param {boolean} [options.email=false] - Send email (future use)
+ * @param {string} [options.phone] - Phone number (required if sms is true)
+ * @param {string} [options.emailAddress] - Email (required if email is true)
  */
-
 export async function sendNotification({
   userId,
   type,
   title,
   message,
-    meta = {},
+  meta = {},
   inApp = true,
-    sms = false,
+  sms = false,
   email = false,
-    phone,
-    emailAddress,
+  phone,
+  emailAddress,
 }) {
   if (!userId || !type || !title || !message) {
-    throw new Error('userId, type, title, and message are required parameters');
+    const error = new Error('Missing required fields: userId, type, title, message');
+    Sentry.captureException(error, { tags: { module: 'notification' } });
+    throw error;
   }
+
   try {
-    
     if (inApp) {
       await createNotification({ userId, type, title, message });
     }
-    if (sms&& phone) {
+
+    
+    if (sms) {
       if (!phone) {
-        throw new Error('phone is required when sms is true');
-      }
-        await sendSMS({
-            to: phone,
-            body: `${title}: ${message}`,
+        const smsError = new Error('Missing phone number for SMS notification');
+        Sentry.captureMessage(smsError.message, {
+          level: 'warning',
+          tags: { module: 'notification', channel: 'sms' },
+          extra: { userId, title },
         });
+        throw smsError;
+      }
+
+      await sendSMS({
+        toPhoneNumber: phone,
+        message: `${title}: ${message}`,
+      });
     }
-    if (email && emailAddress) {
-      // Email functionality is not implemented yet
-      throw new Error('Email functionality is not implemented yet');
+
+   
+    if (email) {
+      if (!emailAddress) {
+        const emailError = new Error('Missing emailAddress for email notification');
+        Sentry.captureMessage(emailError.message, {
+          level: 'warning',
+          tags: { module: 'notification', channel: 'email' },
+          extra: { userId, title },
+        });
+        throw emailError;
+      }
+
+   
+      const notImplemented = new Error('Email notification not yet implemented');
+      Sentry.captureMessage(notImplemented.message, {
+        level: 'info',
+        tags: { module: 'notification', channel: 'email' },
+      });
+      throw notImplemented;
     }
-    } catch (error) {
+  } catch (error) {
     console.error('Error sending notification:', error);
+    Sentry.captureException(error, {
+      tags: { module: 'notification' },
+      extra: { userId, type, title, sms, email, phone, emailAddress },
+    });
     throw new Error('Failed to send notification');
   }
-  }
+}

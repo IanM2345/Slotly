@@ -1,5 +1,6 @@
-
 import twilio from 'twilio';
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -17,20 +18,27 @@ const twilioClient = twilio(accountSid, authToken);
  * @param {string} message - The message to send
  * @returns {Promise<object>} - Twilio response
  */
-
 export async function sendSms(toPhoneNumber, message) {
   if (!toPhoneNumber || !message) {
     throw new Error('Both toPhoneNumber and message are required');
   }
-  try{
+
+  try {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[DEV SMS MOCK] To: ${toPhoneNumber} | Message: ${message}`);
+      return { sid: 'MOCK_SID', status: 'mocked', to: toPhoneNumber };
+    }
+
     const result = await twilioClient.messages.create({
       body: message,
       from: fromPhone,
-        to: toPhoneNumber,
+      to: toPhoneNumber,
     });
+
     return result;
-  }catch (error) {
+  } catch (error) {
     console.error('Error sending SMS:', error);
+    Sentry.captureException(error);
     throw new Error('Failed to send SMS');
   }
 }

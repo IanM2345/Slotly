@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 
 const prisma = new PrismaClient();
 
@@ -12,18 +14,18 @@ export async function GET(request) {
     }
 
     const token = authHeader.split(' ')[1];
-    const userId = await verifyToken(token);
     const { valid, decoded } = await verifyToken(token);
 
     if (!valid || !decoded || decoded.role !== 'CUSTOMER') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = decoded.id;
     const now = new Date();
 
     const upcomingBookings = await prisma.booking.findMany({
       where: {
-        userId: userId,
+        userId,
         startTime: { gt: now },
       },
       include: {
@@ -32,14 +34,12 @@ export async function GET(request) {
         payment: true,
         reminder: true,
       },
-      orderBy: {
-        startTime: 'asc',
-      },
+      orderBy: { startTime: 'asc' },
     });
 
     const pastBookings = await prisma.booking.findMany({
       where: {
-        userId: userId,
+        userId,
         endTime: { lt: now },
       },
       include: {
@@ -48,14 +48,13 @@ export async function GET(request) {
         payment: true,
         reminder: true,
       },
-      orderBy: {
-        endTime: 'desc',
-      },
+      orderBy: { endTime: 'desc' },
     });
 
     return NextResponse.json({ upcomingBookings, pastBookings }, { status: 200 });
   } catch (error) {
     console.error('Error fetching bookings:', error);
+    Sentry.captureException(error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
@@ -74,7 +73,7 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userId = decoded.userId;
+    const userId = decoded.id;
     const body = await request.json();
     const {
       serviceId,
@@ -82,7 +81,7 @@ export async function POST(request) {
       startTime,
       endTime,
       status,
-      couponCode, 
+      couponCode,
     } = body;
 
     if (!serviceId || !businessId || !startTime || !endTime) {
@@ -99,7 +98,7 @@ export async function POST(request) {
     let appliedCoupon = null;
 
     if (couponCode) {
-      const userCoupon = await prisma.userCoupon.findFirst({
+      appliedCoupon = await prisma.userCoupon.findFirst({
         where: {
           userId,
           coupon: {
@@ -112,16 +111,11 @@ export async function POST(request) {
         include: { coupon: true },
       });
 
-      if (!userCoupon) {
+      if (!appliedCoupon) {
         return NextResponse.json({ error: 'Invalid or already used coupon' }, { status: 400 });
       }
-
-      
-
-      appliedCoupon = userCoupon;
     }
 
-   
     const newBooking = await prisma.booking.create({
       data: {
         userId,
@@ -130,18 +124,17 @@ export async function POST(request) {
         startTime: start,
         endTime: end,
         status: status || 'PENDING',
-        couponId: appliedCoupon?.couponId || undefined, 
+        couponId: appliedCoupon?.couponId,
       },
       include: {
         service: true,
         business: true,
         payment: true,
         reminder: true,
-        coupon: true, 
+        coupon: true,
       },
     });
 
-   
     if (appliedCoupon) {
       await prisma.$transaction([
         prisma.userCoupon.update({
@@ -158,6 +151,7 @@ export async function POST(request) {
     return NextResponse.json(newBooking, { status: 201 });
   } catch (error) {
     console.error('Error creating booking:', error);
+    Sentry.captureException(error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }

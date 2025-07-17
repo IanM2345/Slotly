@@ -1,3 +1,5 @@
+import '@/sentry.server.config';
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@generated/prisma';
 import { verifyToken } from '@/middleware/auth';
@@ -24,6 +26,7 @@ export async function GET(request) {
 
     return NextResponse.json({ availability: slots }, { status: 200 });
   } catch (error) {
+    Sentry.captureException?.(error);
     console.error('GET availability error:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
@@ -75,6 +78,7 @@ export async function POST(request) {
 
     return NextResponse.json(slot, { status: 201 });
   } catch (error) {
+    Sentry.captureException?.(error);
     console.error('POST availability error:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
@@ -109,6 +113,7 @@ export async function DELETE(request) {
 
     return NextResponse.json({ message: 'Slot deleted' }, { status: 200 });
   } catch (error) {
+    Sentry.captureException?.(error);
     console.error('DELETE availability error:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }

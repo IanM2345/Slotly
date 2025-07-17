@@ -1,3 +1,5 @@
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import bcrypt from 'bcryptjs';
@@ -41,6 +43,7 @@ export async function POST(request) {
       user: { id: user.id, name: user.name, role: user.role }
     }, { status: 200 });
   } catch (error) {
+    Sentry.captureException(error, { tags: { route: 'VERIFY_OTP' } });
     console.error('OTP verification error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
