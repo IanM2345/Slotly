@@ -68,15 +68,22 @@ export async function POST(request) {
     }
 
     const token = authHeader.split(' ')[1];
-    const userId = await verifyToken(token);
     const { valid, decoded } = await verifyToken(token);
 
     if (!valid || !decoded || decoded.role !== 'CUSTOMER') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = decoded.userId;
     const body = await request.json();
-    const { serviceId, businessId, startTime, endTime, status } = body;
+    const {
+      serviceId,
+      businessId,
+      startTime,
+      endTime,
+      status,
+      couponCode, 
+    } = body;
 
     if (!serviceId || !businessId || !startTime || !endTime) {
       return NextResponse.json({ error: 'Missing required booking fields' }, { status: 400 });
@@ -89,22 +96,64 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Invalid booking time range' }, { status: 400 });
     }
 
+    let appliedCoupon = null;
+
+    if (couponCode) {
+      const userCoupon = await prisma.userCoupon.findFirst({
+        where: {
+          userId,
+          coupon: {
+            code: couponCode,
+            businessId,
+            expiresAt: { gt: new Date() },
+          },
+          usedAt: null,
+        },
+        include: { coupon: true },
+      });
+
+      if (!userCoupon) {
+        return NextResponse.json({ error: 'Invalid or already used coupon' }, { status: 400 });
+      }
+
+      
+
+      appliedCoupon = userCoupon;
+    }
+
+   
     const newBooking = await prisma.booking.create({
       data: {
-        userId: userId,
+        userId,
         serviceId,
         businessId,
         startTime: start,
         endTime: end,
         status: status || 'PENDING',
+        couponId: appliedCoupon?.couponId || undefined, 
       },
       include: {
         service: true,
         business: true,
         payment: true,
         reminder: true,
+        coupon: true, 
       },
     });
+
+   
+    if (appliedCoupon) {
+      await prisma.$transaction([
+        prisma.userCoupon.update({
+          where: { id: appliedCoupon.id },
+          data: { usedAt: new Date() },
+        }),
+        prisma.coupon.update({
+          where: { id: appliedCoupon.couponId },
+          data: { timesUsed: { increment: 1 } },
+        }),
+      ]);
+    }
 
     return NextResponse.json(newBooking, { status: 201 });
   } catch (error) {

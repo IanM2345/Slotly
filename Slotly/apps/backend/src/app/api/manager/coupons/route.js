@@ -24,13 +24,12 @@ async function getBusinessFromToken(request) {
     return { error: 'Business not found', status: 404 };
   }
 
-  return { business };
+  return { business, ownerId: decoded.userId };
 }
-
 
 export async function POST(request) {
   try {
-    const { business, error, status } = await getBusinessFromToken(request);
+    const { business, ownerId, error, status } = await getBusinessFromToken(request);
     if (error) return NextResponse.json({ error }, { status });
 
     const { code, description, discount, isPercentage, expiresAt } = await request.json();
@@ -38,7 +37,6 @@ export async function POST(request) {
     if (!code || !discount || !expiresAt) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
-
 
     const existing = await prisma.coupon.findFirst({
       where: { code, businessId: business.id },
@@ -59,13 +57,21 @@ export async function POST(request) {
       },
     });
 
+    await prisma.notification.create({
+      data: {
+        userId: ownerId,
+        type: 'COUPON',
+        title: 'New Coupon Created',
+        message: `Coupon code "${newCoupon.code}" has been created.`,
+      },
+    });
+
     return NextResponse.json(newCoupon, { status: 201 });
   } catch (err) {
     console.error('POST /manager/coupons error:', err);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
-
 
 export async function GET(request) {
   try {
@@ -83,14 +89,12 @@ export async function GET(request) {
       businessId: business.id,
     };
 
-    
     if (active === 'true') {
       filters.expiresAt = { gt: now };
     } else if (expired === 'true') {
       filters.expiresAt = { lt: now };
     }
 
-   
     if (used === 'true') {
       filters.userCoupons = { some: { usedAt: { not: null } } };
     } else if (used === 'false') {
@@ -101,15 +105,46 @@ export async function GET(request) {
       where: filters,
       orderBy: { createdAt: 'desc' },
       include: {
-        userCoupons: true,
+        userCoupons: {
+          include: { user: true },
+        },
       },
     });
 
-    const response = coupons.map(coupon => ({
-      ...coupon,
-      usageCount: coupon.userCoupons.filter(c => c.usedAt !== null).length,
-      redeemedUsers: coupon.userCoupons.length,
-    }));
+    for (const coupon of coupons) {
+      for (const userCoupon of coupon.userCoupons) {
+        if (userCoupon.usedAt) {
+          await prisma.notification.createMany({
+            data: [
+              {
+                userId: coupon.business.ownerId,
+                type: 'COUPON',
+                title: 'Coupon Used',
+                message: `Coupon "${coupon.code}" was used by ${userCoupon.user.name || 'a customer'}.`,
+              },
+              {
+                userId: userCoupon.userId,
+                type: 'COUPON',
+                title: 'Coupon Redeemed',
+                message: `You successfully used coupon "${coupon.code}".`,
+              },
+            ],
+            skipDuplicates: true,
+          });
+        }
+      }
+    }
+
+    const response = coupons.map(coupon => {
+      const usageCount = coupon.userCoupons.filter(c => c.usedAt !== null).length;
+      const redeemedUsers = coupon.userCoupons.length;
+
+      return {
+        ...coupon,
+        usageCount,
+        redeemedUsers,
+      };
+    });
 
     return NextResponse.json({ coupons: response }, { status: 200 });
   } catch (err) {
@@ -117,7 +152,6 @@ export async function GET(request) {
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
-
 
 export async function DELETE(request) {
   try {

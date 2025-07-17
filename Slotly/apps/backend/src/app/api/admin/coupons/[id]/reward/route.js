@@ -1,7 +1,9 @@
-
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
 import { verifyToken } from '@/middleware/auth'
+import { createNotification } from '@/shared/notifications/createNotification'
+import { sendNotification } from '@/shared/notifications/sendNotification'
+import { sendAdminEmailLog } from '@/shared/notifications/sendAdminEmailLog'
 
 const prisma = new PrismaClient()
 
@@ -34,6 +36,30 @@ export async function POST(request, { params }) {
         couponId: params.id,
       },
     })
+
+    const [user, coupon] = await Promise.all([
+      prisma.user.findUnique({ where: { id: userId } }),
+      prisma.coupon.findUnique({ where: { id: params.id } }),
+    ])
+
+    if (user && coupon) {
+      const title = '🎁 You’ve received a new coupon!'
+      const message = `You’ve been rewarded the coupon “${coupon.code}” by Slotly Admin. Use it before it expires.`
+     
+      const notif = await createNotification({
+        userId: user.id,
+        type: 'COUPON_REWARD',
+        title,
+        message,
+      })
+
+      await sendNotification({ notification: notif, user })
+
+      await sendAdminEmailLog({
+        subject: 'Coupon Rewarded to User',
+        message: `Admin ${admin.name || admin.id} rewarded coupon "${coupon.code}" (ID: ${coupon.id}) to user ${user.email || user.id}.`,
+      })
+    }
 
     return NextResponse.json({ success: true, reward: rewarded })
   } catch (err) {

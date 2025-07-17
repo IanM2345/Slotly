@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
-import { authenticaterequestuest } from '@/middleware/auth';
+import { authenticateRequest } from '@/middleware/auth';
+import { sendNotification } from '@/lib/notifications/sendNotification';
 
 const prisma = new PrismaClient();
 
-
 export async function GET(request) {
-  const auth = await authenticaterequestuest(request);
+  const auth = await authenticateRequest(request);
   if (!auth.valid || auth.decoded.role !== 'ADMIN') {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -22,9 +22,8 @@ export async function GET(request) {
   return NextResponse.json(referrals);
 }
 
-
 export async function PATCH(request) {
-  const auth = await authenticaterequestuest(request);
+  const auth = await authenticateRequest(request);
   if (!auth.valid || auth.decoded.role !== 'ADMIN') {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -40,6 +39,25 @@ export async function PATCH(request) {
     where: { id: referralId },
     data: { rewardIssued: true },
   });
+
+ 
+  const referral = await prisma.referral.findUnique({
+    where: { id: referralId },
+    include: {
+      referrer: true,
+      referredUser: true,
+    },
+  });
+
+  if (referral?.referrer) {
+    await sendNotification({
+      userId: referral.referrer.id,
+      title: 'Referral Reward Granted',
+      message: `Thanks for referring ${referral.referredUser?.name || 'a user'}! Your reward has been issued.`,
+      type: 'REFERRAL_REWARDED',
+      metadata: { referralId },
+    });
+  }
 
   return NextResponse.json({ message: 'Referral marked as rewarded', updated });
 }

@@ -6,7 +6,7 @@ const prisma = new PrismaClient();
 
 export async function POST(request) {
   try {
-    const { email, phone, password, name } = await request.json();
+    const { email, phone, password, name, referralCode } = await request.json();
 
     if (!email && !phone) {
       return NextResponse.json({ error: 'Email or phone number is required' }, { status: 400 });
@@ -41,9 +41,34 @@ export async function POST(request) {
         phone: phone ?? null,
         password: hashedPassword,
         name,
-        role: 'CUSTOMER', // default
+        role: 'CUSTOMER',
       }
     });
+
+
+    if (referralCode) {
+      const referrer = await prisma.user.findFirst({
+        where: { referralCode }
+      });
+
+      if (referrer) {
+        await prisma.referral.create({
+          data: {
+            referrerId: referrer.id,
+            referredUserId: newUser.id,
+          }
+        });
+
+        await prisma.notification.create({
+          data: {
+            userId: referrer.id,
+            type: 'REFERRAL',
+            title: '🎉 Someone Used Your Referral Code!',
+            message: `${newUser.name} just signed up using your referral code. Once they complete 2 bookings, you’ll be 1 step closer to a coupon.`,
+          }
+        });
+      }
+    }
 
     return NextResponse.json({ message: 'User created successfully', user: newUser }, { status: 201 });
 
