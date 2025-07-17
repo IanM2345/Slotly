@@ -6,13 +6,7 @@ import { sendOTPviaEmail } from '@/lib/mailgunClient';
 import { sendNotification } from '@/shared/notifications/sendNotification';
 import { sendEmailNotification } from '@/shared/notifications/sendEmailNotifciation';
 
-
 const prisma = new PrismaClient();
-const JWT_SECRET = process.env.JWT_SECRET;
-
-if (!JWT_SECRET) {
-  throw new Error('JWT_SECRET is not set in .env');
-}
 
 function generateOTP(length = 6) {
   return Math.floor(100000 + Math.random() * 900000).toString().slice(0, length);
@@ -47,6 +41,7 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
     }
 
+    
     if (user.suspended) {
       await sendNotification({
         userId: user.id,
@@ -73,6 +68,7 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Account suspended. Contact support.' }, { status: 403 });
     }
 
+  
     const otp = generateOTP();
     const hashedOTP = await bcrypt.hash(otp, 8);
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000); 
@@ -89,6 +85,7 @@ export async function POST(request) {
       await sendOTPviaEmail(user.email, otp);
     }
 
+    
     return NextResponse.json({
       message: 'OTP sent to your registered contact. Please verify to complete login.',
       user: { id: user.id, name: user.name, role: user.role }

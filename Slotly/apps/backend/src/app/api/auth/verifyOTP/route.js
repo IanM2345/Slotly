@@ -19,10 +19,6 @@ export async function POST(request) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    if (user.otpVerified) {
-      return NextResponse.json({ error: 'User already verified' }, { status: 400 });
-    }
-
     if (!user.otp || !user.otpExpiresAt || new Date() > new Date(user.otpExpiresAt)) {
       return NextResponse.json({ error: 'OTP expired or invalid' }, { status: 400 });
     }
@@ -40,7 +36,7 @@ export async function POST(request) {
     const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
 
     return NextResponse.json({
-      message: 'Signup and verification successful!',
+      message: 'OTP verified, login successful!',
       token,
       user: { id: user.id, name: user.name, role: user.role }
     }, { status: 200 });
