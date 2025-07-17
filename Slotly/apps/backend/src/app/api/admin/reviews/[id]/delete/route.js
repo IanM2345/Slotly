@@ -1,7 +1,7 @@
-
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
 import { verifyToken } from '@/middleware/auth'
+import { createNotification } from '@/lib/createNotification' 
 
 const prisma = new PrismaClient()
 
@@ -16,9 +16,27 @@ export async function DELETE(req, { params }) {
 
     const reviewId = params.id
 
+    const review = await prisma.review.findUnique({
+      where: { id: reviewId },
+      include: { user: true }
+    })
+
+    if (!review) {
+      return NextResponse.json({ error: 'Review not found' }, { status: 404 })
+    }
+
     await prisma.review.delete({
       where: { id: reviewId },
     })
+
+    if (review.user) {
+      await createNotification({
+        userId: review.userId,
+        type: 'REVIEW',
+        title: 'Your review was deleted',
+        message: 'Your review was removed by an administrator.',
+      })
+    }
 
     return NextResponse.json({ message: 'Review deleted' })
   } catch (error) {

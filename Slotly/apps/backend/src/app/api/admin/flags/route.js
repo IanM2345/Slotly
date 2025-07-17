@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { authenticateRequest } from '@/middleware/auth';
+import { createNotification } from '@/lib/createNotification';
 
 const prisma = new PrismaClient();
-
 
 export async function GET(req) {
   const auth = await authenticateRequest(req);
@@ -25,7 +25,6 @@ export async function GET(req) {
   });
 }
 
-
 export async function PATCH(req) {
   const auth = await authenticateRequest(req);
   if (!auth.valid || auth.decoded.role !== 'ADMIN') {
@@ -33,27 +32,53 @@ export async function PATCH(req) {
   }
 
   const body = await req.json();
-  const { type, id } = body;
+  const { type, id, action } = body;
 
-  if (!type || !id) {
-    return NextResponse.json({ error: 'Missing type or id' }, { status: 400 });
+  if (!type || !id || !action) {
+    return NextResponse.json({ error: 'Missing type, id, or action' }, { status: 400 });
   }
 
   try {
     switch (type) {
       case 'review':
-        await prisma.review.update({
-          where: { id },
-          data: { flagged: false },
-        });
-        return NextResponse.json({ message: `Review ${id} unflagged.` });
+        if (action === 'flag') {
+          const review = await prisma.review.update({
+            where: { id },
+            data: { flagged: true },
+            include: {
+              business: true,
+              user: true,
+            },
+          });
 
-      
+          const admins = await prisma.user.findMany({ where: { role: 'ADMIN' } });
+          for (const admin of admins) {
+            await createNotification({
+              userId: admin.id,
+              type: 'REVIEW',
+              title: 'Review flagged by manager',
+              message: `A review was flagged for moderation on business "${review.business?.name || ''}". Review by ${review.user?.name || 'a user'}.`,
+            });
+          }
+
+          return NextResponse.json({ message: `Review ${id} flagged and admins notified.` });
+        }
+
+        if (action === 'unflag') {
+          await prisma.review.update({
+            where: { id },
+            data: { flagged: false },
+          });
+          return NextResponse.json({ message: `Review ${id} unflagged.` });
+        }
+
+        return NextResponse.json({ error: 'Unsupported action' }, { status: 400 });
+
       default:
         return NextResponse.json({ error: 'Unsupported flag type' }, { status: 400 });
     }
   } catch (error) {
-    console.error('Unflagging failed:', error);
-    return NextResponse.json({ error: 'Failed to unflag item' }, { status: 500 });
+    console.error('Flag/unflag failed:', error);
+    return NextResponse.json({ error: 'Failed to flag/unflag item' }, { status: 500 });
   }
 }
