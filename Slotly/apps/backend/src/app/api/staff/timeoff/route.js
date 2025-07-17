@@ -49,16 +49,34 @@ export async function POST(request) {
       return NextResponse.json({ error: 'startDate and endDate are required' }, { status: 400 });
     }
 
-    const requestEntry = await prisma.timeOffRequest.create({
-      data: {
-        staffId: decoded.userId,
-        startDate: new Date(startDate),
-        endDate: new Date(endDate),
-        reason,
-      }
+    const staffOf = await prisma.business.findMany({
+      where: { staff: { some: { id: decoded.userId } } }
     });
 
-    return NextResponse.json(requestEntry, { status: 201 });
+    const requests = await Promise.all(
+      staffOf.map(async (business) => {
+        const entry = await prisma.timeOffRequest.create({
+          data: {
+            staffId: decoded.userId,
+            businessId: business.id,
+            startDate: new Date(startDate),
+            endDate: new Date(endDate),
+            reason,
+          }
+        });
+   
+        await createNotification({
+          userId: business.ownerId,
+          type: 'TIME_OFF',
+          title: 'New Staff Time Off Request',
+          message: `A staff member requested time off (${startDate} to ${endDate}).`,
+          metadata: { requestId: entry.id }
+        });
+        return entry;
+      })
+    );
+
+    return NextResponse.json(requests.length === 1 ? requests[0] : requests, { status: 201 });
   } catch (error) {
     console.error('POST /timeoff error:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
