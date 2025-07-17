@@ -88,18 +88,20 @@ export async function PUT(request) {
 
     const { enrollmentId, status } = await request.json();
 
-     if (!['APPROVED', 'REJECTED'].includes(status)) {
+    if (!['APPROVED', 'REJECTED'].includes(status)) {
       return NextResponse.json({ error: 'Invalid status' }, { status: 400 });
     }
-    
-    const existing = await prisma.staffEnrollment.findUnique({ where: { id: enrollmentId } });
+
+    const existing = await prisma.staffEnrollment.findUnique({
+      where: { id: enrollmentId }
+    });
 
     if (!existing) {
-         return NextResponse.json({ error: 'Enrollment not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Enrollment not found' }, { status: 404 });
     }
 
     if (existing.status === 'APPROVED' && status === 'APPROVED') {
-         return NextResponse.json({ error: 'Staff is already approved' }, { status: 400 });
+      return NextResponse.json({ error: 'Staff is already approved' }, { status: 400 });
     }
 
     const enrollment = await prisma.staffEnrollment.update({
@@ -111,7 +113,6 @@ export async function PUT(request) {
       include: { user: true, business: true }
     });
 
-   
     if (status === 'APPROVED') {
       await prisma.business.update({
         where: { id: enrollment.businessId },
@@ -123,13 +124,26 @@ export async function PUT(request) {
       });
     }
 
-    return NextResponse.json({ message: `Staff ${status.toLowerCase()} successfully`, enrollment }, { status: 200 });
+    await createNotification({
+      userId: enrollment.userId,
+      type: 'STAFF_ASSIGNMENT',
+      title: status === 'APPROVED' ? 'Application Approved' : 'Application Rejected',
+      message:
+        status === 'APPROVED'
+          ? `Congratulations! You have been approved as staff at ${enrollment.business?.name || 'the business'}.`
+          : `Sorry, your application to join ${enrollment.business?.name || 'the business'} was rejected.`,
+      metadata: { enrollmentId: enrollment.id, businessId: enrollment.businessId }
+    });
+
+    return NextResponse.json(
+      { message: `Staff ${status.toLowerCase()} successfully`, enrollment },
+      { status: 200 }
+    );
   } catch (error) {
     console.error('PUT /manager/staff error:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
-
 
 export async function DELETE(request) {
   try {

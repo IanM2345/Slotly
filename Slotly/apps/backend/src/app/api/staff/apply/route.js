@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
+import { createNotification } from '@/lib/createNotification'; 
 
 const prisma = new PrismaClient();
 
@@ -55,6 +56,14 @@ export async function POST(req) {
         idPhotoUrl,
         selfieWithIdUrl,
       },
+    });
+
+    await createNotification({
+      userId: business.ownerId,
+      type: 'STAFF_ASSIGNMENT',
+      title: 'New Staff Application',
+      message: `You have received a new staff application.`,
+      metadata: { applicationId: newApplication.id, applicantId: decoded.id }
     });
 
     return NextResponse.json(newApplication, { status: 201 });
