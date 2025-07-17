@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import bcrypt from 'bcryptjs';
+import { sendOTPviaSMS } from '@/shared/notifications/twilioClient'; 
+import { sendOTPviaEmail } from '@/shared/notifications/mailgunClient';
 
 const prisma = new PrismaClient();
+
+function generateOTP(length = 6) {
+  return Math.floor(100000 + Math.random() * 900000).toString().slice(0, length);
+}
 
 export async function POST(request) {
   try {
@@ -11,11 +17,9 @@ export async function POST(request) {
     if (!email && !phone) {
       return NextResponse.json({ error: 'Email or phone number is required' }, { status: 400 });
     }
-
     if (!password || password.length < 6) {
       return NextResponse.json({ error: 'Password must be at least 6 characters long' }, { status: 400 });
     }
-
     if (!name) {
       return NextResponse.json({ error: 'Name is required' }, { status: 400 });
     }
@@ -34,6 +38,9 @@ export async function POST(request) {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+    const otp = generateOTP();
+    const hashedOTP = await bcrypt.hash(otp, 8);
+    const otpExpires = new Date(Date.now() + 15 * 60 * 1000);
 
     const newUser = await prisma.user.create({
       data: {
@@ -42,10 +49,16 @@ export async function POST(request) {
         password: hashedPassword,
         name,
         role: 'CUSTOMER',
+        otp: hashedOTP,
+        otpExpiresAt: otpExpires,
+        otpVerified: false,
       }
     });
 
+    if (phone) await sendOTPviaSMS(phone, otp);
+    if (email) await sendOTPviaEmail(email, otp);
 
+  
     if (referralCode) {
       const referrer = await prisma.user.findFirst({
         where: { referralCode }
@@ -70,8 +83,10 @@ export async function POST(request) {
       }
     }
 
-    return NextResponse.json({ message: 'User created successfully', user: newUser }, { status: 201 });
-
+    return NextResponse.json({
+      message: 'OTP sent. Please verify to complete signup.',
+      userId: newUser.id  
+    }, { status: 201 });
   } catch (error) {
     console.error('Error during signup:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
