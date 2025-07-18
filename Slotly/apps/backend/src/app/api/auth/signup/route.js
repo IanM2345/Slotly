@@ -3,8 +3,8 @@ import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import bcrypt from 'bcryptjs';
-import { sendOTPviaSMS } from '@/shared/notifications/twilioClient'; 
-import { sendOTPviaEmail } from '@/shared/notifications/mailgunClient';
+import { sendOTPviaSMS } from '@/lib/twilioClient'; 
+import { sendOTPviaEmail } from '@/lib/mailgunClient';
 
 const prisma = new PrismaClient();
 
@@ -57,8 +57,30 @@ export async function POST(request) {
       }
     });
 
-    if (phone) await sendOTPviaSMS(phone, otp);
-    if (email) await sendOTPviaEmail(email, otp);
+    let smsResult = null;
+let emailResult = null;
+
+if (phone) {
+  try {
+    smsResult = await sendOTPviaSMS(phone, otp);
+
+    if (!smsResult?.sid) {
+      throw new Error('Twilio SMS sending failed');
+    }
+  } catch (error) {
+    console.error('❌ Error sending OTP via SMS:', error);
+    return NextResponse.json({ error: 'Failed to send OTP via SMS' }, { status: 500 });
+  }
+}
+
+if (email) {
+  try {
+    emailResult = await sendOTPviaEmail(email, otp);
+  } catch (error) {
+    console.error('❌ Error sending OTP via Email:', error);
+    return NextResponse.json({ error: 'Failed to send OTP via Email' }, { status: 500 });
+  }
+}
 
     if (referralCode) {
       const referrer = await prisma.user.findFirst({
