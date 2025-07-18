@@ -15,6 +15,8 @@ export default function BookingScreen() {
   const [time, setTime] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
+  const [bookingConfirmed, setBookingConfirmed] = useState(false);
+
 
   const handleDateChange = (event: any, selectedDate?: Date) => {
     setShowDatePicker(false);
@@ -99,14 +101,31 @@ export default function BookingScreen() {
           onChange={handleTimeChange}
         />
       )}
+      {bookingConfirmed && (
+  <View style={styles.confirmation}>
+    <Text style={{ color: 'green', fontSize: 16 }}>
+      ✅ Booking Confirmed for {selectedService} on {date.toDateString()} at{' '}
+      {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+    </Text>
+  </View>
+)}
+
 
       <Button
-        mode="contained"
-        onPress={handleConfirmBooking}
-        style={styles.button}
-      >
-        Confirm Booking
-      </Button>
+  mode="contained"
+  onPress={() => {
+    if (!selectedService) {
+      alert("Please enter a service name.");
+      return;
+    }
+
+    setBookingConfirmed(true);
+  }}
+  style={styles.button}
+>
+  Confirm Booking
+</Button>
+
     </View>
   );
 }
@@ -129,4 +148,11 @@ const styles = StyleSheet.create({
     marginTop: 24,
     backgroundColor: '#6a42d9',
   },
+  confirmation: {
+  backgroundColor: '#e0ffe0',
+  padding: 12,
+  borderRadius: 8,
+  marginBottom: 16,
+}
+
 });
