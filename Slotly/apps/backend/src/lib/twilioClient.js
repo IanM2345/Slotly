@@ -1,6 +1,7 @@
 import twilio from 'twilio';
-import '@/sentry.server.config';
 import * as Sentry from '@sentry/nextjs';
+
+// ❌ REMOVE this line too:
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -13,10 +14,7 @@ if (!accountSid || !authToken || !fromPhone) {
 const twilioClient = twilio(accountSid, authToken);
 
 /**
- * Sends an SMS message using Twilio
- * @param {string} toPhoneNumber - The recipient phone number in E.164 format
- * @param {string} message - The message to send
- * @returns {Promise<object>} - Twilio response
+ * Sends a generic SMS message using Twilio
  */
 export async function sendSms(toPhoneNumber, message) {
   if (!toPhoneNumber || !message) {
@@ -29,13 +27,11 @@ export async function sendSms(toPhoneNumber, message) {
       return { sid: 'MOCK_SID', status: 'mocked', to: toPhoneNumber };
     }
 
-    const result = await twilioClient.messages.create({
+    return await twilioClient.messages.create({
       body: message,
       from: fromPhone,
       to: toPhoneNumber,
     });
-
-    return result;
   } catch (error) {
     console.error('Error sending SMS:', error);
     Sentry.captureException(error);
@@ -43,4 +39,10 @@ export async function sendSms(toPhoneNumber, message) {
   }
 }
 
-export default twilioClient;
+/**
+ * Specific helper for OTP
+ */
+export async function sendOTPviaSMS(toPhoneNumber, otp) {
+  const message = `Your Slotly OTP is: ${otp}`;
+  return sendSms(toPhoneNumber, message);
+}

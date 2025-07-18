@@ -1,6 +1,5 @@
 import { PrismaClient } from '@/generated/prisma';
 import * as Sentry from '@sentry/nextjs';
-import '@/sentry.server.config';
 
 const prisma = new PrismaClient();
 

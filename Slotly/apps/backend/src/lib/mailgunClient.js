@@ -1,7 +1,8 @@
 import formData from 'form-data';
 import Mailgun from 'mailgun.js';
-import '@/sentry.server.config';
 import * as Sentry from '@sentry/nextjs';
+
+// ❌ REMOVE this if it's still here
 
 const mailgun = new Mailgun(formData);
 
@@ -11,11 +12,7 @@ const mg = mailgun.client({
 });
 
 /**
- * Send an email via Mailgun
- * @param {Object} options
- * @param {string|string[]} options.to - Recipient email(s)
- * @param {string} options.subject - Email subject
- * @param {string} options.html - Email body (HTML)
+ * Generic email sender
  */
 export async function sendEmail({ to, subject, html }) {
   const domain = process.env.MAILGUN_DOMAIN;
@@ -42,4 +39,15 @@ export async function sendEmail({ to, subject, html }) {
     Sentry.captureException(error);
     throw new Error('Email sending failed');
   }
+}
+
+/**
+ * OTP wrapper for reusability
+ */
+export async function sendOTPviaEmail(to, otp) {
+  return sendEmail({
+    to,
+    subject: 'Your Slotly OTP',
+    html: `<p>Your one-time password is: <strong>${otp}</strong></p>`,
+  });
 }

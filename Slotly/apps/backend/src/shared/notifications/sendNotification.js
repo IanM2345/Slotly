@@ -1,7 +1,6 @@
 import { createNotification } from './createNotification';
-import { sendSMS } from '@/lib/twilioClient';
+import { sendSms as sendSMS } from '@/lib/twilioClient';
 import * as Sentry from '@sentry/nextjs';
-import '@/sentry.server.config';
 
 /**
  * Dispatches a notification to a user across one or more channels.

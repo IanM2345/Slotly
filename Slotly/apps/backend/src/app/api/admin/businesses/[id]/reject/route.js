@@ -1,4 +1,4 @@
-import '@/sentry.server.config'; 
+
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
 import { verifyToken } from '@/middleware/auth'

@@ -1,4 +1,3 @@
-import '@/sentry.server.config'; 
 import { NextResponse } from 'next/server';
 import prisma from '@/generated/prisma';
 import * as Sentry from '@sentry/nextjs';

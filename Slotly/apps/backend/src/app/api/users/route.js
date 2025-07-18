@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import bcrypt from 'bcryptjs';
-import '@/sentry.server.config';
 import * as Sentry from '@sentry/nextjs';
 
 const prisma = new PrismaClient();

@@ -1,5 +1,4 @@
 import * as Sentry from '@sentry/nextjs';
-import '@/sentry.server.config';
 
 export function getNotificationTemplate(event, data = {}) {
   try {

@@ -1,6 +1,5 @@
 import { sendEmail } from '@/lib/mailgunClient';
 import * as Sentry from '@sentry/nextjs';
-import '@/sentry.server.config';
 
 /**
  * Sends an admin log email for compliance or internal tracking.

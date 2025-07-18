@@ -1,7 +1,6 @@
 import { sendEmail } from '@/lib/mailgunClient';
-import { getNotificationTemplate } from './templates';
+import { getNotificationTemplate } from './template';
 import * as Sentry from '@sentry/nextjs';
-import '@/sentry.server.config';
 
 /**
  * Sends a templated email notification to a user.

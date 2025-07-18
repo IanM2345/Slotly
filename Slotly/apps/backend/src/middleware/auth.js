@@ -1,6 +1,5 @@
 import jwt from 'jsonwebtoken';
 import * as Sentry from '@sentry/nextjs';
-import '@/sentry.server.config';
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
