@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
 import { createNotification } from '@/shared/notifications/createNotification'; 
-import { staffLimitByPlan } from '@/shared/businessPlanUtils';
+import { staffLimitByPlan } from '@/shared/subscriptionPlanUtils';
 
 
 const prisma = new PrismaClient();

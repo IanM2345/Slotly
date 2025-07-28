@@ -3,6 +3,9 @@ import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
+import { createNotification } from '@/shared/notifications/createNotification';
+import { couponAccessByPlan } from '@/shared/subscriptionPlanUtils'; 
+
 
 const prisma = new PrismaClient();
 
@@ -48,6 +51,27 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Coupon code already exists' }, { status: 409 });
     }
 
+    if (!couponAccessByPlan[business.plan]) {
+     Sentry.captureMessage(`Coupon access blocked for business ${business.id} (Plan: ${business.plan})`);
+
+  
+       await createNotification({
+        userId: ownerId,
+        type: 'SYSTEM',
+       title: 'Coupon Feature Unavailable',
+       message: `Your current plan (${business.plan}) does not support coupons. Upgrade your plan to unlock this feature.`,
+       });
+
+       return NextResponse.json(
+        {
+          error: 'Your plan does not support coupon creation or management.',
+          suggestion: 'Upgrade your plan to enable coupon functionality.',
+        },
+        { status: 403 }
+       );
+      }
+
+
     const newCoupon = await prisma.coupon.create({
       data: {
         code,
@@ -78,6 +102,18 @@ export async function POST(request) {
 
 export async function GET(request) {
   try {
+
+    if (!couponAccessByPlan[business.plan]) {
+  Sentry.captureMessage(`Coupon access (GET) blocked for ${business.id} (${business.plan})`);
+  return NextResponse.json(
+    {
+      error: 'Your plan does not support viewing coupons.',
+      suggestion: 'Upgrade to view and manage your coupons.',
+    },
+    { status: 403 }
+  );
+}
+
     const { business, error, status } = await getBusinessFromToken(request);
     if (error) return NextResponse.json({ error }, { status });
 
@@ -167,6 +203,18 @@ export async function DELETE(request) {
     if (!id) {
       return NextResponse.json({ error: 'Coupon ID required' }, { status: 400 });
     }
+
+    if (!couponAccessByPlan[business.plan]) {
+  Sentry.captureMessage(`Coupon access (GET) blocked for ${business.id} (${business.plan})`);
+  return NextResponse.json(
+    {
+      error: 'Your plan does not support viewing coupons.',
+      suggestion: 'Upgrade to view and manage your coupons.',
+    },
+    { status: 403 }
+  );
+}
+
 
     const coupon = await prisma.coupon.findFirst({
       where: {

@@ -3,7 +3,7 @@ import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
-import { serviceLimitByPlan } from '@/shared/businessPlanUtils';
+import { serviceLimitByPlan } from '@/shared/subscriptionPlanUtils';
 import { createNotification } from '@/shared/notifications/createNotification';
 
 

@@ -111,3 +111,12 @@ export const staffLimitByPlan = {
   LEVEL_5: 50,
   LEVEL_6: 100,
 };
+
+export const couponAccessByPlan = {
+  LEVEL_1: false,
+  LEVEL_2: true,
+  LEVEL_3: true,
+  LEVEL_4: true,
+  LEVEL_5: true,
+  LEVEL_6: true,
+};
