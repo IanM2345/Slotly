@@ -94,3 +94,20 @@ export const SubscriptionPlan = {
   LEVEL_5: 'LEVEL_5',
   LEVEL_6: 'LEVEL_6',
 };
+
+export const serviceLimitByPlan = {
+  LEVEL_1: 1,
+  LEVEL_2: 5,
+  LEVEL_3: 15,
+  LEVEL_4: 50,
+  LEVEL_5: 100,
+  LEVEL_6: 200,
+};
+export const staffLimitByPlan = {
+  LEVEL_1: 1,
+  LEVEL_2: 3,
+  LEVEL_3: 10,
+  LEVEL_4: 30,
+  LEVEL_5: 50,
+  LEVEL_6: 100,
+};

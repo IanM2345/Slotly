@@ -3,6 +3,8 @@ import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
+import { serviceLimitByPlan } from '@/shared/businessPlanUtils';
+
 
 const prisma = new PrismaClient();
 
@@ -43,6 +45,19 @@ export async function POST(request) {
     if (!name || !price || !duration) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
+
+    const limit = serviceLimitByPlan[business.plan];
+    const currentCount = await prisma.service.count({
+      where: { businessId: business.id },
+     });
+
+     if (currentCount >= limit) {
+      return NextResponse.json(
+      { error: `Service limit reached (${limit}) for your current plan.` },
+      { status: 403 }
+      );
+     }
+
 
     const newService = await prisma.service.create({
       data: {
