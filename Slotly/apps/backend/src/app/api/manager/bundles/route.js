@@ -3,6 +3,9 @@ import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
+import { getPlanFeatures } from '@/shared/subscriptionPlanUtils';
+import { createNotification } from '@/shared/notifications/createNotification';
+
 
 const prisma = new PrismaClient();
 
@@ -34,6 +37,27 @@ export async function POST(request) {
   try {
     const { business, error, status } = await getBusinessFromToken(request);
     if (error) return NextResponse.json({ error }, { status });
+
+    const features = getPlanFeatures(business.plan);
+      if (!features.canUseBundles) {
+      Sentry.captureMessage(`Bundle creation blocked for business ${business.id} (Plan: ${business.plan})`);
+
+      await createNotification({
+        userId: business.ownerId,
+        type: 'SYSTEM',
+        title: 'Bundles Feature Unavailable',
+        message: `Your plan (${business.plan}) does not support service bundles. Upgrade to unlock this feature.`,
+      });
+
+      return NextResponse.json(
+       {
+        error: 'Your current subscription plan does not allow creating service bundles.',
+        suggestion: 'Upgrade to a higher plan to enable this feature.',
+      },
+       { status: 403 }
+      );
+      }
+
 
     const body = await request.json();
     const { name, description, price, duration, serviceIds } = body;
@@ -77,6 +101,20 @@ export async function GET(request) {
   try {
     const { business, error, status } = await getBusinessFromToken(request);
     if (error) return NextResponse.json({ error }, { status });
+
+    const features = getPlanFeatures(business.plan);
+    if (!features.canUseBundles) {
+       Sentry.captureMessage(`Bundle access blocked for business ${business.id} (Plan: ${business.plan})`);
+
+      return NextResponse.json(
+      {
+        error: 'Access to bundles is not available on your current plan.',
+       suggestion: 'Upgrade to view and manage bundles.',
+      },
+      { status: 403 }
+      );
+    }
+
 
     const bundles = await prisma.serviceBundle.findMany({
       where: { businessId: business.id },
