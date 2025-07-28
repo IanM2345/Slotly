@@ -3,6 +3,8 @@ import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
+import { getPlanFeatures } from '@/shared/subscriptionPlanUtils';
+
 
 const prisma = new PrismaClient();
 
@@ -41,8 +43,21 @@ export async function GET(request) {
     const { business, error, status } = await getBusinessFromToken(request);
     if (error) return NextResponse.json({ error }, { status });
 
+    const features = getPlanFeatures(business.plan);
+    if (!features.canAccessReports) {
+      Sentry.captureMessage(`Blocked report access for business ${business.id} (Plan: ${business.plan})`);
+
+      return NextResponse.json(
+        {
+          error: 'Your plan does not support access to reports.',
+          suggestion: 'Upgrade your plan to unlock business reports.',
+        },
+        { status: 403 }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
-    const period = searchParams.get('period'); 
+    const period = searchParams.get('period');
 
     const whereClause = {
       businessId: business.id,
