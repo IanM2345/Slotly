@@ -38,7 +38,10 @@ model Business {
   logoUrl        String?
   suspended      Boolean   @default(false)
   suspendedUntil DateTime?
+  
+  plan           SubscriptionPlan @default(LEVEL_1)  
 }
+
 
 model Service {
   id         String   @id @default(auto()) @map("_id") @db.ObjectId
@@ -299,9 +302,12 @@ enum PaymentStatus {
 }
 
 enum SubscriptionPlan {
-  BASIC
-  STANDARD
-  PREMIUM
+  LEVEL_1
+  LEVEL_2
+  LEVEL_3
+  LEVEL_4
+  LEVEL_5
+  LEVEL_6
 }
 
 enum ReminderMethod {
