@@ -253,6 +253,24 @@ model SuspensionLog {
   timestamp  DateTime @default(now())
 }
 
+model AddOn {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  businessId  String   @db.ObjectId
+  type        AddOnType
+  value       Int?     
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  business    Business @relation(fields: [businessId], references: [id])
+}
+
+enum AddOnType {
+  EXTRA_STAFF
+  WHATSAPP_REMINDERS
+  BRANDED_PAGE
+  CUSTOM_ANALYTICS
+}
+
 enum TimeOffStatus {
   PENDING
   APPROVED

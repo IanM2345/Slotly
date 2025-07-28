@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
 import { createNotification } from '@/shared/notifications/createNotification'; 
+import { staffLimitByPlan } from '@/shared/businessPlanUtils';
+
 
 const prisma = new PrismaClient();
 
@@ -114,15 +116,58 @@ export async function PUT(request) {
         });
 
         if (status === 'APPROVED') {
-            await prisma.business.update({
-                where: { id: enrollment.businessId },
-                data: {
-                    staff: {
-                        connect: { id: enrollment.userId }
-                    }
-                }
+        const business = await prisma.business.findUnique({
+           where: { id: existing.businessId },
+           select: { plan: true },
+         });
+
+          const approvedCount = await prisma.staffEnrollment.count({
+           where: {
+            businessId: existing.businessId,
+            status: 'APPROVED',
+           },
+          });
+
+          const allowed = staffLimitByPlan[business.plan] || 0;
+
+       
+          const extraAddOn = await prisma.addOn.findFirst({
+            where: {
+                 businessId: existing.businessId,
+                type: 'EXTRA_STAFF',
+                isActive: true
+            }
+          });
+
+            const extraAllowed = extraAddOn?.value || 0;
+            const totalAllowed = allowed + extraAllowed;
+
+         if (approvedCount >= totalAllowed) {
+            await createNotification({
+                 userId: decoded.userId,
+                 type: 'SYSTEM',
+                 title: 'Staff Limit Reached',
+                 message: `Your current plan only allows ${totalAllowed} staff members. Upgrade or purchase an add-on to approve more.`,
             });
+
+            Sentry.captureMessage(`Staff limit reached for business ${enrollment.businessId}. Plan: ${business.plan}, Allowed: ${totalAllowed}, Attempted by user: ${decoded.userId}`);
+
+            return NextResponse.json({
+             error: `Your staff limit (${totalAllowed}) has been reached.`,
+            suggestion: `Please upgrade your subscription or purchase an 'Extra Staff Add-on' to approve more staff.`,
+             }, { status: 403 });
         }
+
+          await prisma.business.update({
+           where: { id: enrollment.businessId },
+           data: {
+            staff: {
+              connect: { id: enrollment.userId }
+            }
+          }
+          });
+        }
+
 
         await createNotification({
             userId: enrollment.userId,

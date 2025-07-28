@@ -4,6 +4,8 @@ import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
 import { serviceLimitByPlan } from '@/shared/businessPlanUtils';
+import { createNotification } from '@/shared/notifications/createNotification';
+
 
 
 const prisma = new PrismaClient();
@@ -46,18 +48,33 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
+   
     const limit = serviceLimitByPlan[business.plan];
     const currentCount = await prisma.service.count({
       where: { businessId: business.id },
-     });
+    });
 
-     if (currentCount >= limit) {
+    if (currentCount >= limit) {
+     
+      await createNotification({
+        userId: business.ownerId,
+        type: 'SYSTEM',
+        title: 'Service Limit Reached',
+        message: `Your plan allows a maximum of ${limit} services. Upgrade your subscription or purchase a Service Add-on to create more.`,
+      });
+
+      
+      Sentry.captureMessage(`Service limit reached for business ${business.id} (Plan: ${business.plan}, Limit: ${limit})`);
+
+     
       return NextResponse.json(
-      { error: `Service limit reached (${limit}) for your current plan.` },
-      { status: 403 }
+        {
+          error: `Service limit reached (${limit}) for your current plan.`,
+          suggestion: 'Please upgrade your subscription or purchase an add-on to add more services.',
+        },
+        { status: 403 }
       );
-     }
-
+    }
 
     const newService = await prisma.service.create({
       data: {
@@ -71,30 +88,10 @@ export async function POST(request) {
     });
 
     return NextResponse.json(newService, { status: 201 });
+
   } catch (error) {
     Sentry.captureException(error);
     console.error('Error creating service:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
-  }
-}
-
-export async function GET(request) {
-  try {
-    const { business, error, status } = await getBusinessFromRequest(request);
-    if (error) return NextResponse.json({ error }, { status });
-
-    const services = await prisma.service.findMany({
-      where: { businessId: business.id },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        staff: { select: { id: true, name: true, email: true } },
-      },
-    });
-
-    return NextResponse.json(services, { status: 200 });
-  } catch (error) {
-    Sentry.captureException(error);
-    console.error('Error fetching services:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
