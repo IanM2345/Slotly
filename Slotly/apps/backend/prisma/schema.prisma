@@ -31,21 +31,26 @@ model User {
 }
 
 model Business {
-  id             String    @id @default(auto()) @map("_id") @db.ObjectId
-  name           String    @unique
-  description    String?
-  ownerId        String
-  createdAt      DateTime  @default(now())
-  logoUrl        String?
-  suspended      Boolean   @default(false)
-  suspendedUntil DateTime?
-  address        String
-  latitude       Float
-  longitude      Float
-  searchCount    Int       @default(0)
+  id                      String    @id @default(auto()) @map("_id") @db.ObjectId
+  name                    String    @unique
+  description             String?
+  ownerId                 String
+  createdAt               DateTime  @default(now())
+  logoUrl                 String?
+  suspended               Boolean   @default(false)
+  suspendedUntil          DateTime?
+  address                 String
+  latitude                Float
+  longitude               Float
+  searchCount             Int       @default(0)
+  flutterwaveSubaccountId String?
+  mpesaPhoneNumber        String?
+  bankCode                String?
+  accountNumber           String?
 
-  addOns AddOn[]          @relation("BusinessAddOns")
-  plan   SubscriptionPlan @default(LEVEL_1)
+  addOns         AddOn[]          @relation("BusinessAddOns")
+  plan           SubscriptionPlan @default(LEVEL_1)
+  PayoutSettings PayoutSettings?
 }
 
 model Service {
@@ -279,6 +284,28 @@ model RecentSearch {
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])
+}
+
+model PayoutSettings {
+  id                   String       @id @default(auto()) @map("_id") @db.ObjectId
+  businessId           String       @unique @db.ObjectId
+  method               PayoutMethod
+  mpesaPhone           String?
+  flwSubaccountId      String?
+  paybillNumber        String?
+  paybillAccountNumber String?
+  tillNumber           String?
+  verified             Boolean      @default(false)
+
+  business Business @relation(fields: [businessId], references: [id])
+}
+
+enum PayoutMethod {
+  BANK
+  MPESA_PHONE
+  MPESA_TILL
+  MPESA_PAYBILL
+  FLW_SUBACCOUNT
 }
 
 enum AddOnType {
