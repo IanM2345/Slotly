@@ -1,51 +1,48 @@
+// apps/mobile/app/(tabs)/history.tsx
+
 import React from 'react';
 import { View, FlatList, StyleSheet } from 'react-native';
-import { Text, Card, useTheme } from 'react-native-paper';
+import { Text, Card, Title, Paragraph } from 'react-native-paper';
 
-const mockBookings = [
+const mockHistory = [
   {
     id: '1',
     service: 'Haircut',
-    date: '2025-07-15',
-    time: '10:00 AM',
-    provider: 'John’s Barber',
+    date: 'July 12, 2025',
+    time: '3:00 PM',
   },
   {
     id: '2',
     service: 'Massage',
-    date: '2025-07-10',
-    time: '3:00 PM',
-    provider: 'Relax Spa',
+    date: 'July 5, 2025',
+    time: '1:30 PM',
   },
   {
     id: '3',
-    service: 'Nail Treatment',
-    date: '2025-07-01',
-    time: '1:30 PM',
-    provider: 'Nail Studio',
+    service: 'Facial',
+    date: 'June 28, 2025',
+    time: '12:00 PM',
   },
 ];
 
 export default function HistoryScreen() {
-  const theme = useTheme();
-
-  const renderItem = ({ item }: any) => (
-    <Card style={styles.card}>
-      <Card.Title title={item.service} subtitle={`${item.date} at ${item.time}`} />
-      <Card.Content>
-        <Text>{item.provider}</Text>
-      </Card.Content>
-    </Card>
-  );
-
   return (
     <View style={styles.container}>
-      <Text style={styles.heading}>Booking History</Text>
+      <Text style={styles.title}>Booking History</Text>
+
       <FlatList
-        data={mockBookings}
+        data={mockHistory}
         keyExtractor={(item) => item.id}
-        renderItem={renderItem}
-        contentContainerStyle={{ paddingBottom: 20 }}
+        renderItem={({ item }) => (
+          <Card style={styles.card}>
+            <Card.Content>
+              <Title style={styles.service}>{item.service}</Title>
+              <Paragraph>Date: {item.date}</Paragraph>
+              <Paragraph>Time: {item.time}</Paragraph>
+            </Card.Content>
+          </Card>
+        )}
+        contentContainerStyle={{ paddingBottom: 16 }}
       />
     </View>
   );
@@ -57,13 +54,19 @@ const styles = StyleSheet.create({
     padding: 16,
     backgroundColor: '#fff',
   },
-  heading: {
+  title: {
     fontSize: 22,
     fontWeight: 'bold',
     marginBottom: 16,
   },
   card: {
     marginBottom: 12,
+    backgroundColor: '#fce4ec', // light pink background
+    borderRadius: 10,
+    elevation: 3,
+  },
+  service: {
+    fontSize: 18,
+    fontWeight: '600',
   },
 });
-

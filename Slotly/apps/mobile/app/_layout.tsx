@@ -3,21 +3,19 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useEffect } from 'react';
-import { Provider as PaperProvider } from 'react-native-paper'; // ✅ import this
-
-import 'react-native-reanimated';
+import { useEffect, useCallback } from 'react';
+import { Provider as PaperProvider } from 'react-native-paper';
 
 import { useColorScheme } from '@/components/useColorScheme';
 
-export {
-  // Catch any errors thrown by the Layout component.
-  ErrorBoundary,
-} from 'expo-router';
+export { ErrorBoundary } from 'expo-router';
 
 export const unstable_settings = {
   initialRouteName: '(tabs)',
 };
+
+// Only call this once at module scope (NOT a hook)
+SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
@@ -25,11 +23,7 @@ export default function RootLayout() {
     ...FontAwesome.font,
   });
 
-  useEffect(() => {
-    SplashScreen.preventAutoHideAsync();
-
-    if (error) throw error;
-  }, [error]);
+  const colorScheme = useColorScheme();
 
   useEffect(() => {
     if (loaded) {
@@ -37,21 +31,15 @@ export default function RootLayout() {
     }
   }, [loaded]);
 
-  if (!loaded) {
-    return null;
-  }
+  if (error) throw error;
 
-  return <RootLayoutNav />;
-}
-
-function RootLayoutNav() {
-  const colorScheme = useColorScheme();
+  if (!loaded) return null;
 
   return (
     <PaperProvider>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Stack>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="(tabs)" />
           <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
         </Stack>
       </ThemeProvider>
