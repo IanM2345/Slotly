@@ -24,9 +24,9 @@ model User {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
-   otp            String?
-  otpVerified    Boolean?     @default(false)
-  otpExpiresAt   DateTime?
+  otp          String?
+  otpVerified  Boolean?  @default(false)
+  otpExpiresAt DateTime?
 }
 
 model Business {
@@ -38,10 +38,13 @@ model Business {
   logoUrl        String?
   suspended      Boolean   @default(false)
   suspendedUntil DateTime?
-  
-  plan           SubscriptionPlan @default(LEVEL_1)  
-}
+  address        String
+  latitude       Float
+  longitude      Float
 
+  addOns AddOn[]          @relation("BusinessAddOns")
+  plan   SubscriptionPlan @default(LEVEL_1)
+}
 
 model Service {
   id         String   @id @default(auto()) @map("_id") @db.ObjectId
@@ -254,14 +257,14 @@ model SuspensionLog {
 }
 
 model AddOn {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  businessId  String   @db.ObjectId
-  type        AddOnType
-  value       Int?     
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
+  id         String    @id @default(auto()) @map("_id") @db.ObjectId
+  businessId String    @db.ObjectId
+  type       AddOnType
+  value      Int?
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
 
-  business    Business @relation(fields: [businessId], references: [id])
+  business Business @relation("BusinessAddOns", fields: [businessId], references: [id])
 }
 
 enum AddOnType {
