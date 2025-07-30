@@ -3,7 +3,7 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useEffect, useCallback } from 'react';
+import { useEffect } from 'react';
 import { Provider as PaperProvider } from 'react-native-paper';
 
 import { useColorScheme } from '@/components/useColorScheme';
@@ -12,11 +12,10 @@ export { ErrorBoundary } from 'expo-router';
 
 export const unstable_settings = {
   initialRouteName: '(tabs)',
+  ssr: false, //disabling SSR if using hooks like useColorScheme
 };
 
-// Only call this once at module scope (NOT a hook)
-SplashScreen.preventAutoHideAsync();
-
+// ✅ move this *inside* a useEffect to avoid hook issues during SSR
 export default function RootLayout() {
   const [loaded, error] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
@@ -26,13 +25,16 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
 
   useEffect(() => {
+    SplashScreen.preventAutoHideAsync();
+  }, []);
+
+  useEffect(() => {
     if (loaded) {
       SplashScreen.hideAsync();
     }
   }, [loaded]);
 
   if (error) throw error;
-
   if (!loaded) return null;
 
   return (
