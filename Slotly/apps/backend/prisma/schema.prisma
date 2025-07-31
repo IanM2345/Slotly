@@ -307,6 +307,13 @@ model WebhookLog {
   receivedAt DateTime @default(now())
 }
 
+model PreviewLog {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId     String   @db.ObjectId
+  businessId String   @db.ObjectId
+  period     String
+  createdAt  DateTime @default(now())
+}
 
 
 enum PayoutMethod {
