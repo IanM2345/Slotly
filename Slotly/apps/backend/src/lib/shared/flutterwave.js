@@ -68,69 +68,85 @@ export const initiateCancellationFee = async ({ businessId, customer, amount }) 
   return payoutFallback(settings.businessId, amount, customer);
 };
 
-// Perform fallback payout based on configured method
+const MAX_RETRIES = 3;
+const RETRY_DELAY_BASE_MS = 1000; // Base delay: 1 second
+
 export const payoutFallback = async (businessId, amount, customer) => {
   const settings = await prisma.payoutSettings.findUnique({ where: { businessId } });
   if (!settings) throw new Error('Missing payout settings');
 
-  try {
-    switch (settings.method) {
-      case 'MPESA_PHONE':
-        return await axios.post(
-          `${FLW_BASE_URL}/transfers`,
-          {
-            account_bank: 'MPS',
-            account_number: settings.mpesaPhone,
+  let attempt = 0;
+  let lastError = null;
+
+  while (attempt < MAX_RETRIES) {
+    try {
+      switch (settings.method) {
+        case 'MPESA_PHONE':
+          return await axios.post(
+            `${FLW_BASE_URL}/transfers`,
+            {
+              account_bank: 'MPS',
+              account_number: settings.mpesaPhone,
+              amount,
+              currency: 'KES',
+              beneficiary_name: customer.name,
+              reference: `slotly-cancel-${Date.now()}`,
+              narration: 'Late cancellation fee',
+            },
+            { headers }
+          );
+
+        case 'FLW_SUBACCOUNT':
+          return await initiateSplitPayment({
             amount,
-            currency: 'KES',
-            beneficiary_name: customer.name,
-            reference: `slotly-cancel-${Date.now()}`,
-            narration: 'Late cancellation fee',
-          },
-          { headers }
-        );
+            customer,
+            businessSubAccountId: settings.flwSubaccountId,
+          });
 
-      case 'FLW_SUBACCOUNT':
-        return await initiateSplitPayment({
-          amount,
-          customer,
-          businessSubAccountId: settings.flwSubaccountId,
-        });
+        case 'MPESA_TILL':
+        case 'MPESA_PAYBILL':
+          throw new Error('Till/Paybill payouts not supported directly. Use FLW subaccount fallback.');
 
-      case 'MPESA_TILL':
-      case 'MPESA_PAYBILL':
-        throw new Error('Till/Paybill payouts not supported directly. Use FLW subaccount fallback.');
+        default:
+          throw new Error(`Unsupported payout method: ${settings.method}`);
+      }
+    } catch (error) {
+      lastError = error;
+      const errorMsg = error?.response?.data?.message || error.message;
+      console.warn(`⚠️ Payout attempt ${attempt + 1} failed: ${errorMsg}`);
 
-      default:
-        throw new Error(`Unsupported payout method: ${settings.method}`);
-    }
-  } catch (error) {
-    const errorMsg = error?.response?.data?.message || error.message;
-    console.error('❌ Payout failure:', errorMsg);
-
-    // Notify admin via email
-    await sendEmailNotification({
-      to: ADMIN_EMAIL,
-      subject: '❌ Slotly Payout Failure Alert',
-      body: `
+      // Retry logic
+      if (attempt < MAX_RETRIES - 1) {
+        const delay = RETRY_DELAY_BASE_MS * 2 ** attempt;
+        await new Promise((res) => setTimeout(res, delay));
+        attempt++;
+      } else {
+        // Final failure notification
+        await sendEmailNotification({
+          to: ADMIN_EMAIL,
+          subject: '❌ Slotly Payout Failed After Retries',
+          body: `
 Hi Admin,
 
-A payout has failed for a business.
+A payout has failed **after ${MAX_RETRIES} attempts**.
 
 🔢 Business ID: ${businessId}
 💰 Amount: KES ${amount}
 👤 Customer: ${customer.name} (${customer.email || 'N/A'})
 📦 Method: ${settings.method}
 ⏱ Time: ${new Date().toISOString()}
-❗ Error: ${errorMsg}
+❗ Final Error: ${errorMsg}
 
-Please investigate this issue in the dashboard or logs.
-      `.trim(),
-    });
+Please investigate this issue.
+          `.trim(),
+        });
 
-    throw error;
+        throw error; // Re-throw for upstream handlers (optional)
+      }
+    }
   }
 };
+
 
 // Create a payment link for a subscription
 export const createSubscriptionPaymentLink = async (business, amount = 2000) => {
