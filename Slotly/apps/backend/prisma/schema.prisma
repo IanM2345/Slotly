@@ -307,6 +307,8 @@ model WebhookLog {
   receivedAt DateTime @default(now())
 }
 
+
+
 enum PayoutMethod {
   BANK
   MPESA_PHONE
