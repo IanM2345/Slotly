@@ -32,7 +32,8 @@ export default function AuthScreen() {
         {/* Country Header */}
         <View style={styles.header}>
           <View style={styles.countrySelector}>
-            <Image source={require('../../../assets/images/kenya.png')} style={styles.flagImage} />
+            <Image source={require('../../assets/images/kenya.png')} style={styles.flagImage} />
+
             <Text style={styles.countryText}>Kenya</Text>
             <Text style={styles.dropdownIcon}>▼</Text>
           </View>
@@ -84,7 +85,7 @@ export default function AuthScreen() {
           onPress={() => console.log('Apple login')}
           style={styles.socialButton}
         >
-          <Image source={require('../../../assets/images/Apple.png')} style={styles.icon} />
+          <Image source={require('../../assets/images/Apple.png')} style={styles.icon} />
           <Text style={styles.socialText}>Continue with Apple</Text>
         </Button>
         <Button
@@ -92,7 +93,7 @@ export default function AuthScreen() {
           onPress={() => console.log('Google login')}
           style={styles.socialButton}
         >
-          <Image source={require('../../../assets/images/logo-google.png')} style={styles.icon} />
+          <Image source={require('../../assets/images/logo-google.png')} style={styles.icon} />
           <Text style={styles.socialText}>Continue with Google</Text>
         </Button>
         <Button
@@ -100,7 +101,7 @@ export default function AuthScreen() {
           onPress={() => console.log('Facebook login')}
           style={styles.socialButton}
         >
-          <Image source={require('../../../assets/images/Facebook.png')} style={styles.icon} />
+          <Image source={require('../../assets/images/Facebook.png')} style={styles.icon} />
           <Text style={styles.socialText}>Continue with Facebook</Text>
         </Button>
 
