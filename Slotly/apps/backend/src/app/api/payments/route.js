@@ -1,41 +1,57 @@
 import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
+import { initiateSplitPayment } from '@/lib/shared/flutterwave';
 
 const prisma = new PrismaClient();
 
 export async function POST(request) {
   try {
     const data = await request.json();
-    const { bookingId, amount, method, status, fee } = data;
+    const { bookingId } = data;
 
-    if (!bookingId || amount == null || !method || !status || fee == null) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+    if (!bookingId) {
+      return NextResponse.json({ error: 'Booking ID is required' }, { status: 400 });
     }
 
     const booking = await prisma.booking.findUnique({
       where: { id: bookingId },
-      include: { business: true }
-    });
-
-    if (!booking) {
-      return NextResponse.json({ error: 'Booking not found' }, { status: 404 });
-    }
-
-    const payment = await prisma.payment.create({
-      data: {
-        bookingId,
-        amount: Number(amount),
-        method,
-        status,
-        fee: Number(fee),
-        businessId: booking.businessId
+      include: {
+        user: true,
+        business: {
+          include: { PayoutSettings: true }
+        }
       }
     });
 
-    return NextResponse.json(payment, { status: 201 });
+    if (!booking || !booking.business || !booking.user) {
+      return NextResponse.json({ error: 'Invalid booking' }, { status: 404 });
+    }
+
+    const customer = {
+      email: booking.user.email,
+      name: booking.user.name,
+      phone_number: booking.user.phone,
+    };
+
+    const settings = booking.business.PayoutSettings;
+    const amount = booking.service?.price || 1000;
+
+    if (!settings || !settings.flwSubaccountId) {
+      return NextResponse.json({ error: 'Payout settings not configured' }, { status: 500 });
+    }
+
+    const paymentLink = await initiateSplitPayment({
+      amount,
+      customer,
+      businessSubAccountId: settings.flwSubaccountId,
+    });
+
+    return NextResponse.json({ link: paymentLink }, { status: 200 });
+
   } catch (error) {
-    Sentry.captureException?.(error);
+    Sentry.captureException(error);
+    console.error('Payment init error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
