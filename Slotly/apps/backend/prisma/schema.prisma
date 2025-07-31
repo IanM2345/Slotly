@@ -300,6 +300,13 @@ model PayoutSettings {
   business Business @relation(fields: [businessId], references: [id])
 }
 
+model WebhookLog {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  txRef      String   @unique
+  type       String
+  receivedAt DateTime @default(now())
+}
+
 enum PayoutMethod {
   BANK
   MPESA_PHONE
