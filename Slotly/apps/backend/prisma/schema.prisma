@@ -315,6 +315,13 @@ model PreviewLog {
   createdAt  DateTime @default(now())
 }
 
+model DownloadLog {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  reportId    String   @db.ObjectId
+  userId      String   @db.ObjectId
+  downloadedAt DateTime @default(now())
+}
+
 
 enum PayoutMethod {
   BANK
