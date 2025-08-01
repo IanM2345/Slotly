@@ -10,7 +10,21 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@react-native-community/datetimepicker": "8.4.1",
+    "expo-router": "^5.1.4",
+    "expo-splash-screen": "^0.30.10",
+    "expo-status-bar": "^2.2.3",
+    "expo-web-browser": "~14.2.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-native": "0.73.9",
     "react-native-paper": "^5.14.5",
-    "react-native-vector-icons": "^10.2.0"
+    "react-native-vector-icons": "^10.2.0",
+    "react-native-web": "0.20.0"
+  },
+  "devDependencies": {
+    "metro": "^0.82.0",
+    "metro-config": "^0.82.0",
+    "metro-resolver": "^0.82.0"
   }
 }
