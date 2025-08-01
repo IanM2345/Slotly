@@ -1,15 +1,414 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
   output   = "../src/generated/prisma"
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "mongodb"
   url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String       @id @default(auto()) @map("_id") @db.ObjectId
+  email          String?      @unique
+  phone          String?      @unique
+  password       String
+  name           String
+  role           Role         @default(CUSTOMER)
+  referredById   String?      @db.ObjectId
+  referredBy     User?        @relation("UserReferredBy", fields: [referredById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  referralsMade  User[]       @relation("UserReferredBy")
+  referralsGiven Referral[]   @relation("ReferrerUser")
+  referralsTaken Referral[]   @relation("ReferredUser")
+  userCoupons    UserCoupon[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  otp          String?
+  otpVerified  Boolean?       @default(false)
+  otpExpiresAt DateTime?
+  RecentSearch RecentSearch[]
+}
+
+model Business {
+  id                      String    @id @default(auto()) @map("_id") @db.ObjectId
+  name                    String    @unique
+  description             String?
+  ownerId                 String
+  createdAt               DateTime  @default(now())
+  logoUrl                 String?
+  suspended               Boolean   @default(false)
+  suspendedUntil          DateTime?
+  address                 String
+  latitude                Float
+  longitude               Float
+  searchCount             Int       @default(0)
+  flutterwaveSubaccountId String?
+  mpesaPhoneNumber        String?
+  bankCode                String?
+  accountNumber           String?
+
+  addOns         AddOn[]          @relation("BusinessAddOns")
+  plan           SubscriptionPlan @default(LEVEL_1)
+  PayoutSettings PayoutSettings?
+}
+
+model Service {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  name       String
+  price      Int
+  duration   Int
+  category   String?
+  available  Boolean  @default(true)
+  businessId String
+  createdAt  DateTime @default(now())
+}
+
+model Booking {
+  id                          String        @id @default(auto()) @map("_id") @db.ObjectId
+  userId                      String        @db.ObjectId
+  staffId                     String?       @db.ObjectId
+  serviceId                   String        @db.ObjectId
+  businessId                  String        @db.ObjectId
+  startTime                   DateTime
+  endTime                     DateTime
+  status                      BookingStatus @default(PENDING)
+  createdAt                   DateTime      @default(now())
+  cancellationDeadlineMinutes Int           @default(120)
+  lateCancellationFee         Int           @default(5000)
+}
+
+model Payment {
+  id        String        @id @default(auto()) @map("_id") @db.ObjectId
+  bookingId String        @unique @db.ObjectId
+  amount    Int
+  method    PaymentMethod
+  status    PaymentStatus
+  fee       Int
+  createdAt DateTime      @default(now())
+}
+
+model Subscription {
+  id         String           @id @default(auto()) @map("_id") @db.ObjectId
+  businessId String           @unique @db.ObjectId
+  plan       SubscriptionPlan
+  startDate  DateTime
+  endDate    DateTime
+  isActive   Boolean          @default(true)
+}
+
+model Reminder {
+  id        String         @id @default(auto()) @map("_id") @db.ObjectId
+  bookingId String         @unique @db.ObjectId
+  sendAt    DateTime
+  sent      Boolean        @default(false)
+  method    ReminderMethod
+}
+
+model Review {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId     String   @db.ObjectId
+  businessId String   @db.ObjectId
+  rating     Int
+  comment    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  flagged    Boolean  @default(false)
+}
+
+model Coupon {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  code           String   @unique
+  description    String?
+  discount       Int
+  isPercentage   Boolean  @default(false)
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  createdByAdmin Boolean  @default(false)
+  usageLimit     Int      @default(1)
+  timesUsed      Int      @default(0)
+  minimumSpend   Int?
+  businessId     String   @db.ObjectId
+
+  userCoupons UserCoupon[]
+}
+
+model UserCoupon {
+  id         String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId     String    @db.ObjectId
+  couponId   String    @db.ObjectId
+  usedAt     DateTime?
+  issuedFrom String?
+
+  user   User   @relation(fields: [userId], references: [id])
+  coupon Coupon @relation(fields: [couponId], references: [id])
+}
+
+model Referral {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  referrerId        String   @db.ObjectId
+  referredUserId    String   @db.ObjectId
+  completedBookings Int      @default(0)
+  rewardIssued      Boolean  @default(false)
+  createdAt         DateTime @default(now())
+
+  referrer     User @relation("ReferrerUser", fields: [referrerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  referredUser User @relation("ReferredUser", fields: [referredUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model Notification {
+  id        String           @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String           @db.ObjectId
+  type      NotificationType
+  title     String
+  message   String
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+}
+
+model Availability {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  staffId   String   @db.ObjectId
+  startTime DateTime
+  endTime   DateTime
+  createdAt DateTime @default(now())
+}
+
+model TimeOffRequest {
+  id         String        @id @default(auto()) @map("_id") @db.ObjectId
+  staffId    String        @db.ObjectId
+  reason     String?
+  startDate  DateTime
+  endDate    DateTime
+  status     TimeOffStatus @default(PENDING)
+  createdAt  DateTime      @default(now())
+  reviewedAt DateTime?
+}
+
+model AdCampaign {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  businessId String   @db.ObjectId
+  title      String
+  budget     Int
+  startDate  DateTime
+  endDate    DateTime
+  isActive   Boolean  @default(true)
+}
+
+model ServiceImage {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  url       String
+  serviceId String   @db.ObjectId
+  createdAt DateTime @default(now())
+}
+
+model BusinessVerification {
+  id              String             @id @default(auto()) @map("_id") @db.ObjectId
+  businessId      String             @unique @db.ObjectId
+  type            String
+  idNumber        String
+  licenseUrl      String?
+  regNumber       String?
+  idPhotoUrl      String
+  selfieWithIdUrl String?
+  status          VerificationStatus @default(PENDING)
+  reviewedAt      DateTime?
+  createdAt       DateTime           @default(now())
+}
+
+model StaffEnrollment {
+  id              String           @id @default(auto()) @map("_id") @db.ObjectId
+  userId          String           @db.ObjectId
+  businessId      String           @db.ObjectId
+  idNumber        String
+  idPhotoUrl      String
+  selfieWithIdUrl String
+  status          EnrollmentStatus @default(PENDING)
+  submittedAt     DateTime         @default(now())
+  reviewedAt      DateTime?
+}
+
+model ServiceBundle {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  description String?
+  price       Int
+  duration    Int
+  businessId  String   @db.ObjectId
+  createdAt   DateTime @default(now())
+}
+
+model ServiceInBundle {
+  id        String @id @default(auto()) @map("_id") @db.ObjectId
+  bundleId  String @db.ObjectId
+  serviceId String @db.ObjectId
+  position  Int
+}
+
+model MonthlyReport {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  businessId String   @db.ObjectId
+  period     String
+  fileUrl    String
+  createdAt  DateTime @default(now())
+}
+
+model SuspensionLog {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId     String?  @db.ObjectId
+  businessId String?  @db.ObjectId
+  adminId    String   @db.ObjectId
+  reason     String?
+  action     String
+  timestamp  DateTime @default(now())
+}
+
+model AddOn {
+  id         String    @id @default(auto()) @map("_id") @db.ObjectId
+  businessId String    @db.ObjectId
+  type       AddOnType
+  value      Int?
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+
+  business Business @relation("BusinessAddOns", fields: [businessId], references: [id])
+}
+
+model RecentSearch {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  service   String
+  latitude  Float
+  longitude Float
+  category  String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model PayoutSettings {
+  id                   String       @id @default(auto()) @map("_id") @db.ObjectId
+  businessId           String       @unique @db.ObjectId
+  method               PayoutMethod
+  mpesaPhone           String?
+  flwSubaccountId      String?
+  paybillNumber        String?
+  paybillAccountNumber String?
+  tillNumber           String?
+  verified             Boolean      @default(false)
+
+  business Business @relation(fields: [businessId], references: [id])
+}
+
+model WebhookLog {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  txRef      String   @unique
+  type       String
+  receivedAt DateTime @default(now())
+}
+
+model PreviewLog {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId     String   @db.ObjectId
+  businessId String   @db.ObjectId
+  period     String
+  createdAt  DateTime @default(now())
+}
+
+model DownloadLog {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  reportId    String   @db.ObjectId
+  userId      String   @db.ObjectId
+  downloadedAt DateTime @default(now())
+}
+
+
+enum PayoutMethod {
+  BANK
+  MPESA_PHONE
+  MPESA_TILL
+  MPESA_PAYBILL
+  FLW_SUBACCOUNT
+}
+
+enum AddOnType {
+  EXTRA_STAFF
+  WHATSAPP_REMINDERS
+  BRANDED_PAGE
+  CUSTOM_ANALYTICS
+}
+
+enum TimeOffStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum NotificationType {
+  BOOKING
+  PAYMENT
+  COUPON
+  APPLICATION
+  TIME_OFF
+  STAFF_ASSIGNMENT
+  SYSTEM
+  REVIEW
+  SUBSCRIPTION
+  REFERRAL
+}
+
+enum Role {
+  ADMIN
+  BUSINESS_OWNER
+  STAFF
+  CUSTOMER
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  RESCHEDULED
+}
+
+enum PaymentMethod {
+  MPESA
+  AIRTEL_MONEY
+  CARD
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum SubscriptionPlan {
+  LEVEL_1
+  LEVEL_2
+  LEVEL_3
+  LEVEL_4
+  LEVEL_5
+  LEVEL_6
+}
+
+enum ReminderMethod {
+  EMAIL
+  SMS
+  PUSH
+}
+
+enum VerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum EnrollmentStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }

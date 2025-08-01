@@ -1,0 +1,247 @@
+import '@/sentry.server.config'
+import * as Sentry from '@sentry/nextjs'
+import { NextResponse } from 'next/server';
+import { PrismaClient } from '@/generated/prisma';
+import { verifyToken } from '@/middleware/auth';
+import { createNotification } from '@/shared/notifications/createNotification';
+import { couponAccessByPlan } from '@/shared/subscriptionPlanUtils'; 
+
+
+const prisma = new PrismaClient();
+
+async function getBusinessFromToken(request) {
+  const authHeader = request.headers.get('authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return { error: 'Unauthorized', status: 401 };
+  }
+
+  const token = authHeader.split(' ')[1];
+  const { valid, decoded } = await verifyToken(token);
+  if (!valid || decoded.role !== 'BUSINESS_OWNER') {
+    return { error: 'Unauthorized', status: 403 };
+  }
+
+  const business = await prisma.business.findFirst({
+    where: { ownerId: decoded.userId },
+  });
+
+  if (!business) {
+    return { error: 'Business not found', status: 404 };
+  }
+
+  return { business, ownerId: decoded.userId };
+}
+
+export async function POST(request) {
+  try {
+    const { business, ownerId, error, status } = await getBusinessFromToken(request);
+    if (error) return NextResponse.json({ error }, { status });
+
+    const { code, description, discount, isPercentage, expiresAt } = await request.json();
+
+    if (!code || !discount || !expiresAt) {
+      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+    }
+
+    const existing = await prisma.coupon.findFirst({
+      where: { code, businessId: business.id },
+    });
+
+    if (existing) {
+      return NextResponse.json({ error: 'Coupon code already exists' }, { status: 409 });
+    }
+
+    if (!couponAccessByPlan[business.plan]) {
+     Sentry.captureMessage(`Coupon access blocked for business ${business.id} (Plan: ${business.plan})`);
+
+  
+       await createNotification({
+        userId: ownerId,
+        type: 'SYSTEM',
+       title: 'Coupon Feature Unavailable',
+       message: `Your current plan (${business.plan}) does not support coupons. Upgrade your plan to unlock this feature.`,
+       });
+
+       return NextResponse.json(
+        {
+          error: 'Your plan does not support coupon creation or management.',
+          suggestion: 'Upgrade your plan to enable coupon functionality.',
+        },
+        { status: 403 }
+       );
+      }
+
+
+    const newCoupon = await prisma.coupon.create({
+      data: {
+        code,
+        description,
+        discount,
+        isPercentage: Boolean(isPercentage),
+        expiresAt: new Date(expiresAt),
+        businessId: business.id,
+      },
+    });
+
+    await prisma.notification.create({
+      data: {
+        userId: ownerId,
+        type: 'COUPON',
+        title: 'New Coupon Created',
+        message: `Coupon code "${newCoupon.code}" has been created.`,
+      },
+    });
+
+    return NextResponse.json(newCoupon, { status: 201 });
+  } catch (err) {
+    Sentry.captureException(err);
+    console.error('POST /manager/coupons error:', err);
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+  }
+}
+
+export async function GET(request) {
+  try {
+
+    if (!couponAccessByPlan[business.plan]) {
+  Sentry.captureMessage(`Coupon access (GET) blocked for ${business.id} (${business.plan})`);
+  return NextResponse.json(
+    {
+      error: 'Your plan does not support viewing coupons.',
+      suggestion: 'Upgrade to view and manage your coupons.',
+    },
+    { status: 403 }
+  );
+}
+
+    const { business, error, status } = await getBusinessFromToken(request);
+    if (error) return NextResponse.json({ error }, { status });
+
+    const { searchParams } = new URL(request.url);
+    const active = searchParams.get('active');
+    const expired = searchParams.get('expired');
+    const used = searchParams.get('used');
+
+    const now = new Date();
+
+    const filters = {
+      businessId: business.id,
+    };
+
+    if (active === 'true') {
+      filters.expiresAt = { gt: now };
+    } else if (expired === 'true') {
+      filters.expiresAt = { lt: now };
+    }
+
+    if (used === 'true') {
+      filters.userCoupons = { some: { usedAt: { not: null } } };
+    } else if (used === 'false') {
+      filters.userCoupons = { none: { usedAt: { not: null } } };
+    }
+
+    const coupons = await prisma.coupon.findMany({
+      where: filters,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        userCoupons: {
+          include: { user: true },
+        },
+      },
+    });
+
+    for (const coupon of coupons) {
+      for (const userCoupon of coupon.userCoupons) {
+        if (userCoupon.usedAt) {
+          await prisma.notification.createMany({
+            data: [
+              {
+                userId: coupon.business.ownerId,
+                type: 'COUPON',
+                title: 'Coupon Used',
+                message: `Coupon "${coupon.code}" was used by ${userCoupon.user.name || 'a customer'}.`,
+              },
+              {
+                userId: userCoupon.userId,
+                type: 'COUPON',
+                title: 'Coupon Redeemed',
+                message: `You successfully used coupon "${coupon.code}".`,
+              },
+            ],
+            skipDuplicates: true,
+          });
+        }
+      }
+    }
+
+    const response = coupons.map(coupon => {
+      const usageCount = coupon.userCoupons.filter(c => c.usedAt !== null).length;
+      const redeemedUsers = coupon.userCoupons.length;
+
+      return {
+        ...coupon,
+        usageCount,
+        redeemedUsers,
+      };
+    });
+
+    return NextResponse.json({ coupons: response }, { status: 200 });
+  } catch (err) {
+    Sentry.captureException(err);
+    console.error('GET /manager/coupons error:', err);
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+  }
+}
+
+export async function DELETE(request) {
+  try {
+    const { business, error, status } = await getBusinessFromToken(request);
+    if (error) return NextResponse.json({ error }, { status });
+
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+    if (!id) {
+      return NextResponse.json({ error: 'Coupon ID required' }, { status: 400 });
+    }
+
+    if (!couponAccessByPlan[business.plan]) {
+  Sentry.captureMessage(`Coupon access (GET) blocked for ${business.id} (${business.plan})`);
+  return NextResponse.json(
+    {
+      error: 'Your plan does not support viewing coupons.',
+      suggestion: 'Upgrade to view and manage your coupons.',
+    },
+    { status: 403 }
+  );
+}
+
+
+    const coupon = await prisma.coupon.findFirst({
+      where: {
+        id,
+        businessId: business.id,
+      },
+      include: {
+        userCoupons: true,
+      },
+    });
+
+    if (!coupon) {
+      return NextResponse.json({ error: 'Coupon not found' }, { status: 404 });
+    }
+
+    if (coupon.userCoupons.some(c => c.usedAt !== null)) {
+      return NextResponse.json({ error: 'Cannot delete a used coupon' }, { status: 400 });
+    }
+
+    await prisma.coupon.delete({
+      where: { id },
+    });
+
+    return NextResponse.json({ message: 'Coupon deleted successfully' }, { status: 200 });
+  } catch (err) {
+    Sentry.captureException(err);
+    console.error('DELETE /manager/coupons error:', err);
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+  }
+}
