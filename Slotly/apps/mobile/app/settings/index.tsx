@@ -58,7 +58,7 @@ export default function SettingsScreen() {
           <Text style={styles.sectionTitle}>Personal Information</Text>
           
           <TouchableRipple
-            onPress={() => handleNavigation('/account-details')}
+            onPress={() => handleNavigation('/settings/account details')}
             rippleColor="rgba(0, 0, 0, 0.1)"
           >
             <List.Item
@@ -69,7 +69,7 @@ export default function SettingsScreen() {
           </TouchableRipple>
 
           <TouchableRipple
-            onPress={() => handleNavigation('/payment-details')}
+            onPress={() => handleNavigation('/settings/payment-details')}
             rippleColor="rgba(0, 0, 0, 0.1)"
           >
             <List.Item
@@ -80,7 +80,7 @@ export default function SettingsScreen() {
           </TouchableRipple>
 
           <TouchableRipple
-            onPress={() => handleNavigation('/family-friends')}
+            onPress={() => handleNavigation('/settings/family-and-friends')}
             rippleColor="rgba(0, 0, 0, 0.1)"
           >
             <List.Item
@@ -91,7 +91,7 @@ export default function SettingsScreen() {
           </TouchableRipple>
 
           <TouchableRipple
-            onPress={() => handleNavigation('/address')}
+            onPress={() => handleNavigation('/settings/address')}
             rippleColor="rgba(0, 0, 0, 0.1)"
           >
             <List.Item
@@ -121,7 +121,7 @@ export default function SettingsScreen() {
           <Text style={styles.sectionTitle}>Language</Text>
           
           <TouchableRipple
-            onPress={() => handleNavigation('/language-settings')}
+            onPress={() => handleNavigation('/settings/language')}
             rippleColor="rgba(0, 0, 0, 0.1)"
           >
             <View style={styles.languageItem}>
@@ -138,7 +138,7 @@ export default function SettingsScreen() {
           </TouchableRipple>
 
           <TouchableRipple
-            onPress={() => handleNavigation('/country-settings')}
+            onPress={() => handleNavigation('/settings/country')}
             rippleColor="rgba(0, 0, 0, 0.1)"
           >
             <View style={styles.languageItem}>
@@ -160,7 +160,7 @@ export default function SettingsScreen() {
           <Text style={styles.sectionTitle}>Others</Text>
           
           <TouchableRipple
-            onPress={() => handleNavigation('/change-password')}
+            onPress={() => handleNavigation('/settings/change-password')}
             rippleColor="rgba(0, 0, 0, 0.1)"
           >
             <View style={styles.othersItem}>
@@ -174,7 +174,7 @@ export default function SettingsScreen() {
           </TouchableRipple>
 
           <TouchableRipple
-            onPress={() => handleNavigation('/reviews')}
+            onPress={() => handleNavigation('/settings/reviews')}
             rippleColor="rgba(0, 0, 0, 0.1)"
           >
             <List.Item
@@ -185,7 +185,7 @@ export default function SettingsScreen() {
           </TouchableRipple>
 
           <TouchableRipple
-            onPress={() => handleNavigation('/support')}
+            onPress={() => handleNavigation('/settings/support')}
             rippleColor="rgba(0, 0, 0, 0.1)"
           >
             <List.Item
@@ -196,7 +196,7 @@ export default function SettingsScreen() {
           </TouchableRipple>
 
           <TouchableRipple
-            onPress={() => handleNavigation('/feedback')}
+            onPress={() => handleNavigation('/settings/feedback')}
             rippleColor="rgba(0, 0, 0, 0.1)"
           >
             <List.Item
@@ -207,7 +207,7 @@ export default function SettingsScreen() {
           </TouchableRipple>
 
           <TouchableRipple
-            onPress={() => handleNavigation('/gift-cards')}
+            onPress={() => handleNavigation('/settings/gift-cards')}
             rippleColor="rgba(0, 0, 0, 0.1)"
           >
             <List.Item
@@ -218,7 +218,7 @@ export default function SettingsScreen() {
           </TouchableRipple>
 
           <TouchableRipple
-            onPress={() => handleNavigation('/about')}
+            onPress={() => handleNavigation('/settings/AboutUs')}
             rippleColor="rgba(0, 0, 0, 0.1)"
           >
             <List.Item
