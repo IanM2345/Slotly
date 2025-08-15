@@ -23,22 +23,22 @@ export default function AboutUsScreen() {
     {
       id: '1',
       title: 'Slotly Website',
-      route: '/settings/website' as const
+      route: '/settings/website'
     },
     {
       id: '2',
       title: 'Terms of Service',
-      route: '/settings/terms-of-service' as const
+      route: '/settings/terms-of-service'
     },
     {
       id: '3',
       title: 'Privacy Policy',
-      route: '/settings/privacy-policy'as const 
+      route: '/settings/privacy-policy'
     },
     {
       id: '4',
       title: 'Licenses',
-      route: '/settings/licenses' as const
+      route: '/settings/licenses'
     }
   ];
 
@@ -47,9 +47,9 @@ export default function AboutUsScreen() {
   };
 
   const handleItemPress = (route: string) => {
-  router.push(route as any);
-};
+    router.push(route as any);
     // For now, just log the route since the actual pages don't exist yet
+    console.log('Navigating to:', route);
   };
 
   return (
