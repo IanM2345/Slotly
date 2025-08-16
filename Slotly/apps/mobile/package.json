@@ -26,7 +26,8 @@
     "react-native-paper": "^5.14.5",
     "react-native-vector-icons": "^10.2.0",
     "react-native-web": "^0.20.0",
-    "zod": "^4.0.17"
+    "zod": "^4.0.17",
+    "expo-camera": "~16.1.11"
   },
   "devDependencies": {
     "metro": "^0.82.0",

@@ -59,6 +59,8 @@ export async function getBooking(/* id */) {
  * There is no POST /users/bookings/:id/cancel route.
  * Use deleteBooking(id) for STAFF deletes, or add a cancel endpoint on the backend.
  */
-export async function cancelBooking(/* bookingId */) {
-  throw new Error("cancelBooking is not supported: backend has no /cancel route");
+export async function cancelBooking(bookingId) {
+  const { data } = await api.post(`/users/bookings/${bookingId}/cancel`);
+  return data;
 }
+
