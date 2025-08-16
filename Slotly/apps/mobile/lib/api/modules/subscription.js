@@ -1,40 +1,42 @@
-// apps/mobile/lib/api/modules/subscription.js
-
 /**
- * Minimal, resilient API client for Slotly subscriptions.
- * - Matches your Next.js backend routes:
- *   /api/subscriptions            (POST, GET)
- *   /api/subscriptions/[id]       (GET, PUT, DELETE)
+ * Subscription payments client for Slotly (mobile).
  *
- * - Payment helpers:
- *   Tries these endpoints (first one that exists wins):
- *     1) /api/subscriptions/:id/pay                  (POST)      <-- nice, resource-scoped
- *     2) /api/payments/checkout (POST, {type:'subscription'})    <-- generic checkout
+ * Endpoints expected:
+ *   POST /api/subscription-payments
+ *   GET  /api/subscription-payments?subscriptionId=...
+ * (optional)
+ *   POST /api/subscriptions/:id/pay    // proxy to collection route
  *
- *   Expects backend to return { checkoutUrl } or { status: 'paid' | 'pending', ... }.
- *
- * Works in React Native / Expo (fetch-based).
+ * Usage:
+ *   const { link, subscriptionPaymentId } = await createSubscriptionPayment({ ... });
+ *   // open `link` in WebView/Browser
+ *   // on return, poll:
+ *   const paid = await waitUntilPaid({ subscriptionId, timeoutMs: 60_000 });
  */
 
-const DEFAULT_TIMEOUT_MS = 20_000;
-
-// You can set this from your mobile runtime env (e.g., via Expo constants)
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ||
   process.env.API_BASE_URL ||
-  ''; // e.g. "https://your-slotly-backend.example.com"
+  ''; // e.g. https://api.slotly.yourdomain.com
 
-/** Abortable fetch with sane defaults */
-async function http(path, { method = 'GET', headers = {}, body, timeout = DEFAULT_TIMEOUT_MS } = {}) {
+const DEFAULT_TIMEOUT_MS = 20_000;
+
+function assertBaseUrl() {
   if (!API_BASE_URL) {
-    throw new Error('API_BASE_URL is not configured. Set EXPO_PUBLIC_API_BASE_URL or API_BASE_URL.');
+    throw new Error(
+      'API_BASE_URL is not set. Define EXPO_PUBLIC_API_BASE_URL or API_BASE_URL for the mobile app.'
+    );
   }
+}
+
+async function http(path, { method = 'GET', headers = {}, body, timeout = DEFAULT_TIMEOUT_MS } = {}) {
+  assertBaseUrl();
 
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeout);
 
   const finalHeaders = {
-    'Accept': 'application/json',
+    Accept: 'application/json',
     ...(body && !(body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
     ...headers,
   };
@@ -65,190 +67,123 @@ async function http(path, { method = 'GET', headers = {}, body, timeout = DEFAUL
   }
 }
 
-/** Utils */
-const toISODate = (d) => (d instanceof Date ? d.toISOString() : new Date(d).toISOString());
-
-/* =========================
- * Subscriptions (Collection)
- * ========================= */
+/** ---------- Core API ---------- */
 
 /**
- * Create a subscription (Business action).
- * POST /api/subscriptions
+ * Create/initiate a subscription payment.
+ * Backend returns: { link, subscriptionPaymentId }
  */
-export async function createSubscription({ businessId, plan, startDate, endDate }) {
-  if (!businessId || !plan || !startDate || !endDate) {
-    throw new Error('Missing required fields: businessId, plan, startDate, endDate');
-  }
-
-  return http('/api/subscriptions', {
-    method: 'POST',
-    body: {
-      businessId,
-      plan,
-      startDate: toISODate(startDate),
-      endDate: toISODate(endDate),
-    },
-  });
-}
-
-/**
- * Get subscriptions (optionally filter by businessId)
- * GET /api/subscriptions?businessId=...
- */
-export async function getSubscriptions({ businessId } = {}) {
-  const qs = businessId ? `?businessId=${encodeURIComponent(businessId)}` : '';
-  return http(`/api/subscriptions${qs}`, { method: 'GET' });
-}
-
-/* =========================
- * Subscription (Single)
- * ========================= */
-
-/**
- * Get a subscription by id
- * GET /api/subscriptions/:id
- */
-export async function getSubscriptionById(id) {
-  if (!id) throw new Error('id is required');
-  return http(`/api/subscriptions/${encodeURIComponent(id)}`, { method: 'GET' });
-}
-
-/**
- * Update a subscription (STAFF only; backend checks header x-user-role)
- * PUT /api/subscriptions/:id
- */
-export async function updateSubscription(id, { plan, startDate, endDate, isActive }, { role = 'STAFF' } = {}) {
-  if (!id) throw new Error('id is required');
-  if (!plan || !startDate || !endDate) {
-    throw new Error('Missing required fields: plan, startDate, endDate');
-  }
-
-  return http(`/api/subscriptions/${encodeURIComponent(id)}`, {
-    method: 'PUT',
-    headers: { 'x-user-role': role },
-    body: {
-      plan,
-      startDate: toISODate(startDate),
-      endDate: toISODate(endDate),
-      ...(typeof isActive === 'boolean' ? { isActive } : {}),
-    },
-  });
-}
-
-/**
- * Delete a subscription (STAFF only)
- * DELETE /api/subscriptions/:id
- */
-export async function deleteSubscription(id, { role = 'STAFF' } = {}) {
-  if (!id) throw new Error('id is required');
-  return http(`/api/subscriptions/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-    headers: { 'x-user-role': role },
-  });
-}
-
-/* =========================
- * Payments
- * =========================
- * Business-facing helpers to pay for a subscription.
- *
- * We try a resource-scoped endpoint first:
- *   POST /api/subscriptions/:id/pay
- *     body: { provider?, amount?, currency?, returnUrl, cancelUrl, metadata? }
- *     -> { checkoutUrl } OR { status: 'paid' | 'pending', ... }
- *
- * Fallback to a generic checkout:
- *   POST /api/payments/checkout
- *     body: { type: 'subscription', subscriptionId, amount?, currency?, returnUrl, cancelUrl, metadata? }
- *     -> { checkoutUrl } OR { status: ... }
- */
-
-/**
- * Initiate payment and get a URL to redirect (or a status if immediate).
- * Returns: { checkoutUrl?, status?, provider?, reference?, ... }
- */
-export async function payForSubscription({
+export async function createSubscriptionPayment({
   subscriptionId,
-  amount,         // optional; backend can compute based on plan
-  currency,       // e.g. 'KES', 'USD'
-  provider,       // e.g. 'stripe', 'mpesa'
-  returnUrl,      // deep link / app scheme or web URL after success
-  cancelUrl,      // deep link / app scheme or web URL after cancel
-  metadata = {},  // any extras (e.g., source='mobile')
+  returnUrl,     // e.g. 'slotly://payments/success'
+  cancelUrl,     // e.g. 'slotly://payments/cancel'
+  amount,        // optional; server can derive
+  currency,      // optional (defaults server-side)
+  customer,      // optional { email, name, phone_number }
+  metadata = {}, // optional extras (e.g. { source: 'mobile', phone: '07...' })
 }) {
   if (!subscriptionId) throw new Error('subscriptionId is required');
-  if (!returnUrl || !cancelUrl) {
-    throw new Error('returnUrl and cancelUrl are required to complete the payment flow');
-  }
+  if (!returnUrl || !cancelUrl) throw new Error('returnUrl and cancelUrl are required');
 
-  const body = {
-    ...(provider ? { provider } : {}),
-    ...(amount ? { amount } : {}),
-    ...(currency ? { currency } : {}),
+  return http('/api/subscription-payments', {
+    method: 'POST',
+    body: {
+      subscriptionId,
+      amount,
+      currency,
+      returnUrl,
+      cancelUrl,
+      customer,
+      metadata,
+    },
+  });
+}
+
+/**
+ * (Optional) If you exposed resource route /api/subscriptions/:id/pay
+ */
+export async function paySubscriptionViaResource(
+  subscriptionId,
+  { returnUrl, cancelUrl, amount, currency, customer, metadata = {} }
+) {
+  if (!subscriptionId) throw new Error('subscriptionId is required');
+  if (!returnUrl || !cancelUrl) throw new Error('returnUrl and cancelUrl are required');
+
+  return http(`/api/subscriptions/${encodeURIComponent(subscriptionId)}/pay`, {
+    method: 'POST',
+    body: { amount, currency, returnUrl, cancelUrl, customer, metadata },
+  });
+}
+
+/**
+ * List payments for a subscription (latest first on server).
+ * Returns an array of SubscriptionPayment objects.
+ */
+export async function getSubscriptionPayments(subscriptionId) {
+  if (!subscriptionId) throw new Error('subscriptionId is required');
+  const qs = `?subscriptionId=${encodeURIComponent(subscriptionId)}`;
+  return http(`/api/subscription-payments${qs}`, { method: 'GET' });
+}
+
+/** ---------- Helpers / UX glue ---------- */
+
+/**
+ * Wait until a subscription becomes PAID (polling).
+ * Resolves `true` if paid within timeout, `false` otherwise.
+ */
+export async function waitUntilPaid({
+  subscriptionId,
+  intervalMs = 3000,
+  timeoutMs = 90_000,
+  isPaid = (p) => p.status === 'PAID' || p.status === 'SUCCESS',
+} = {}) {
+  if (!subscriptionId) throw new Error('subscriptionId is required');
+
+  const start = Date.now();
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const list = await getSubscriptionPayments(subscriptionId);
+    const latest = Array.isArray(list) ? list[0] : null;
+
+    if (latest && isPaid(latest)) return true;
+
+    if (Date.now() - start > timeoutMs) return false;
+
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
+/**
+ * Convenience: open the checkout link and poll until paid.
+ * `open` should be a function that opens the URL (WebBrowser.openBrowserAsync / Linking.openURL)
+ *
+ * Returns { paid: boolean, link: string, subscriptionPaymentId: string }
+ */
+export async function payAndWait({
+  subscriptionId,
+  returnUrl,
+  cancelUrl,
+  amount,
+  currency,
+  customer,
+  metadata,
+  open,            // async (url) => void
+  poll = { intervalMs: 3000, timeoutMs: 90_000 },
+}) {
+  const { link, subscriptionPaymentId } = await createSubscriptionPayment({
+    subscriptionId,
     returnUrl,
     cancelUrl,
-    metadata: { ...metadata, kind: 'subscription', subscriptionId },
-  };
-
-  // Try resource-scoped endpoint first
-  try {
-    return await http(`/api/subscriptions/${encodeURIComponent(subscriptionId)}/pay`, {
-      method: 'POST',
-      body,
-    });
-  } catch (e) {
-    // If that route doesn't exist, fall back to a generic checkout endpoint
-    if (e?.status === 404) {
-      return http('/api/payments/checkout', {
-        method: 'POST',
-        body: {
-          type: 'subscription',
-          subscriptionId,
-          ...body,
-        },
-      });
-    }
-    throw e;
-  }
-}
-
-/**
- * Optionally confirm a payment (depends on your provider flow).
- * Useful when you get redirected back to the app.
- * Example backend routes you might expose:
- *   GET /api/payments/confirm?provider=stripe&sessionId=cs_...
- *   GET /api/payments/confirm?provider=mpesa&checkoutRequestID=...
- */
-export async function confirmPayment(query) {
-  const params = new URLSearchParams(query || {});
-  if (![...params.keys()].length) {
-    throw new Error('confirmPayment requires provider query params (e.g., sessionId, checkoutRequestID).');
-  }
-  return http(`/api/payments/confirm?${params.toString()}`, { method: 'GET' });
-}
-
-/* =========================
- * Convenience flows
- * ========================= */
-
-/**
- * Create → Pay in one go (for business UX).
- * Returns: { subscription, payment }
- */
-export async function createAndPaySubscription(
-  { businessId, plan, startDate, endDate },
-  { amount, currency, provider, returnUrl, cancelUrl, metadata } = {}
-) {
-  const subscription = await createSubscription({ businessId, plan, startDate, endDate });
-  const payment = await payForSubscription({
-    subscriptionId: subscription.id,
     amount,
     currency,
-    provider,
-    returnUrl,
-    cancelUrl,
+    customer,
     metadata,
   });
-  return { subscription, payment };
+
+  if (typeof open === 'function' && link) {
+    await open(link);
+  }
+
+  const paid = await waitUntilPaid({ subscriptionId, ...poll });
+  return { paid, link, subscriptionPaymentId };
 }
