@@ -10,8 +10,13 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@expo/metro-runtime": "~5.0.4",
     "@react-native-community/datetimepicker": "8.4.1",
+    "@tanstack/react-query": "^5.85.3",
+    "expo": "53.0.20",
+    "expo-linking": "~7.1.7",
     "expo-router": "~5.1.4",
+    "expo-secure-store": "~14.2.3",
     "expo-splash-screen": "^0.30.10",
     "expo-status-bar": "^2.2.3",
     "expo-web-browser": "~14.2.0",
@@ -21,8 +26,7 @@
     "react-native-paper": "^5.14.5",
     "react-native-vector-icons": "^10.2.0",
     "react-native-web": "^0.20.0",
-    "expo": "53.0.20",
-    "@expo/metro-runtime": "~5.0.4"
+    "zod": "^4.0.17"
   },
   "devDependencies": {
     "metro": "^0.82.0",
