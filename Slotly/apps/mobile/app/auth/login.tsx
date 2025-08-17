@@ -52,11 +52,11 @@ export default function LoginScreen() {
   }
 
   const handleForgotPassword = () => {
-    router.push("/(auth)/forgot-password")
+    router.push("../auth/forgot-password") 
   }
 
   const handleCreateAccount = () => {
-    router.push("/(auth)/signup")
+    router.push("../auth/signup")  
   }
 
   const handleBack = () => {
