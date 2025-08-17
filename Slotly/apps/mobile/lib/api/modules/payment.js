@@ -1,13 +1,15 @@
+// apps/mobile/lib/api/modules/payment.js
 import api from "../../api/client";
 
 /**
  * Start a payment for a booking.
  * Server creates a Payment row and returns a checkout link + paymentId.
+ * Response: { link, paymentId, txRef, invoiceId, customer }
  */
 export async function startBookingPayment({ bookingId }) {
-  const { data } = await api.post("/payments", { bookingId });
-  // Expect: { link, paymentId }
-  return data;
+  if (!bookingId) throw new Error("bookingId is required");
+  const { data } = await api.post("/api/payments", { bookingId });
+  return data; // { link, paymentId, txRef, invoiceId, customer }
 }
 
 /**
@@ -15,29 +17,30 @@ export async function startBookingPayment({ bookingId }) {
  * Returns the most recent Payment or null.
  */
 export async function getPaymentStatus(bookingId) {
-  const { data } = await api.get("/payments", { params: { bookingId }});
+  if (!bookingId) throw new Error("bookingId is required");
+  const { data } = await api.get("/api/payments", { params: { bookingId } });
   return Array.isArray(data) && data.length > 0 ? data[0] : null;
 }
 
 /**
- * Convenience: poll until payment is no longer PENDING/INITIATED.
- * Will stop after maxAttempts to avoid infinite loops.
+ * Poll until payment is settled.
+ * Settled when status is not in the in-progress set.
  */
-export async function pollPaymentUntilSettled(bookingId, {
-  intervalMs = 2500,
-  maxAttempts = 40
-} = {}) {
+export async function pollPaymentUntilSettled(
+  bookingId,
+  { intervalMs = 2500, maxAttempts = 40 } = {}
+) {
+  const IN_PROGRESS = new Set(["PENDING", "INITIATED", "AWAITING_PAYMENT", "NEW"]);
   let attempts = 0;
-  // statuses you consider “not done” — adjust to your webhook mapping
-  const inProgress = new Set(["PENDING", "INITIATED", "AWAITING_PAYMENT", "NEW"]);
 
   while (attempts < maxAttempts) {
     const latest = await getPaymentStatus(bookingId);
-    if (latest && !inProgress.has(latest.status)) {
-      return latest; // e.g. PAID / FAILED / CANCELLED
+    if (latest && !IN_PROGRESS.has(String(latest.status))) {
+      // e.g. SUCCESS / FAILED / REFUNDED
+      return latest;
     }
-    await new Promise(r => setTimeout(r, intervalMs));
+    await new Promise((r) => setTimeout(r, intervalMs));
     attempts++;
   }
-  return null;
+  return null; // timed out
 }

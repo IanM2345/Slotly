@@ -1,7 +1,8 @@
+// apps/backend/src/app/api/payments/subscriptionPayments/route.js
 import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
-import { initiateSplitPayment } from '@/lib/shared/flutterwave';
+import { createPaymentCheckout } from '@/lib/shared/intasend';
 
 const prisma = new PrismaClient();
 
@@ -15,11 +16,11 @@ export async function POST(request) {
   try {
     const {
       subscriptionId,
-      amount,                 // optional override
+      amount,                 // optional client override (ignored if invalid)
       currency = 'KES',
       returnUrl,
       cancelUrl,
-      customer = {},
+      customer = {},          // { email?, name?, phone_number? }
       metadata = {},
     } = await request.json();
 
@@ -32,22 +33,15 @@ export async function POST(request) {
 
     const subscription = await prisma.subscription.findUnique({
       where: { id: subscriptionId },
-      include: {
-        business: { include: { PayoutSettings: true } },
-      },
+      include: { business: true },
     });
 
     if (!subscription?.business) {
       return NextResponse.json({ error: 'Invalid subscription' }, { status: 404 });
     }
 
-    const subaccountId = subscription.business.PayoutSettings?.flwSubaccountId;
-    if (!subaccountId) {
-      return NextResponse.json({ error: 'Payout settings not configured' }, { status: 500 });
-    }
-
-    // derive amount: client -> subscription.amount -> plan map
-    const derivedAmount = Number.isFinite(amount) && amount > 0
+    // Derive amount: prefer valid client amount, else subscription.amount, else plan map
+    const derivedAmount = Number.isFinite(Number(amount)) && Number(amount) > 0
       ? Number(amount)
       : Number(subscription.amount ?? PLAN_PRICES[subscription.plan] ?? 0);
 
@@ -55,47 +49,67 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Invalid subscription amount' }, { status: 400 });
     }
 
-    const customerPayload = {
-      email: subscription.business.email || customer.email || undefined,
-      name: subscription.business.name || customer.name || undefined,
-      phone_number: subscription.business.phone || customer.phone_number || undefined,
-    };
+    // Compose customer payload (Business doesn’t have email/phone in your schema → use provided fallback)
+    const customerEmail = customer.email ?? null;
+    const customerName = subscription.business.name || customer.name || 'Slotly Business';
+    const customerPhone = customer.phone_number ?? undefined;
 
-    // create row (PENDING)
+    // 1) Create a PENDING SubscriptionPayment row
     const subPayment = await prisma.subscriptionPayment.create({
       data: {
         subscriptionId,
-        businessId: subscription.business.id,
+        businessId: subscription.businessId,
         amount: derivedAmount,
         currency,
-        method: 'CARD_OR_MPESA',
+        method: 'OTHER',               // will be finalized by webhook
         status: 'PENDING',
         fee: 0,
         returnUrl,
         cancelUrl,
         metadata: { ...metadata, plan: subscription.plan },
+        provider: 'INTASEND',
       },
     });
 
-    // PSP checkout (Flutterwave split)
-    const checkoutLink = await initiateSplitPayment({
-      amount: derivedAmount,
-      currency,
-      customer: customerPayload,
-      businessSubAccountId: subaccountId,
-      reference: subPayment.id, // use DB id for webhook reconciliation
-      returnUrl,
-      cancelUrl,
-      metadata: { subscriptionId, subscriptionPaymentId: subPayment.id, plan: subscription.plan },
-    });
-
+    // 2) Build a unique reference for reconciliation (also store to txRef)
+    const txRef = `subscription-${subscription.businessId}-${subPayment.id}-${Date.now()}`;
     await prisma.subscriptionPayment.update({
       where: { id: subPayment.id },
-      data: { checkoutLink },
+      data: { txRef },
+    });
+
+    // 3) Create IntaSend checkout
+    const checkout = await createPaymentCheckout({
+      amount: derivedAmount,
+      currency,
+      email: customerEmail,         // can be null
+      name: customerName,
+      phone: customerPhone,         // optional
+      reference: txRef,             // important: you’ll match this in the webhook
+      redirect_url: returnUrl,
+      cancel_url: cancelUrl,
+      metadata: {
+        subscriptionId,
+        subscriptionPaymentId: subPayment.id,
+        businessId: subscription.businessId,
+        plan: subscription.plan,
+      },
+    });
+
+    const checkoutUrl = checkout?.checkout_url || checkout?.url || null;
+    const invoiceId = checkout?.invoice_id || checkout?.invoice || null;
+
+    // 4) Persist provider ids/links for traceability
+    await prisma.subscriptionPayment.update({
+      where: { id: subPayment.id },
+      data: {
+        checkoutLink: checkoutUrl ?? undefined,
+        providerPaymentId: invoiceId ?? undefined, // IntaSend invoice_id
+      },
     });
 
     return NextResponse.json(
-      { link: checkoutLink, subscriptionPaymentId: subPayment.id },
+      { link: checkoutUrl, subscriptionPaymentId: subPayment.id, reference: txRef, invoiceId },
       { status: 200 }
     );
   } catch (error) {

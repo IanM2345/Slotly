@@ -4,7 +4,6 @@ import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
-import { createSubaccount } from '@/lib/shared/flutterwave';
 
 const prisma = new PrismaClient();
 

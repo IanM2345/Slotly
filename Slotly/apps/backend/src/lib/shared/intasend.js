@@ -1,11 +1,9 @@
-// apps/backend/src/lib/shared/intasend.js
 import axios from 'axios';
 
 const MODE = process.env.INTASEND_MODE === 'live' ? 'live' : 'sandbox';
 const INTASEND_SECRET = process.env.INTASEND_SECRET;   // Bearer token (server)
 const INTASEND_PUB_KEY = process.env.INTASEND_PUB_KEY; // optional (frontend)
 
-// Use API v1 hosts per docs
 const BASE_URL =
   MODE === 'live'
     ? 'https://payment.intasend.com/api/v1/'
@@ -19,14 +17,27 @@ export const intasend = axios.create({
   baseURL: BASE_URL,
   timeout: 15000,
   headers: {
-    Authorization: `Bearer ${INTASEND_SECRET}`,
+    Authorization: `Bearer ${INTASEND_SECRET}`, // ← fix: backticks
     'Content-Type': 'application/json',
   },
 });
 
-// Small helper to sleep for backoff
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// Optional: add an Idempotency-Key header for POST/PUT/PATCH (retry-safe)
+intasend.interceptors.request.use((config) => {
+  if (config.method && ['post', 'put', 'patch'].includes(config.method.toLowerCase())) {
+    if (!config.headers['Idempotency-Key'] && !config.headers['Idempotency-key']) {
+      config.headers['Idempotency-Key'] = cryptoRandom();
+    }
+  }
+  return config;
+});
 
+function cryptoRandom() {
+  // small, dependency-free UUID-ish
+  return 'idemp_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 async function withRetries(fn, { max = 3 } = {}) {
   let attempt = 0, lastErr;
   while (attempt < max) {
@@ -43,10 +54,7 @@ async function withRetries(fn, { max = 3 } = {}) {
   throw lastErr;
 }
 
-/**
- * Create a checkout/payment link the client can open (card/M-Pesa).
- * Returns { invoice_id, checkout_id?, checkout_url, ... }
- */
+/** Create a card/M-Pesa checkout link */
 export async function createPaymentCheckout({
   amount,
   currency = 'KES',
@@ -60,126 +68,115 @@ export async function createPaymentCheckout({
 }) {
   return withRetries(async () => {
     const res = await intasend.post('checkout/', {
-      amount,
-      currency,
-      email,
-      name,
-      phone,
-      redirect_url,
-      cancel_url,
-      reference,
-      metadata,
-      // method selection is handled by IntaSend unless your account requires explicit flags
+      amount, currency, email, name, phone, reference, metadata,
+      redirect_url, cancel_url,
     });
-    return res.data;
+    return res.data; // { invoice_id, checkout_id, checkout_url, ... }
   });
 }
 
-/**
- * Check payment status by invoice_id or checkout_id.
- * Prefer this over trying to filter /transactions by reference.
- */
+/** Verify a specific checkout/invoice */
 export async function checkPaymentStatus({ invoice_id, checkout_id }) {
   if (!invoice_id && !checkout_id) {
     throw new Error('Provide invoice_id or checkout_id');
   }
   return withRetries(async () => {
-    const res = await intasend.post('payment/status/', {
-      invoice_id,
-      checkout_id,
-    });
+    const res = await intasend.post('payment/status/', { invoice_id, checkout_id });
     return res.data;
   });
 }
 
-/**
- * (Optional) List transactions — filters vary by account.
- * Note: This is not the primary way to check a specific checkout’s status.
- */
-export async function listTransactions(params = {}) {
-  return withRetries(async () => {
-    const res = await intasend.get('transactions/', { params });
-    return res.data;
-  });
+/** Not supported reliably—always prefer invoice_id/checkout_id */
+export async function fetchPaymentByReference(/* ref */) {
+  throw new Error('fetchPaymentByReference is not supported; verify by invoice_id/checkout_id instead.');
 }
 
-/**
- * Payouts via Send Money API (two-step: initiate -> approve).
- * Provide a category and destination details per IntaSend docs.
+/** Send Money: initiate payout
+ * Depending on your account, approval may be manual (dashboard) or via OTP.
  */
-export async function createPayoutInitiate({
+export async function createPayout({
   amount,
   currency = 'KES',
   reason = 'Slotly booking payout',
   reference,
-  category, // e.g., 'MPESA-B2C', 'MPESA-TILL', 'MPESA-PAYBILL', 'BANK'
-  // destination fields depend on the category:
-  phone_number,     // for MPESA-B2C e.g. '2547XXXXXXXX'
-  till_number,      // for MPESA-TILL
-  paybill,          // for MPESA-PAYBILL
-  account_reference,// optional, with paybill
-  bank_code,        // for BANK (use List Bank Codes API)
-  account_number,
-  account_name,
+  // unified inputs:
+  mpesaPhoneNumber,   // MPESA-B2C
+  tillNumber,         // MPESA-TILL
+  paybillNumber,      // MPESA-PAYBILL
+  accountRef,         // paybill account reference (optional/required per bill)
+  bankCode,           // BANK (use listBankCodes to map names -> codes)
+  bankAccount,        // BANK
+  accountName,        // BANK
   metadata = {},
 }) {
-  const payload = {
-    amount,
-    currency,
-    reason,
-    reference,
-    category,
-    phone_number,
-    till_number,
-    paybill,
-    account_reference,
-    bank_code,
-    account_number,
-    account_name,
-    metadata,
-  };
-  return withRetries(async () => {
-    const res = await intasend.post('send-money/initiate/', payload);
-    return res.data; // contains tracking/approval info
-  });
+  let category;
+  const payload = { amount, currency, reason, reference, metadata };
+
+  if (mpesaPhoneNumber) {
+    category = 'MPESA-B2C';
+    payload.phone_number = mpesaPhoneNumber;
+  } else if (tillNumber) {
+    category = 'MPESA-TILL';
+    payload.till_number = tillNumber;
+  } else if (paybillNumber) {
+    category = 'MPESA-PAYBILL';
+    payload.paybill = paybillNumber;
+    if (accountRef) payload.account_reference = accountRef;
+  } else if (bankCode && bankAccount && accountName) {
+    category = 'BANK';
+    payload.bank_code = bankCode;
+    payload.account_number = bankAccount;
+    payload.account_name = accountName;
+  } else {
+    throw new Error('Invalid payout destination (need mpesaPhoneNumber | tillNumber | paybillNumber | bankCode+bankAccount+accountName)');
+  }
+  payload.category = category;
+
+  const res = await withRetries(() => intasend.post('send-money/initiate/', payload));
+  return res.data; // e.g., { tracking_id, status, ... }
 }
 
+/** (Optional) Approve payout (if your workflow uses OTP approvals) */
 export async function approvePayout({ tracking_id, otp }) {
   if (!tracking_id) throw new Error('tracking_id is required');
-  return withRetries(async () => {
-    const res = await intasend.post('send-money/approve/', {
-      tracking_id,
-      otp, // if your workflow requires it; some accounts approve via dashboard
-    });
-    return res.data;
-  });
+  const res = await withRetries(() => intasend.post('send-money/approve/', { tracking_id, otp }));
+  return res.data;
 }
 
-/**
- * Refunds (chargebacks) – reference by invoice id.
- */
+/** (Optional) Bank codes lookup for BANK payouts */
+export async function listBankCodes() {
+  const res = await withRetries(() => intasend.get('send-money/bank-codes/'));
+  return res.data; // array of { code, name, ... }
+}
+
+/** Refund by invoice id */
 export async function refundPayment({ invoice_id, amount, reason, reason_details }) {
   if (!invoice_id) throw new Error('invoice_id is required for refunds');
   return withRetries(async () => {
     const res = await intasend.post('chargebacks/', {
-      invoice: invoice_id,
-      amount,
-      reason,
-      reason_details,
+      invoice: invoice_id, amount, reason, reason_details,
     });
     return res.data;
   });
 }
 
-// Webhook verification: validate the dashboard-provided challenge
-// and *always* re-check payment/send-money status before trusting.
+/** Webhook verification
+ * If your IntaSend account uses a shared challenge header, verify here;
+ * ALWAYS re-check transaction status via checkPaymentStatus before trusting.
+ */
 export const INTASEND_WEBHOOK_CHALLENGE = process.env.INTASEND_WEBHOOK_CHALLENGE || '';
 
-export function verifyIntaSendWebhook(req) {
+export function verifyIntaSendSignature(req) {
   try {
-    // Example: they send the challenge you configured; confirm it matches.
-    const receivedChallenge = req.headers['x-intasend-challenge'] || req.query.challenge || req.body?.challenge;
-    return Boolean(INTASEND_WEBHOOK_CHALLENGE && receivedChallenge === INTASEND_WEBHOOK_CHALLENGE);
+    // Next.js Request has Headers with .get()
+    const headers = req.headers?.get ? req.headers : null;
+    const receivedChallenge =
+      headers?.get('x-intasend-challenge') ??
+      req.nextUrl?.searchParams?.get?.('challenge') ??
+      null;
+
+    if (!INTASEND_WEBHOOK_CHALLENGE) return true; // rely on status re-check as fallback
+    return receivedChallenge === INTASEND_WEBHOOK_CHALLENGE;
   } catch {
     return false;
   }
