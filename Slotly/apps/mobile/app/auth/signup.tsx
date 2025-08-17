@@ -81,8 +81,8 @@ export default function SignupScreen() {
       // Simulate API call
       await new Promise((resolve) => setTimeout(resolve, 1500))
 
-      // Navigate to OTP verification
-      router.push(`/auth/otp?email=${encodeURIComponent(email)}`) 
+      // Navigate to OTP verification - use formData.email instead of just email
+      router.push(`/auth/otp?email=${encodeURIComponent(formData.email)}`) 
     } catch (error) {
       console.error("Signup error:", error)
     } finally {
@@ -91,7 +91,8 @@ export default function SignupScreen() {
   }
 
   const handleSignIn = () => {
-    router.push("/auth/login") 
+    // Fixed the path - use /auth/login instead of ../auth/login
+    router.push("../auth/login") 
   }
 
   const handleBack = () => {

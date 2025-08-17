@@ -9,11 +9,11 @@ export default function AuthIndexScreen() {
   const router = useRouter()
 
   const handleSignIn = () => {
-    router.push("/auth/login")
+    router.push("../auth/login")
   }
 
   const handleCreateAccount = () => {
-    router.push("/auth/signup")
+    router.push("../auth/signup")
   }
 
   return (
