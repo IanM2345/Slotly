@@ -31,26 +31,59 @@ model User {
 }
 
 model Business {
-  id                      String    @id @default(auto()) @map("_id") @db.ObjectId
-  name                    String    @unique
-  description             String?
-  ownerId                 String
-  createdAt               DateTime  @default(now())
-  logoUrl                 String?
-  suspended               Boolean   @default(false)
-  suspendedUntil          DateTime?
-  address                 String
-  latitude                Float
-  longitude               Float
-  searchCount             Int       @default(0)
-  flutterwaveSubaccountId String?
-  mpesaPhoneNumber        String?
-  bankCode                String?
-  accountNumber           String?
+  id             String    @id @default(auto()) @map("_id") @db.ObjectId
+  name           String    @unique
+  description    String?
+  ownerId        String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  logoUrl        String?
+  suspended      Boolean   @default(false)
+  suspendedUntil DateTime?
+  address        String
+  latitude       Float
+  longitude      Float
+  searchCount    Int       @default(0)
 
-  addOns         AddOn[]          @relation("BusinessAddOns")
-  plan           SubscriptionPlan @default(LEVEL_1)
-  PayoutSettings PayoutSettings?
+  // ✅ IntaSend payouts (clean, unified)
+  payoutType       PayoutType?
+  mpesaPhoneNumber String? // B2C payouts to phone
+  tillNumber       String?
+  paybillNumber    String?
+  accountRef       String? // for paybill account reference if required
+  bankName         String?
+  bankAccount      String?
+  accountName      String?
+
+  addOns AddOn[]          @relation("BusinessAddOns")
+  plan   SubscriptionPlan @default(LEVEL_1)
+}
+
+// ---------- Payment ----------
+model Payment {
+  id                String         @id @default(auto()) @map("_id") @db.ObjectId
+  type              PaymentContext @default(BOOKING)
+  bookingId         String?        @db.ObjectId
+  businessId        String?        @db.ObjectId
+  amount            Int
+  method            PaymentMethod
+  status            PaymentStatus
+  fee               Int            @default(0)
+  provider          String? // "INTASEND"
+  providerPaymentId String? // IntaSend transaction id
+  providerPayoutId  String? // IntaSend payout id
+  txRef             String?        @unique
+  createdAt         DateTime       @default(now())
+
+  @@index([bookingId])
+  @@index([businessId])
+  @@index([createdAt])
+}
+
+enum PaymentContext {
+  BOOKING
+  SUBSCRIPTION
+  CANCELLATION
 }
 
 model Service {
@@ -76,16 +109,10 @@ model Booking {
   createdAt                   DateTime      @default(now())
   cancellationDeadlineMinutes Int           @default(120)
   lateCancellationFee         Int           @default(5000)
-}
 
-model Payment {
-  id        String        @id @default(auto()) @map("_id") @db.ObjectId
-  bookingId String        @unique @db.ObjectId
-  amount    Int
-  method    PaymentMethod
-  status    PaymentStatus
-  fee       Int
-  createdAt DateTime      @default(now())
+  @@index([businessId])
+  @@index([userId])
+  @@index([startTime])
 }
 
 model Subscription {
@@ -251,6 +278,9 @@ model MonthlyReport {
   period     String
   fileUrl    String
   createdAt  DateTime @default(now())
+
+  @@index([businessId])
+  @@index([period])
 }
 
 model SuspensionLog {
@@ -286,20 +316,6 @@ model RecentSearch {
   user User @relation(fields: [userId], references: [id])
 }
 
-model PayoutSettings {
-  id                   String       @id @default(auto()) @map("_id") @db.ObjectId
-  businessId           String       @unique @db.ObjectId
-  method               PayoutMethod
-  mpesaPhone           String?
-  flwSubaccountId      String?
-  paybillNumber        String?
-  paybillAccountNumber String?
-  tillNumber           String?
-  verified             Boolean      @default(false)
-
-  business Business @relation(fields: [businessId], references: [id])
-}
-
 model WebhookLog {
   id         String   @id @default(auto()) @map("_id") @db.ObjectId
   txRef      String   @unique
@@ -316,45 +332,40 @@ model PreviewLog {
 }
 
 model DownloadLog {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  reportId    String   @db.ObjectId
-  userId      String   @db.ObjectId
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  reportId     String   @db.ObjectId
+  userId       String   @db.ObjectId
   downloadedAt DateTime @default(now())
 }
 
 model SubscriptionPayment {
-  id               String          @id @default(auto()) @map("_id") @db.ObjectId
-  subscriptionId   String          @db.ObjectId
-  businessId       String?         @db.ObjectId
+  id             String  @id @default(auto()) @map("_id") @db.ObjectId
+  subscriptionId String  @db.ObjectId
+  businessId     String? @db.ObjectId
 
-  amount           Int
-  currency         String          @default("KES")
-  method           PaymentMethod
-  status           PaymentStatus
-  fee              Int             @default(0)
+  amount   Int
+  currency String        @default("KES")
+  method   PaymentMethod
+  status   PaymentStatus
+  fee      Int           @default(0)
 
-  checkoutLink     String?
-  reference        String?         // provider ref / internal ref passed to PSP
-  metadata         Json?
+  // tie this to Payment.txRef (or provider reference) for easy joins-by-ref in code
+  txRef             String? @unique
+  provider          String? // "INTASEND"
+  providerPaymentId String? // PSP transaction id
+  checkoutLink      String?
+  reference         String? // internal or PSP ref you passed in
+  metadata          Json?
 
-  // helpful if you redirect back to the app/web
-  returnUrl        String?
-  cancelUrl        String?
+  returnUrl String?
+  cancelUrl String?
 
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([subscriptionId])
   @@index([businessId])
-}
-
-
-enum PayoutMethod {
-  BANK
-  MPESA_PHONE
-  MPESA_TILL
-  MPESA_PAYBILL
-  FLW_SUBACCOUNT
+  @@index([createdAt])
 }
 
 enum AddOnType {
@@ -437,4 +448,11 @@ enum EnrollmentStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+enum PayoutType {
+  MPESA_PHONE
+  MPESA_TILL
+  MPESA_PAYBILL
+  BANK
 }

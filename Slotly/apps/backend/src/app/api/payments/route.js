@@ -1,76 +1,117 @@
+// app/api/payments/booking/route.js
+
 import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
-import { initiateSplitPayment } from '@/lib/shared/flutterwave';
+import { verifyToken } from '@/middleware/auth';
+import { createPaymentCheckout } from '@/lib/shared/intasend';
 
 const prisma = new PrismaClient();
 
+function mask(s) {
+  return s ? String(s).replace(/.(?=.{4})/g, '•') : s;
+}
+
+/**
+ * POST /api/payments/booking
+ * Body: { bookingId: string }
+ * Creates a PENDING Payment row and an IntaSend checkout, then returns the checkout URL.
+ */
 export async function POST(request) {
   try {
+    // authenticate like the rest of your routes
+    const { valid, decoded, error } = await verifyToken(request);
+    if (!valid) return NextResponse.json({ error }, { status: 401 });
+
     const { bookingId } = await request.json();
     if (!bookingId) {
-      return NextResponse.json({ error: 'Booking ID is required' }, { status: 400 });
+      return NextResponse.json({ error: 'bookingId required' }, { status: 400 });
     }
 
-    const booking = await prisma.booking.findUnique({
-      where: { id: bookingId },
-      include: {
-        user: true,
-        service: true, // <-- load service to get price
-        business: { include: { PayoutSettings: true } }
-      }
-    });
+    // Load booking, service, and user (Mongo schema has no explicit relations, so fetch explicitly)
+    const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
+    if (!booking) return NextResponse.json({ error: 'Booking not found' }, { status: 404 });
 
-    if (!booking || !booking.business || !booking.user) {
-      return NextResponse.json({ error: 'Invalid booking' }, { status: 404 });
-    }
+    const [service, customer] = await Promise.all([
+      prisma.service.findUnique({ where: { id: booking.serviceId } }),
+      prisma.user.findUnique({ where: { id: booking.userId } }),
+    ]);
 
-    const { PayoutSettings: settings } = booking.business;
-    if (!settings || !settings.flwSubaccountId) {
-      return NextResponse.json({ error: 'Payout settings not configured' }, { status: 500 });
-    }
+    if (!service) return NextResponse.json({ error: 'Service not found' }, { status: 404 });
+    if (!customer) return NextResponse.json({ error: 'Customer not found' }, { status: 404 });
 
-    const amount = Number(booking.service?.price ?? 0);
+    const amount = Number(service.price ?? 0);
     if (!Number.isFinite(amount) || amount <= 0) {
       return NextResponse.json({ error: 'Invalid service price' }, { status: 400 });
     }
 
-    // Prepare the customer object for Flutterwave
-    const customer = {
-      email: booking.user.email || undefined,
-      name: booking.user.name || undefined,
-      phone_number: booking.user.phone || undefined,
-    };
+    // Unique reference for matching webhooks later (also stored in Payment.txRef)
+    const txRef = `booking-${booking.id}-${Date.now()}`;
 
-    // 1) Create a Payment row first (PENDING)
+    // Create a pending Payment row
     const payment = await prisma.payment.create({
       data: {
+        type: 'BOOKING',
         bookingId: booking.id,
-        amount,
-        method: 'CARD_OR_MPESA',    // source-of-truth on server
+        businessId: booking.businessId,
+        amount,                // Int in KES cents? your schema uses Int; keep consistent with service.price
+        method: 'OTHER',       // will finalize from webhook/status check
         status: 'PENDING',
         fee: 0,
-      }
+        provider: 'INTASEND',
+        txRef,
+      },
     });
 
-    // 2) Initiate provider checkout link (pass your internal payment.id as reference if supported)
-    const paymentLink = await initiateSplitPayment({
+    // Prepare customer details for checkout (fallbacks are fine)
+    const email = customer.email || 'noreply@slotly.local';
+    const name = customer.name || 'Slotly User';
+    const phone = customer.phone || undefined;
+
+    // Create IntaSend checkout (card/M-Pesa)
+    const checkout = await createPaymentCheckout({
       amount,
-      customer,
-      businessSubAccountId: settings.flwSubaccountId,
-      // Optional but recommended: internal reference to map webhooks back
-      reference: payment.id,
-      // You can also pass a redirect/callback URL if your flow supports it
+      currency: 'KES',
+      email,
+      name,
+      phone,
+      reference: txRef,
+      redirect_url: `${process.env.PUBLIC_APP_URL}/payments/success`,
+      cancel_url: `${process.env.PUBLIC_APP_URL}/payments/cancel`,
+      metadata: {
+        bookingId: booking.id,
+        businessId: booking.businessId,
+        purpose: 'BOOKING',
+        paymentId: payment.id,
+      },
     });
 
-    // 3) Persist checkout link for traceability (optional but useful)
+    const checkoutUrl = checkout?.checkout_url || checkout?.url || null;
+    const invoiceId = checkout?.invoice_id || checkout?.invoice || null;
+
+    // Persist provider ids / links for traceability
     await prisma.payment.update({
       where: { id: payment.id },
-      data: { checkoutLink: paymentLink }
+      data: {
+        providerPaymentId: invoiceId ?? undefined,
+        checkoutLink: checkoutUrl ?? undefined,
+      },
     });
 
-    return NextResponse.json({ link: paymentLink, paymentId: payment.id }, { status: 200 });
-
+    return NextResponse.json(
+      {
+        link: checkoutUrl,
+        paymentId: payment.id,
+        txRef,
+        invoiceId,
+        customer: {
+          name,
+          email: mask(email),
+          phone: phone ? mask(phone) : null,
+        },
+      },
+      { status: 200 }
+    );
   } catch (error) {
     Sentry.captureException(error);
     console.error('Payment init error:', error);
@@ -78,22 +119,27 @@ export async function POST(request) {
   }
 }
 
+/**
+ * GET /api/payments/booking?bookingId=...
+ * Returns the list of Payment rows for a booking (latest first)
+ */
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
     const bookingId = searchParams.get('bookingId');
     if (!bookingId) {
-      return NextResponse.json({ error: 'Booking ID is required' }, { status: 400 });
+      return NextResponse.json({ error: 'bookingId required' }, { status: 400 });
     }
 
     const payments = await prisma.payment.findMany({
       where: { bookingId },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
     });
 
     return NextResponse.json(payments, { status: 200 });
   } catch (error) {
     Sentry.captureException?.(error);
+    console.error('Payment list error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
