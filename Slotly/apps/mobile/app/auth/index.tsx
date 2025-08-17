@@ -24,7 +24,7 @@ export default function AuthIndexScreen() {
           <Surface style={[styles.logoContainer, { backgroundColor: theme.colors.primaryContainer }]} elevation={3}>
             <Text style={[styles.logoText, { color: theme.colors.primary }]}>SLOTLY</Text>
           </Surface>
-          <Text style={[styles.tagline, { color: theme.colors.onBackground }]}>Your Business, Simplified</Text>
+          <Text style={[styles.tagline, { color: theme.colors.onBackground }]}>Appointments, Simplified</Text>
         </View>
 
         {/* Welcome Text */}
@@ -32,9 +32,7 @@ export default function AuthIndexScreen() {
           <Text variant="headlineMedium" style={[styles.welcomeTitle, { color: theme.colors.onBackground }]}>
             Welcome to Slotly
           </Text>
-          <Text variant="bodyLarge" style={[styles.welcomeSubtitle, { color: theme.colors.onSurfaceVariant }]}>
-            Manage your appointments, staff, and grow your business with ease
-          </Text>
+         
         </View>
 
         {/* Action Buttons */}

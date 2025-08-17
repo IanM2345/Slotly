@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform } from "react-native"
+import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, TouchableOpacity } from "react-native"
 import { Text, TextInput, Button, useTheme, Surface, IconButton, Checkbox } from "react-native-paper"
 import { useRouter } from "expo-router"
 import { SafeAreaView } from "react-native-safe-area-context"
@@ -10,8 +10,8 @@ export default function SignupScreen() {
   const theme = useTheme()
   const router = useRouter()
   const [formData, setFormData] = useState({
-    businessName: "",
-    ownerName: "",
+    firstName: "",
+    lastName: "",
     email: "",
     phone: "",
     password: "",
@@ -33,12 +33,12 @@ export default function SignupScreen() {
   const validateForm = () => {
     const newErrors: Record<string, string> = {}
 
-    if (!formData.businessName.trim()) {
-      newErrors.businessName = "Business name is required"
+    if (!formData.firstName.trim()) {
+      newErrors.firstName = "First name is required"
     }
 
-    if (!formData.ownerName.trim()) {
-      newErrors.ownerName = "Owner name is required"
+    if (!formData.lastName.trim()) {
+      newErrors.lastName = "Last name is required"
     }
 
     if (!formData.email.trim()) {
@@ -81,7 +81,7 @@ export default function SignupScreen() {
       // Simulate API call
       await new Promise((resolve) => setTimeout(resolve, 1500))
 
-      // Navigate to OTP verification - use formData.email instead of just email
+      // Navigate to OTP verification
       router.push(`/auth/otp?email=${encodeURIComponent(formData.email)}`) 
     } catch (error) {
       console.error("Signup error:", error)
@@ -90,8 +90,12 @@ export default function SignupScreen() {
     }
   }
 
+  const handleSocialLogin = (provider: 'google' | 'facebook' | 'apple') => {
+    // Implement social login logic here
+    console.log(`Login with ${provider}`)
+  }
+
   const handleSignIn = () => {
-    // Fixed the path - use /auth/login instead of ../auth/login
     router.push("../auth/login") 
   }
 
@@ -114,46 +118,91 @@ export default function SignupScreen() {
               onPress={handleBack}
               style={styles.backButton}
             />
+            
+            {/* Slotly Logo */}
+            <View style={styles.logoContainer}>
+              <Text style={[styles.logoText, { color: '#004AAD' }]}>
+                SLOTLY
+              </Text>
+            </View>
+            
             <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onBackground }]}>
-              Create Account
+              Create Your Account
             </Text>
+          </View>
+
+          {/* Social Login Options */}
+          <View style={styles.socialContainer}>
+            <TouchableOpacity 
+              style={[styles.socialButton, { borderColor: theme.colors.outline }]}
+              onPress={() => handleSocialLogin('google')}
+            >
+              <Text style={styles.socialButtonText}>Continue with Google</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.socialButton, { borderColor: theme.colors.outline, backgroundColor: '#1877F2' }]}
+              onPress={() => handleSocialLogin('facebook')}
+            >
+              <Text style={[styles.socialButtonText, { color: '#FFFFFF' }]}>Continue with Facebook</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.socialButton, { borderColor: theme.colors.outline, backgroundColor: '#000000' }]}
+              onPress={() => handleSocialLogin('apple')}
+            >
+              <Text style={[styles.socialButtonText, { color: '#FFFFFF' }]}>Continue with Apple</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Divider */}
+          <View style={styles.dividerContainer}>
+            <View style={[styles.dividerLine, { backgroundColor: theme.colors.outline }]} />
+            <Text style={[styles.dividerText, { color: theme.colors.onSurfaceVariant }]}>or</Text>
+            <View style={[styles.dividerLine, { backgroundColor: theme.colors.outline }]} />
           </View>
 
           {/* Form */}
           <Surface style={[styles.formContainer, { backgroundColor: theme.colors.surface }]} elevation={2}>
             <View style={styles.form}>
-              <TextInput
-                mode="outlined"
-                label="Business Name"
-                value={formData.businessName}
-                onChangeText={(text) => updateField("businessName", text)}
-                autoCapitalize="words"
-                error={!!errors.businessName}
-                style={styles.input}
-                left={<TextInput.Icon icon="store" />}
-              />
-              {errors.businessName && (
-                <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
-                  {errors.businessName}
-                </Text>
-              )}
-
-              <TextInput
-                mode="outlined"
-                label="Owner Name"
-                value={formData.ownerName}
-                onChangeText={(text) => updateField("ownerName", text)}
-                autoCapitalize="words"
-                autoComplete="name"
-                error={!!errors.ownerName}
-                style={styles.input}
-                left={<TextInput.Icon icon="account" />}
-              />
-              {errors.ownerName && (
-                <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
-                  {errors.ownerName}
-                </Text>
-              )}
+              <View style={styles.nameRow}>
+                <View style={styles.nameField}>
+                  <TextInput
+                    mode="outlined"
+                    label="First Name"
+                    value={formData.firstName}
+                    onChangeText={(text) => updateField("firstName", text)}
+                    autoCapitalize="words"
+                    autoComplete="given-name"
+                    error={!!errors.firstName}
+                    style={styles.input}
+                    left={<TextInput.Icon icon="account" />}
+                  />
+                  {errors.firstName && (
+                    <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
+                      {errors.firstName}
+                    </Text>
+                  )}
+                </View>
+                
+                <View style={styles.nameField}>
+                  <TextInput
+                    mode="outlined"
+                    label="Last Name"
+                    value={formData.lastName}
+                    onChangeText={(text) => updateField("lastName", text)}
+                    autoCapitalize="words"
+                    autoComplete="family-name"
+                    error={!!errors.lastName}
+                    style={styles.input}
+                  />
+                  {errors.lastName && (
+                    <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
+                      {errors.lastName}
+                    </Text>
+                  )}
+                </View>
+              </View>
 
               <TextInput
                 mode="outlined"
@@ -267,14 +316,14 @@ export default function SignupScreen() {
                 style={[
                   styles.continueButton,
                   {
-                    backgroundColor: isFormValid ? theme.colors.primary : theme.colors.surfaceDisabled,
+                    backgroundColor: isFormValid ? '#004AAD' : theme.colors.surfaceDisabled,
                     opacity: isFormValid ? 1 : 0.6,
                   },
                 ]}
                 contentStyle={styles.buttonContent}
                 labelStyle={styles.buttonLabel}
               >
-                Continue
+                Create Account
               </Button>
             </View>
           </Surface>
@@ -283,7 +332,7 @@ export default function SignupScreen() {
           <View style={styles.footer}>
             <Text variant="bodyMedium" style={[styles.footerText, { color: theme.colors.onSurfaceVariant }]}>
               Already have an account?{" "}
-              <Text style={[styles.linkText, { color: theme.colors.primary }]} onPress={handleSignIn}>
+              <Text style={[styles.linkText, { color: '#004AAD' }]} onPress={handleSignIn}>
                 Sign In
               </Text>
             </Text>
@@ -306,17 +355,57 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
   header: {
-    flexDirection: "row",
-    alignItems: "center",
+    alignItems: 'center',
     paddingTop: 16,
-    paddingBottom: 32,
+    paddingBottom: 24,
   },
   backButton: {
-    marginLeft: -8,
-    marginRight: 8,
+    position: 'absolute',
+    left: -8,
+    top: 16,
+    zIndex: 1,
+  },
+  logoContainer: {
+    marginBottom: 16,
+  },
+  logoText: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    fontFamily: 'Impact', // You'll need to load this font
+    letterSpacing: 2,
   },
   title: {
     fontWeight: "bold",
+    textAlign: 'center',
+  },
+  socialContainer: {
+    marginBottom: 24,
+    gap: 12,
+  },
+  socialButton: {
+    borderWidth: 1,
+    borderRadius: 28,
+    paddingVertical: 14,
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  socialButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  dividerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+  },
+  dividerText: {
+    marginHorizontal: 16,
+    fontSize: 14,
   },
   formContainer: {
     borderRadius: 16,
@@ -324,6 +413,14 @@ const styles = StyleSheet.create({
   },
   form: {
     padding: 24,
+  },
+  nameRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 8,
+  },
+  nameField: {
+    flex: 1,
   },
   input: {
     marginBottom: 8,
