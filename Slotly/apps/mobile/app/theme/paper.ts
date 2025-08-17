@@ -94,6 +94,9 @@ export const slotlyTheme = {
 
 export type SlotlyTheme = typeof slotlyTheme
 
+// Default export to satisfy router requirements
+export default slotlyTheme
+
 // Module augmentation for react-native-paper
 declare module "react-native-paper" {
   interface MD3Colors {
