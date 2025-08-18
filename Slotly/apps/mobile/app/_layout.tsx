@@ -8,7 +8,10 @@ import { Provider as PaperProvider } from "react-native-paper";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import type { MD3Theme } from "react-native-paper";
 
+
 import { slotlyTheme } from "./theme/paper";
+import { SessionProvider } from "@/context/SessionContext";
+import { VerificationGate } from "@/components/VerificationGate"
 
 export { ErrorBoundary } from "expo-router";
 
