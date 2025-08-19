@@ -1,7 +1,6 @@
 /* apps/mobile/app/_layout.tsx */
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { DefaultTheme as NavDefaultTheme, ThemeProvider } from "@react-navigation/native";
-import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
@@ -9,9 +8,20 @@ import { Provider as PaperProvider } from "react-native-paper";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import type { MD3Theme } from "react-native-paper";
 
+// ✅ Load Inter weights from the Google Fonts package
+import {
+  useFonts,
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+  Inter_800ExtraBold,
+} from "@expo-google-fonts/inter";
+
+// ✅ Import your theme from OUTSIDE app/ (so expo-router doesn’t scan it as a route)
 import { slotlyTheme } from "./theme/paper";
 
-// ⬇️ Use relative imports so TS doesn’t complain about `@/*`
+// Context providers (keep your relative imports)
 import { SessionProvider } from "../context/SessionContext";
 import { OnboardingProvider } from "../context/OnboardingContext";
 
@@ -23,8 +33,13 @@ export const unstable_settings = {
 };
 
 export default function RootLayout() {
+  // Load Inter + FontAwesome (icons)
   const [loaded, error] = useFonts({
-    SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+    Inter_800ExtraBold,
     ...FontAwesome.font,
   });
 
@@ -33,13 +48,13 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
-    if (loaded) SplashScreen.hideAsync();
-  }, [loaded]);
+    if (loaded || error) SplashScreen.hideAsync();
+  }, [loaded, error]);
 
   if (error) throw error;
-  if (!loaded) return null;
+  if (!loaded) return null; // Avoid flashing system font
 
-  // React Navigation theme mapped to our Paper theme colors
+  // React Navigation theme bridged to Paper colors
   const navTheme = {
     ...NavDefaultTheme,
     colors: {

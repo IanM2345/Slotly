@@ -1,373 +1,344 @@
-"use client"
+// apps/mobile/app/business/dashboard/staff/index.tsx
+"use client";
+import type { RelativePathString } from "expo-router";
 
-import { useEffect, useState } from "react"
-import { View, ScrollView, StyleSheet } from "react-native"
+import React, { useEffect, useMemo, useState } from "react";
+import { ScrollView, StyleSheet, View } from "react-native";
+import { useRouter } from "expo-router";
 import {
-  Text,
-  Surface,
   ActivityIndicator,
-  IconButton,
   Button,
-  useTheme,
-  Portal,
-  Modal,
-  Searchbar,
-  Checkbox,
+  Card,
+  Chip,
+  Divider,
   List,
-} from "react-native-paper"
-import { useRouter } from "expo-router"
-import { VerificationGate } from "../../../../components/VerificationGate"
-import { Section } from "../../../../components/Section"
-import { AvatarCircle } from "../../../../components/AvatarCircle"
-import { ServiceChip } from "../../../../components/ServiceChip"
-import { getStaffList, getServices, updateStaffServices } from "../../../../lib/api/manager"
-import type { Staff, Service } from "../../../../lib/types"
+  Surface,
+  Text,
+  useTheme,
+} from "react-native-paper";
 
-export default function StaffIndexScreen() {
-  const router = useRouter()
-  const theme = useTheme()
-  const [loading, setLoading] = useState(true)
-  const [staff, setStaff] = useState<Staff[]>([])
-  const [services, setServices] = useState<Service[]>([])
-  const [editingStaff, setEditingStaff] = useState<Staff | null>(null)
-  const [selectedServices, setSelectedServices] = useState<string[]>([])
-  const [serviceSearch, setServiceSearch] = useState("")
+import { staffApi } from "../../../../lib/staff/api";
+import type {
+  StaffProfile,
+  PerformanceMetrics,
+  Appointment,
+  Notification,
+} from "../../../../lib/staff/types";
+
+export default function StaffHubScreen() {
+  const theme = useTheme();
+  const router = useRouter();
+
+  const [loading, setLoading] = useState(true);
+  const [profile, setProfile] = useState<StaffProfile | null>(null);
+  const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
+  const [schedule, setSchedule] = useState<Appointment[]>([]);
+  const [notes, setNotes] = useState<Notification[]>([]);
 
   useEffect(() => {
-    loadData()
-  }, [])
+    let mounted = true;
+    (async () => {
+      try {
+        const [p, m, s, n] = await Promise.all([
+          staffApi.getProfile(),
+          staffApi.getPerformanceMetrics(),
+          staffApi.getSchedule(),
+          staffApi.getNotifications(),
+        ]);
+        if (!mounted) return;
+        setProfile(p);
+        setMetrics(m);
+        setSchedule(s);
+        setNotes(n);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
-  const loadData = async () => {
-    try {
-      const [staffData, servicesData] = await Promise.all([getStaffList("business-1"), getServices("business-1")])
-      setStaff(staffData)
-      setServices(servicesData)
-    } catch (error) {
-      console.error("Error loading staff data:", error)
-    } finally {
-      setLoading(false)
+  const unreadCount = useMemo(
+    () => notes.filter((n) => !n.isRead).length,
+    [notes]
+  );
+
+  const statusColor = (status: Appointment["status"]) => {
+    switch (status) {
+      case "confirmed":
+        return theme.colors.primary; // blue
+      case "pending":
+        return "#FBC02D"; // yellow
+      case "completed":
+        return "#2E7D32"; // green
+      case "cancelled":
+      default:
+        return theme.colors.error; // red
     }
-  }
-
-  const handleEditServices = (staffMember: Staff) => {
-    setEditingStaff(staffMember)
-    setSelectedServices(staffMember.services)
-    setServiceSearch("")
-  }
-
-  const handleSaveServices = async () => {
-    if (!editingStaff) return
-
-    try {
-      const serviceIds = services.filter((s) => selectedServices.includes(s.name)).map((s) => s.id)
-
-      await updateStaffServices(editingStaff.id, serviceIds)
-
-      // Update local state
-      setStaff((prev) => prev.map((s) => (s.id === editingStaff.id ? { ...s, services: selectedServices } : s)))
-
-      setEditingStaff(null)
-    } catch (error) {
-      console.error("Error updating services:", error)
-    }
-  }
-
-  const handleViewDetails = (staffMember: Staff) => {
-    router.push(`/(business)/dashboard/staff/${staffMember.id}`)
-  }
-
-  const filteredServices = services.filter((service) =>
-    service.name.toLowerCase().includes(serviceSearch.toLowerCase()),
-  )
-
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-        <Text style={styles.loadingText}>Loading staff...</Text>
-      </View>
-    )
-  }
+  };
 
   return (
-    <VerificationGate>
-      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
-          <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={() => router.back()} />
-          <Text style={styles.title}>Staff Management</Text>
-        </View>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: theme.colors.background }}
+      contentContainerStyle={styles.container}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* Header */}
+      <View style={styles.headerRow}>
+        <Text variant="headlineSmall" style={{ fontWeight: "700" }}>
+          Staff Dashboard
+        </Text>
+        <Button
+          mode="contained"
+          buttonColor="#FBC02D"
+          textColor={theme.colors.onPrimary}
+         onPress={() => router.push("/business/dashboard/staff/register" as RelativePathString)}
 
-        <Section
-          title="Current Staff Members"
-          action={
-            <Button mode="outlined" onPress={() => router.push("/(business)/dashboard/staff/applications")} compact>
-              Applications
-            </Button>
-          }
         >
-          <View style={styles.staffContainer}>
-            {staff.map((member) => (
-              <Surface key={member.id} style={styles.staffCard} elevation={2}>
-                <View style={styles.staffHeader}>
-                  <AvatarCircle name={member.name} size={50} />
-                  <View style={styles.staffInfo}>
-                    <Text style={styles.staffName}>{member.name}</Text>
-                    <Text style={styles.staffRole}>{member.role}</Text>
-                  </View>
-                  <View style={styles.staffStats}>
-                    <Text style={styles.statValue}>{member.completionRate}%</Text>
-                    <Text style={styles.statLabel}>Completion</Text>
-                  </View>
-                </View>
+          Register
+        </Button>
+      </View>
 
-                <View style={styles.staffMetrics}>
-                  <View style={styles.metric}>
-                    <Text style={styles.metricValue}>⭐ {member.rating}</Text>
-                    <Text style={styles.metricLabel}>Rating</Text>
-                  </View>
-                  <View style={styles.metric}>
-                    <Text style={styles.metricValue}>{member.monthBookings}</Text>
-                    <Text style={styles.metricLabel}>This Month</Text>
-                  </View>
-                  <View style={styles.metric}>
-                    <Text style={styles.metricValue}>KSh {member.monthRevenue.toLocaleString()}</Text>
-                    <Text style={styles.metricLabel}>Revenue</Text>
-                  </View>
-                </View>
-
-                <View style={styles.servicesSection}>
-                  <Text style={styles.servicesTitle}>Services</Text>
-                  <View style={styles.servicesContainer}>
-                    {member.services.map((service) => (
-                      <ServiceChip key={service} service={service} />
-                    ))}
-                  </View>
-                </View>
-
-                <View style={styles.staffActions}>
-                  <Button
-                    mode="outlined"
-                    onPress={() => handleEditServices(member)}
-                    style={styles.actionButton}
-                    compact
-                  >
-                    Edit Services
-                  </Button>
-                  <Button
-                    mode="contained"
-                    onPress={() => handleViewDetails(member)}
-                    style={styles.actionButton}
-                    compact
-                  >
-                    View Details
-                  </Button>
-                </View>
-              </Surface>
-            ))}
-          </View>
-        </Section>
-
-        {/* Edit Services Modal */}
-        <Portal>
-          <Modal
-            visible={!!editingStaff}
-            onDismiss={() => setEditingStaff(null)}
-            contentContainerStyle={styles.modalContainer}
+      {loading ? (
+        <View style={{ paddingVertical: 40, alignItems: "center" }}>
+          <ActivityIndicator />
+        </View>
+      ) : (
+        <>
+          {/* Welcome / Quick info */}
+          <Surface
+            elevation={1}
+            style={[styles.card, { backgroundColor: theme.colors.surface }]}
           >
-            <Surface style={styles.modalContent} elevation={4}>
-              <Text style={styles.modalTitle}>Edit Services - {editingStaff?.name}</Text>
+            <Text variant="titleMedium" style={{ marginBottom: 4 }}>
+              Welcome{profile?.firstName ? `, ${profile.firstName}` : ""} 👋
+            </Text>
+            <Text style={{ color: theme.colors.onSurfaceVariant }}>
+              Manage your profile, schedule, availability, and see performance
+              at a glance.
+            </Text>
+          </Surface>
 
-              <Searchbar
-                placeholder="Search services..."
-                value={serviceSearch}
-                onChangeText={setServiceSearch}
-                style={styles.searchbar}
+          {/* Quick Actions */}
+          <View style={styles.grid2}>
+            <Card style={styles.action}onPress={() => router.push("/business/dashboard/staff/profile" as RelativePathString)}>
+              <Card.Title
+                title="Profile Settings"
+                left={(p) => <List.Icon {...p} icon="account" />}
               />
+            </Card>
+            <Card
+              style={styles.action}
+              onPress={() => router.push("/business/dashboard/staff/availability" as RelativePathString)}
 
-              <ScrollView style={styles.servicesList}>
-                {filteredServices.map((service) => (
-                  <List.Item
-                    key={service.id}
-                    title={service.name}
-                    description={`${service.durationMins}min • KSh ${service.price}`}
-                    left={() => (
-                      <Checkbox
-                        status={selectedServices.includes(service.name) ? "checked" : "unchecked"}
-                        onPress={() => {
-                          setSelectedServices((prev) =>
-                            prev.includes(service.name)
-                              ? prev.filter((s) => s !== service.name)
-                              : [...prev, service.name],
-                          )
-                        }}
-                      />
-                    )}
-                    onPress={() => {
-                      setSelectedServices((prev) =>
-                        prev.includes(service.name) ? prev.filter((s) => s !== service.name) : [...prev, service.name],
-                      )
+            >
+              <Card.Title
+                title="Availability & Time-off"
+                left={(p) => <List.Icon {...p} icon="calendar-clock" />}
+              />
+            </Card>
+            <Card style={styles.action} onPress={() => router.push("schedule" as RelativePathString)}>
+              <Card.Title
+                title="My Schedule"
+                left={(p) => <List.Icon {...p} icon="calendar" />}
+              />
+            </Card>
+            <Card
+              style={styles.action}
+              onPress={() => router.push("/business/dashboard/staff/performance" as RelativePathString)}
+            >
+              <Card.Title
+                title="Performance"
+                left={(p) => <List.Icon {...p} icon="chart-line" />}
+              />
+            </Card>
+            <Card
+              style={styles.action}
+              onPress={() => router.push("/business/dashboard/staff/notifications" as RelativePathString)}
+            >
+              <Card.Title
+                title="Notifications"
+                left={(p) => <List.Icon {...p} icon="bell" />}
+                right={() =>
+                  unreadCount > 0 ? (
+                    <Chip compact style={{ marginRight: 12 }}>
+                      {unreadCount} new
+                    </Chip>
+                  ) : null
+                }
+              />
+            </Card>
+          </View>
+
+          {/* At a Glance Metrics */}
+          <Surface
+            elevation={1}
+            style={[styles.card, { backgroundColor: theme.colors.surface }]}
+          >
+            <Text variant="titleMedium" style={{ marginBottom: 8 }}>
+              Performance (at a glance)
+            </Text>
+            <View style={styles.grid2}>
+              <Card style={styles.metric}>
+                <Card.Content>
+                  <View style={styles.metricRow}>
+                    <Text variant="titleSmall" style={styles.muted}>
+                      Completed
+                    </Text>
+                    <List.Icon icon="target" />
+                  </View>
+                  <Text variant="headlineSmall" style={{ fontWeight: "700" }}>
+                    {metrics?.completedBookings ?? 0}
+                  </Text>
+                </Card.Content>
+              </Card>
+              <Card style={styles.metric}>
+                <Card.Content>
+                  <View style={styles.metricRow}>
+                    <Text variant="titleSmall" style={styles.muted}>
+                      Cancellations
+                    </Text>
+                    <List.Icon icon="close-circle" color={theme.colors.error} />
+                  </View>
+                  <Text variant="headlineSmall" style={{ fontWeight: "700" }}>
+                    {metrics?.cancellations ?? 0}
+                  </Text>
+                </Card.Content>
+              </Card>
+              <Card style={styles.metric}>
+                <Card.Content>
+                  <View style={styles.metricRow}>
+                    <Text variant="titleSmall" style={styles.muted}>
+                      Avg. Rating
+                    </Text>
+                    <List.Icon icon="star" />
+                  </View>
+                  <Text variant="headlineSmall" style={{ fontWeight: "700" }}>
+                    {(metrics?.averageRating ?? 0).toFixed(1)}
+                  </Text>
+                </Card.Content>
+              </Card>
+              <Card style={styles.metric}>
+                <Card.Content>
+                  <View style={styles.metricRow}>
+                    <Text variant="titleSmall" style={styles.muted}>
+                      Commission
+                    </Text>
+                    <List.Icon icon="currency-usd" />
+                  </View>
+                  <Text variant="headlineSmall" style={{ fontWeight: "700" }}>
+                    KSh {(metrics?.commissionEarned ?? 0).toLocaleString()}
+                  </Text>
+                </Card.Content>
+              </Card>
+            </View>
+          </Surface>
+
+          {/* Today’s Schedule (preview) */}
+          <Surface
+            elevation={1}
+            style={[styles.card, { backgroundColor: theme.colors.surface }]}
+          >
+            <View style={styles.sectionHeader}>
+              <Text variant="titleMedium">Today</Text>
+              <Button mode="text" onPress={() => router.push("/business/dashboard/staff/schedule" as RelativePathString)}>
+                View all
+              </Button>
+            </View>
+            <Divider />
+            {schedule.slice(0, 4).map((item) => (
+              <List.Item
+                key={item.id}
+                title={item.clientName}
+               description={`${item.service} • ${item.duration}`}
+                left={() => (
+                  <View
+                    style={{
+                      width: 72,
+                      alignItems: "center",
+                      justifyContent: "center",
                     }}
-                  />
-                ))}
-              </ScrollView>
+                  >
+                    <Text style={{ fontWeight: "700" }}>{item.time}</Text>
+                  </View>
+                )}
+                right={() => (
+                  <Chip
+                    compact
+                    style={{
+                      alignSelf: "center",
+                      backgroundColor: statusColor(item.status),
+                    }}
+                    textStyle={{ color: "#fff" }}
+                  >
+                    {item.status}
+                  </Chip>
+                )}
+              />
+            ))}
+            {schedule.length === 0 && (
+              <Text style={{ marginTop: 12, color: theme.colors.onSurfaceVariant }}>
+                No appointments scheduled.
+              </Text>
+            )}
+          </Surface>
 
-              <View style={styles.modalActions}>
-                <Button mode="outlined" onPress={() => setEditingStaff(null)} style={styles.modalButton}>
-                  Cancel
-                </Button>
-                <Button mode="contained" onPress={handleSaveServices} style={styles.modalButton}>
-                  Save Changes
-                </Button>
-              </View>
-            </Surface>
-          </Modal>
-        </Portal>
-
-        <View style={styles.bottomSpacing} />
-      </ScrollView>
-    </VerificationGate>
-  )
+          {/* Notifications (preview) */}
+          <Surface
+            elevation={1}
+            style={[styles.card, { backgroundColor: theme.colors.surface }]}
+          >
+            <View style={styles.sectionHeader}>
+              <Text variant="titleMedium">Notifications</Text>
+              <Button mode="text" onPress={() => router.push("/business/dashboard/staff/notifications" as RelativePathString)}>
+                Open
+              </Button>
+            </View>
+            <Divider />
+            {notes.slice(0, 3).map((n) => (
+              <List.Item
+                key={n.id}
+                title={n.title}
+                left={(p) => (
+                  <List.Icon {...p} icon={n.isRead ? "bell-outline" : "bell"} />
+                )}
+              />
+            ))}
+            {notes.length === 0 && (
+              <Text style={{ marginTop: 12, color: theme.colors.onSurfaceVariant }}>
+                You’re all caught up.
+              </Text>
+            )}
+          </Surface>
+        </>
+      )}
+    </ScrollView>
+  );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#F8FAFC",
-  },
-  loadingContainer: {
-    flex: 1,
-    backgroundColor: "#F8FAFC",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: "#6B7280",
-  },
-  header: {
+  container: { padding: 16, gap: 12 },
+  headerRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 8,
-    paddingTop: 60,
-    paddingBottom: 20,
+    justifyContent: "space-between",
   },
-  title: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: "#1559C1",
+  card: { borderRadius: 20, padding: 12 },
+  grid2: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  action: { flexBasis: "48%", borderRadius: 16 },
+  metric: { flexBasis: "48%", borderRadius: 16 },
+  metricRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
   },
-  staffContainer: {
-    paddingHorizontal: 16,
-    gap: 16,
-  },
-  staffCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 12,
-    padding: 16,
-  },
-  staffHeader: {
+  muted: { color: "#6b7280" },
+  sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 16,
-  },
-  staffInfo: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  staffName: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#1F2937",
-  },
-  staffRole: {
-    fontSize: 14,
-    color: "#6B7280",
-  },
-  staffStats: {
-    alignItems: "center",
-  },
-  statValue: {
-    fontSize: 16,
-    fontWeight: "bold",
-    color: "#2E7D32",
-  },
-  statLabel: {
-    fontSize: 12,
-    color: "#6B7280",
-  },
-  staffMetrics: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    marginBottom: 16,
-    paddingVertical: 12,
-    backgroundColor: "#F8FAFC",
-    borderRadius: 8,
-  },
-  metric: {
-    alignItems: "center",
-  },
-  metricValue: {
-    fontSize: 14,
-    fontWeight: "bold",
-    color: "#1F2937",
-  },
-  metricLabel: {
-    fontSize: 12,
-    color: "#6B7280",
-  },
-  servicesSection: {
-    marginBottom: 16,
-  },
-  servicesTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#374151",
+    justifyContent: "space-between",
     marginBottom: 8,
   },
-  servicesContainer: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-  },
-  staffActions: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  actionButton: {
-    flex: 1,
-  },
-  modalContainer: {
-    flex: 1,
-    justifyContent: "center",
-    padding: 20,
-  },
-  modalContent: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 12,
-    padding: 20,
-    maxHeight: "80%",
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#1559C1",
-    marginBottom: 16,
-  },
-  searchbar: {
-    marginBottom: 16,
-  },
-  servicesList: {
-    maxHeight: 300,
-    marginBottom: 16,
-  },
-  modalActions: {
-    flexDirection: "row",
-    gap: 12,
-  },
-  modalButton: {
-    flex: 1,
-  },
-  bottomSpacing: {
-    height: 40,
-  },
-})
+});

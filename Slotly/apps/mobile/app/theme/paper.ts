@@ -1,5 +1,30 @@
-import { MD3LightTheme } from "react-native-paper"
-import type { MD3Theme } from "react-native-paper"
+import { MD3LightTheme, configureFonts, MD3Theme } from "react-native-paper";
+
+// Use the exact family names provided by @expo-google-fonts/inter
+const interConfig = {
+  displayLarge:   { fontFamily: "Inter_800ExtraBold" },
+  displayMedium:  { fontFamily: "Inter_800ExtraBold" },
+  displaySmall:   { fontFamily: "Inter_700Bold" },
+
+  headlineLarge:  { fontFamily: "Inter_700Bold" },
+  headlineMedium: { fontFamily: "Inter_700Bold" },
+  headlineSmall:  { fontFamily: "Inter_600SemiBold" },
+
+  titleLarge:     { fontFamily: "Inter_700Bold" },
+  titleMedium:    { fontFamily: "Inter_600SemiBold" },
+  titleSmall:     { fontFamily: "Inter_600SemiBold" },
+
+  labelLarge:     { fontFamily: "Inter_600SemiBold" },
+  labelMedium:    { fontFamily: "Inter_600SemiBold" },
+  labelSmall:     { fontFamily: "Inter_500Medium" },
+
+  bodyLarge:      { fontFamily: "Inter_400Regular" },
+  bodyMedium:     { fontFamily: "Inter_400Regular" },
+  bodySmall:      { fontFamily: "Inter_400Regular" },
+} as const;
+
+const fonts = configureFonts({ config: interConfig });
+
 
 export const palette = {
   // Blue (Primary)
@@ -90,6 +115,7 @@ export const slotlyTheme = {
     outline: palette.gray[300],
     outlineVariant: palette.gray[200],
   },
+  fonts,
 } as const
 
 export type SlotlyTheme = typeof slotlyTheme
