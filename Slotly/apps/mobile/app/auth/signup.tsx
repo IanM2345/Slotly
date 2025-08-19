@@ -5,6 +5,8 @@ import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, Touchable
 import { Text, TextInput, Button, useTheme, Surface, IconButton, Checkbox } from "react-native-paper"
 import { useRouter } from "expo-router"
 import { SafeAreaView } from "react-native-safe-area-context"
+import { signupInitiate } from "../../lib/api/modules/auth"
+import { storage } from "../../lib/utilis/storage"
 
 export default function SignupScreen() {
   const theme = useTheme()
@@ -22,52 +24,33 @@ export default function SignupScreen() {
   const [acceptedTerms, setAcceptedTerms] = useState(false)
   const [loading, setLoading] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [serverError, setServerError] = useState<string | null>(null)
 
   const updateField = (field: keyof typeof formData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
-    if (errors[field]) {
-      setErrors((prev) => ({ ...prev, [field]: "" }))
-    }
+    if (errors[field]) setErrors((prev) => ({ ...prev, [field]: "" }))
+    if (serverError) setServerError(null)
   }
 
   const validateForm = () => {
     const newErrors: Record<string, string> = {}
 
-    if (!formData.firstName.trim()) {
-      newErrors.firstName = "First name is required"
-    }
+    if (!formData.firstName.trim()) newErrors.firstName = "First name is required"
+    if (!formData.lastName.trim()) newErrors.lastName = "Last name is required"
 
-    if (!formData.lastName.trim()) {
-      newErrors.lastName = "Last name is required"
-    }
+    if (!formData.email.trim()) newErrors.email = "Email is required"
+    else if (!/\S+@\S+\.\S+/.test(formData.email)) newErrors.email = "Please enter a valid email"
 
-    if (!formData.email.trim()) {
-      newErrors.email = "Email is required"
-    } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
-      newErrors.email = "Please enter a valid email"
-    }
+    if (!formData.phone.trim()) newErrors.phone = "Phone number is required"
+    else if (!/^\+?[\d\s-()]+$/.test(formData.phone)) newErrors.phone = "Please enter a valid phone number"
 
-    if (!formData.phone.trim()) {
-      newErrors.phone = "Phone number is required"
-    } else if (!/^\+?[\d\s-()]+$/.test(formData.phone)) {
-      newErrors.phone = "Please enter a valid phone number"
-    }
+    if (!formData.password.trim()) newErrors.password = "Password is required"
+    else if (formData.password.length < 8) newErrors.password = "Password must be at least 8 characters"
 
-    if (!formData.password.trim()) {
-      newErrors.password = "Password is required"
-    } else if (formData.password.length < 8) {
-      newErrors.password = "Password must be at least 8 characters"
-    }
+    if (!formData.confirmPassword.trim()) newErrors.confirmPassword = "Please confirm your password"
+    else if (formData.password !== formData.confirmPassword) newErrors.confirmPassword = "Passwords do not match"
 
-    if (!formData.confirmPassword.trim()) {
-      newErrors.confirmPassword = "Please confirm your password"
-    } else if (formData.password !== formData.confirmPassword) {
-      newErrors.confirmPassword = "Passwords do not match"
-    }
-
-    if (!acceptedTerms) {
-      newErrors.terms = "You must accept the Terms & Privacy Policy"
-    }
+    if (!acceptedTerms) newErrors.terms = "You must accept the Terms & Privacy Policy"
 
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
@@ -75,35 +58,85 @@ export default function SignupScreen() {
 
   const handleContinue = async () => {
     if (!validateForm()) return
-
     setLoading(true)
+    setServerError(null)
+    
     try {
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 1500))
+      const { firstName, lastName, email, phone, password } = formData
+      
+      // Prepare the full name as expected by the API
+      const fullName = `${firstName.trim()} ${lastName.trim()}`
+      
+      const res = await signupInitiate({
+        firstName,
+        lastName,
+        email: email.trim(),
+        phone: phone.trim(),
+        password,
+      })
 
-      // Navigate to OTP verification
-      router.push(`/auth/otp?email=${encodeURIComponent(formData.email)}`) 
-    } catch (error) {
-      console.error("Signup error:", error)
+      if (res?.error) {
+        setServerError(res.error || "Signup failed. Please try again.")
+        return
+      }
+
+      // Store all necessary data for OTP verification
+      const signupData = {
+        email: email.trim(),
+        password: password, // Store the actual password for OTP verification
+        name: fullName, // Store full name as expected by verify endpoint
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        phone: phone.trim(),
+        sessionData: res?.sessionData, // Store any session data from the response
+        userId: res?.userId, // Store userId if provided
+        timestamp: Date.now(), // Add timestamp for expiry checking
+      }
+
+      // Save all signup data for the OTP screen
+      await storage.setJSON("signupData", signupData)
+
+      // Also save sessionData separately if it exists (for backward compatibility)
+      if (res?.sessionData) {
+        await storage.setJSON("signupSessionData", res.sessionData)
+      }
+
+      // Navigate to OTP screen with email and userId
+      const params: Record<string, string> = { 
+        email: email.trim(),
+        flow: "signup" // Add flow parameter to distinguish signup from other flows
+      }
+      
+      if (res?.userId) {
+        params.userId = String(res.userId)
+      }
+
+      console.log("Navigating to OTP with params:", params)
+      router.push({ pathname: "/auth/otp", params })
+      
+    } catch (e: any) {
+      console.error("Signup error:", e)
+      setServerError(e?.response?.data?.error || e?.message || "Something went wrong. Please try again.")
     } finally {
       setLoading(false)
     }
   }
 
-  const handleSocialLogin = (provider: 'google' | 'facebook' | 'apple') => {
-    // Implement social login logic here
+  const handleSocialLogin = (provider: "google" | "facebook" | "apple") => {
     console.log(`Login with ${provider}`)
+    // TODO: Implement social login
   }
 
-  const handleSignIn = () => {
-    router.push("../auth/login") 
-  }
+  const handleSignIn = () => router.push("../auth/login")
+  const handleBack = () => router.back()
 
-  const handleBack = () => {
-    router.back()
-  }
-
-  const isFormValid = acceptedTerms && Object.values(formData).every((value) => value.trim() !== "")
+  const isFormValid =
+    acceptedTerms && 
+    Object.values(formData).every((v) => String(v).trim() !== "") &&
+    formData.password === formData.confirmPassword &&
+    formData.password.length >= 8 &&
+    /\S+@\S+\.\S+/.test(formData.email) &&
+    /^\+?[\d\s-()]+$/.test(formData.phone)
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -118,14 +151,9 @@ export default function SignupScreen() {
               onPress={handleBack}
               style={styles.backButton}
             />
-            
-            {/* Slotly Logo */}
             <View style={styles.logoContainer}>
-              <Text style={[styles.logoText, { color: '#004AAD' }]}>
-                SLOTLY
-              </Text>
+              <Text style={[styles.logoText, { color: "#004AAD" }]}>SLOTLY</Text>
             </View>
-            
             <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onBackground }]}>
               Create Your Account
             </Text>
@@ -133,25 +161,25 @@ export default function SignupScreen() {
 
           {/* Social Login Options */}
           <View style={styles.socialContainer}>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.socialButton, { borderColor: theme.colors.outline }]}
-              onPress={() => handleSocialLogin('google')}
+              onPress={() => handleSocialLogin("google")}
             >
               <Text style={styles.socialButtonText}>Continue with Google</Text>
             </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={[styles.socialButton, { borderColor: theme.colors.outline, backgroundColor: '#1877F2' }]}
-              onPress={() => handleSocialLogin('facebook')}
+
+            <TouchableOpacity
+              style={[styles.socialButton, { borderColor: theme.colors.outline, backgroundColor: "#1877F2" }]}
+              onPress={() => handleSocialLogin("facebook")}
             >
-              <Text style={[styles.socialButtonText, { color: '#FFFFFF' }]}>Continue with Facebook</Text>
+              <Text style={[styles.socialButtonText, { color: "#FFFFFF" }]}>Continue with Facebook</Text>
             </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={[styles.socialButton, { borderColor: theme.colors.outline, backgroundColor: '#000000' }]}
-              onPress={() => handleSocialLogin('apple')}
+
+            <TouchableOpacity
+              style={[styles.socialButton, { borderColor: theme.colors.outline, backgroundColor: "#000000" }]}
+              onPress={() => handleSocialLogin("apple")}
             >
-              <Text style={[styles.socialButtonText, { color: '#FFFFFF' }]}>Continue with Apple</Text>
+              <Text style={[styles.socialButtonText, { color: "#FFFFFF" }]}>Continue with Apple</Text>
             </TouchableOpacity>
           </View>
 
@@ -171,36 +199,37 @@ export default function SignupScreen() {
                     mode="outlined"
                     label="First Name"
                     value={formData.firstName}
-                    onChangeText={(text) => updateField("firstName", text)}
+                    onChangeText={(t) => updateField("firstName", t)}
                     autoCapitalize="words"
                     autoComplete="given-name"
                     error={!!errors.firstName}
                     style={styles.input}
                     left={<TextInput.Icon icon="account" />}
                   />
-                  {errors.firstName && (
+                  {errors.firstName ? (
                     <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
                       {errors.firstName}
                     </Text>
-                  )}
+                  ) : null}
                 </View>
-                
+
                 <View style={styles.nameField}>
                   <TextInput
                     mode="outlined"
                     label="Last Name"
                     value={formData.lastName}
-                    onChangeText={(text) => updateField("lastName", text)}
+                    onChangeText={(t) => updateField("lastName", t)}
                     autoCapitalize="words"
                     autoComplete="family-name"
                     error={!!errors.lastName}
                     style={styles.input}
+                    left={<TextInput.Icon icon="account" />}
                   />
-                  {errors.lastName && (
+                  {errors.lastName ? (
                     <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
                       {errors.lastName}
                     </Text>
-                  )}
+                  ) : null}
                 </View>
               </View>
 
@@ -208,7 +237,7 @@ export default function SignupScreen() {
                 mode="outlined"
                 label="Email Address"
                 value={formData.email}
-                onChangeText={(text) => updateField("email", text)}
+                onChangeText={(t) => updateField("email", t)}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 autoComplete="email"
@@ -216,34 +245,34 @@ export default function SignupScreen() {
                 style={styles.input}
                 left={<TextInput.Icon icon="email" />}
               />
-              {errors.email && (
+              {errors.email ? (
                 <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
                   {errors.email}
                 </Text>
-              )}
+              ) : null}
 
               <TextInput
                 mode="outlined"
                 label="Phone Number"
                 value={formData.phone}
-                onChangeText={(text) => updateField("phone", text)}
+                onChangeText={(t) => updateField("phone", t)}
                 keyboardType="phone-pad"
                 autoComplete="tel"
                 error={!!errors.phone}
                 style={styles.input}
                 left={<TextInput.Icon icon="phone" />}
               />
-              {errors.phone && (
+              {errors.phone ? (
                 <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
                   {errors.phone}
                 </Text>
-              )}
+              ) : null}
 
               <TextInput
                 mode="outlined"
                 label="Password"
                 value={formData.password}
-                onChangeText={(text) => updateField("password", text)}
+                onChangeText={(t) => updateField("password", t)}
                 secureTextEntry={!showPassword}
                 autoComplete="new-password"
                 error={!!errors.password}
@@ -256,17 +285,17 @@ export default function SignupScreen() {
                   />
                 }
               />
-              {errors.password && (
+              {errors.password ? (
                 <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
                   {errors.password}
                 </Text>
-              )}
+              ) : null}
 
               <TextInput
                 mode="outlined"
                 label="Confirm Password"
                 value={formData.confirmPassword}
-                onChangeText={(text) => updateField("confirmPassword", text)}
+                onChangeText={(t) => updateField("confirmPassword", t)}
                 secureTextEntry={!showConfirmPassword}
                 autoComplete="new-password"
                 error={!!errors.confirmPassword}
@@ -279,11 +308,11 @@ export default function SignupScreen() {
                   />
                 }
               />
-              {errors.confirmPassword && (
+              {errors.confirmPassword ? (
                 <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
                   {errors.confirmPassword}
                 </Text>
-              )}
+              ) : null}
 
               {/* Terms & Privacy Checkbox */}
               <View style={styles.checkboxContainer}>
@@ -302,11 +331,17 @@ export default function SignupScreen() {
                   <Text style={[styles.linkText, { color: theme.colors.primary }]}>Privacy Policy</Text>
                 </Text>
               </View>
-              {errors.terms && (
+              {errors.terms ? (
                 <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
                   {errors.terms}
                 </Text>
-              )}
+              ) : null}
+
+              {serverError ? (
+                <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
+                  {serverError}
+                </Text>
+              ) : null}
 
               <Button
                 mode="contained"
@@ -315,10 +350,7 @@ export default function SignupScreen() {
                 disabled={loading || !isFormValid}
                 style={[
                   styles.continueButton,
-                  {
-                    backgroundColor: isFormValid ? '#004AAD' : theme.colors.surfaceDisabled,
-                    opacity: isFormValid ? 1 : 0.6,
-                  },
+                  { backgroundColor: isFormValid ? "#004AAD" : theme.colors.surfaceDisabled, opacity: isFormValid ? 1 : 0.6 },
                 ]}
                 contentStyle={styles.buttonContent}
                 labelStyle={styles.buttonLabel}
@@ -332,7 +364,7 @@ export default function SignupScreen() {
           <View style={styles.footer}>
             <Text variant="bodyMedium" style={[styles.footerText, { color: theme.colors.onSurfaceVariant }]}>
               Already have an account?{" "}
-              <Text style={[styles.linkText, { color: '#004AAD' }]} onPress={handleSignIn}>
+              <Text style={[styles.linkText, { color: "#004AAD" }]} onPress={handleSignIn}>
                 Sign In
               </Text>
             </Text>
@@ -371,7 +403,7 @@ const styles = StyleSheet.create({
   logoText: {
     fontSize: 32,
     fontWeight: 'bold',
-    fontFamily: 'Impact', // You'll need to load this font
+    fontFamily: 'Impact',
     letterSpacing: 2,
   },
   title: {

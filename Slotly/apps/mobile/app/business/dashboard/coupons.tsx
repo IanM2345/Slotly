@@ -1,7 +1,7 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import { View, ScrollView, StyleSheet } from "react-native"
+import { useEffect, useMemo, useState } from "react";
+import { View, ScrollView, StyleSheet, Alert } from "react-native";
 import {
   Text,
   Surface,
@@ -10,102 +10,94 @@ import {
   Button,
   useTheme,
   Menu,
-} from "react-native-paper"
-import { useRouter } from "expo-router"
-import { useTier } from "../../../context/TierContext"
-import { VerificationGate } from "../../../components/VerificationGate"
-import { LockedFeature } from "../../../components/LockedFeature"
-import { Section } from "../../../components/Section"
-import { FilterChipsRow } from "../../../components/FilterChipsRow"
-import { StatusPill } from "../../../components/StatusPill"
-import { ConfirmDialog } from "../../../components/ConfirmDialog"
-import { getCoupons } from "../../../lib/api/manager"
-import type { Coupon } from "../../../lib/types"
+  Dialog,
+  Portal,
+  TextInput,
+} from "react-native-paper";
+import { useRouter } from "expo-router";
+import { useTier } from "../../../context/TierContext";
+import { VerificationGate } from "../../../components/VerificationGate";
+import { LockedFeature } from "../../../components/LockedFeature";
+import { Section } from "../../../components/Section";
+import { FilterChipsRow } from "../../../components/FilterChipsRow";
+import { StatusPill } from "../../../components/StatusPill";
+import { ConfirmDialog } from "../../../components/ConfirmDialog";
+import { listCoupons, createCoupon, deleteCoupon } from "../../../lib/api/modules/manager"; // ← real endpoints :contentReference[oaicite:5]{index=5}
+
+type CouponRow = {
+  id: string;
+  code: string;
+  description?: string | null;
+  discount: number;          // numeric amount or percent
+  isPercentage: boolean;
+  expiresAt: string;         // ISO string
+  createdAt?: string;
+  userCoupons?: Array<{ usedAt: string | null }>;
+  usageCount?: number;       // backend GET adds this
+  redeemedUsers?: number;    // backend GET adds this
+};
+
+type FilterKey = "All" | "Active" | "Expired" | "Expiring Soon";
 
 export default function CouponsScreen() {
-  const router = useRouter()
-  const theme = useTheme()
-  const { features } = useTier()
-  const [loading, setLoading] = useState(true)
-  const [coupons, setCoupons] = useState<Coupon[]>([])
-  const [selectedFilter, setSelectedFilter] = useState(["All"])
-  const [menuVisible, setMenuVisible] = useState<string | null>(null)
-  const [confirmDialog, setConfirmDialog] = useState<{
-    visible: boolean
-    title: string
-    message: string
-    onConfirm: () => void
-  }>({
+  const router = useRouter();
+  const theme = useTheme();
+  const { features } = useTier();
+
+  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<CouponRow[]>([]);
+  const [selectedFilter, setSelectedFilter] = useState<FilterKey[]>(["All"]);
+  const [menuVisible, setMenuVisible] = useState<string | null>(null);
+
+  // Create dialog state
+  const [showCreate, setShowCreate] = useState(false);
+  const [code, setCode] = useState("");
+  const [desc, setDesc] = useState("");
+  const [discount, setDiscount] = useState<string>("10");
+  const [isPct, setIsPct] = useState(true);
+  const [expires, setExpires] = useState<string>(""); // YYYY-MM-DD
+
+  // Confirm dialog
+  const [confirmDialog, setConfirmDialog] = useState({
     visible: false,
     title: "",
     message: "",
     onConfirm: () => {},
-  })
+  });
 
   useEffect(() => {
-    if (features.advancedBooking) {
-      loadCoupons()
+    if (features.canUseCoupons) {
+      load();
     }
-  }, [features.advancedBooking, selectedFilter])
+  }, [features.canUseCoupons, selectedFilter]);
 
-  const loadCoupons = async () => {
-    setLoading(true)
+  async function load() {
+    setLoading(true);
     try {
-      const couponsData = await getCoupons("business-1")
-      let filtered = couponsData
+      // Server can filter active/expired/used; we also do a client filter for "Expiring Soon"
+      const f = selectedFilter[0];
+      const params: any = {};
+      if (f === "Active") params.active = true;
+      if (f === "Expired") params.expired = true;
+      // "Expiring Soon" is client-side (<= 7 days)
+      const res = await listCoupons(params); // returns { coupons } on backend; module returns data.coupons array :contentReference[oaicite:6]{index=6}:contentReference[oaicite:7]{index=7}
 
-      if (selectedFilter[0] !== "All") {
-        const status = selectedFilter[0].toUpperCase().replace(" ", "_")
-        filtered = couponsData.filter((coupon) => coupon.status === status)
+      let list = Array.isArray(res) ? res : [];
+      if (f === "Expiring Soon") {
+        const now = new Date();
+        const soon = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        list = list.filter((c) => {
+          const d = new Date(c.expiresAt);
+          return d > now && d <= soon;
+        });
       }
-
-      setCoupons(filtered)
-    } catch (error) {
-      console.error("Error loading coupons:", error)
+      setItems(list);
+    } catch (e: any) {
+      console.error("Error loading coupons:", e?.message || e);
+      Alert.alert("Error", e?.message || "Failed to load coupons");
+      setItems([]);
     } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleUpgrade = () => {
-    router.push("/(business)/dashboard/billing")
-  }
-
-  const handleCouponAction = (coupon: Coupon, action: string) => {
-    setMenuVisible(null)
-
-    switch (action) {
-      case "edit":
-        console.log("Edit coupon:", coupon.id)
-        break
-      case "deactivate":
-        setConfirmDialog({
-          visible: true,
-          title: "Deactivate Coupon",
-          message: `Are you sure you want to deactivate "${coupon.name}"?`,
-          onConfirm: () => {
-            console.log("Deactivate coupon:", coupon.id)
-            setConfirmDialog((prev) => ({ ...prev, visible: false }))
-          },
-        })
-        break
-      case "extend":
-        console.log("Extend coupon:", coupon.id)
-        break
-      case "clone":
-        console.log("Clone coupon:", coupon.id)
-        break
-      case "archive":
-        setConfirmDialog({
-          visible: true,
-          title: "Archive Coupon",
-          message: `Are you sure you want to archive "${coupon.name}"?`,
-          onConfirm: () => {
-            console.log("Archive coupon:", coupon.id)
-            setConfirmDialog((prev) => ({ ...prev, visible: false }))
-          },
-        })
-        break
+      setLoading(false);
     }
   }
 
@@ -114,22 +106,92 @@ export default function CouponsScreen() {
     { key: "Active", label: "Active" },
     { key: "Expired", label: "Expired" },
     { key: "Expiring Soon", label: "Expiring Soon" },
-  ]
+  ];
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    })
+  function deriveStatus(c: CouponRow): "ACTIVE" | "EXPIRED" | "EXPIRING" {
+    const now = new Date();
+    const end = new Date(c.expiresAt);
+    if (end < now) return "EXPIRED";
+    const soon = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    return end <= soon ? "EXPIRING" : "ACTIVE";
   }
 
-  const getUsagePercentage = (coupon: Coupon) => {
-    if (!coupon.maxUses) return 0
-    return Math.round((coupon.used / coupon.maxUses) * 100)
+  const formatDate = (dateString: string) =>
+    new Date(dateString).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+
+  const usageText = (c: CouponRow) => {
+    const used = Number(c.usageCount ?? 0);
+    const users = Number(c.redeemedUsers ?? c.userCoupons?.length ?? 0);
+    return `${used} uses • ${users} customers`;
+  };
+
+  function handleUpgrade() {
+    router.push("/business/dashboard/billing");
   }
 
-  if (!features.advancedBooking) {
+  function handleCouponAction(coupon: CouponRow, action: string) {
+    setMenuVisible(null);
+    switch (action) {
+      case "edit":
+        Alert.alert("Not implemented", "Editing coupons is not available yet.");
+        break;
+      case "deactivate":
+        // No PATCH route yet; you could implement by setting expiresAt=now on backend
+        Alert.alert("Not available", "Deactivation requires an update route.");
+        break;
+      case "extend":
+        Alert.alert("Not available", "Extending requires an update route.");
+        break;
+      case "clone":
+        setShowCreate(true);
+        setCode(`${coupon.code}-COPY`);
+        setDesc(coupon.description || "");
+        setDiscount(String(coupon.discount));
+        setIsPct(Boolean(coupon.isPercentage));
+        setExpires("");
+        break;
+      case "archive":
+        setConfirmDialog({
+          visible: true,
+          title: "Archive Coupon",
+          message: `Are you sure you want to archive "${coupon.code}"?`,
+          onConfirm: async () => {
+            try {
+              await deleteCoupon(coupon.id); // backend forbids deleting used coupons :contentReference[oaicite:8]{index=8}
+              await load();
+            } catch (e: any) {
+              Alert.alert("Delete failed", e?.message || "Could not delete coupon");
+            } finally {
+              setConfirmDialog((p) => ({ ...p, visible: false }));
+            }
+          },
+        });
+        break;
+    }
+  }
+
+  async function handleCreate() {
+    try {
+      if (!code.trim() || !discount || !expires) {
+        return Alert.alert("Missing fields", "Code, discount and expiry date are required.");
+      }
+      const payload = {
+        code: code.trim(),
+        description: desc || undefined,
+        discount: Number(discount),
+        isPercentage: Boolean(isPct),
+        expiresAt: new Date(expires).toISOString(),
+      };
+      await createCoupon(payload); // POST /api/manager/coupons :contentReference[oaicite:9]{index=9}
+      setShowCreate(false);
+      setCode(""); setDesc(""); setDiscount("10"); setIsPct(true); setExpires("");
+      await load();
+    } catch (e: any) {
+      Alert.alert("Create failed", e?.message || "Could not create coupon");
+    }
+  }
+
+  if (!features.canUseCoupons) {
     return (
       <VerificationGate>
         <View style={styles.container}>
@@ -137,17 +199,16 @@ export default function CouponsScreen() {
             <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={() => router.back()} />
             <Text style={styles.title}>Coupons & Promotions</Text>
           </View>
-
           <View style={styles.lockedContainer}>
             <LockedFeature
               title="Coupons & Promotions"
-              description="Advanced marketing features are available on higher tier plans"
+              description="Coupons are available on plans that include marketing features."
               onPressUpgrade={handleUpgrade}
             />
           </View>
         </View>
       </VerificationGate>
-    )
+    );
   }
 
   if (loading) {
@@ -156,7 +217,7 @@ export default function CouponsScreen() {
         <ActivityIndicator size="large" color={theme.colors.primary} />
         <Text style={styles.loadingText}>Loading coupons...</Text>
       </View>
-    )
+    );
   }
 
   return (
@@ -172,16 +233,16 @@ export default function CouponsScreen() {
           <FilterChipsRow
             options={filterOptions}
             selectedKeys={selectedFilter}
-            onSelectionChange={setSelectedFilter}
+            onSelectionChange={(v) => setSelectedFilter(v as FilterKey[])}
             multiSelect={false}
           />
         </Section>
 
-        {/* Create Coupon Button */}
+        {/* Create Coupon */}
         <View style={styles.actionContainer}>
           <Button
             mode="contained"
-            onPress={() => console.log("Create new coupon")}
+            onPress={() => setShowCreate(true)}
             style={[styles.createButton, { backgroundColor: theme.colors.secondary }]}
             icon="plus"
           >
@@ -189,83 +250,60 @@ export default function CouponsScreen() {
           </Button>
         </View>
 
-        {/* Coupons List */}
-        <Section title={`Coupons (${coupons.length})`}>
+        {/* Coupons */}
+        <Section title={`Coupons (${items.length})`}>
           <View style={styles.couponsContainer}>
-            {coupons.length === 0 ? (
+            {items.length === 0 ? (
               <Surface style={styles.emptyState} elevation={1}>
                 <Text style={styles.emptyText}>No coupons found</Text>
                 <Text style={styles.emptySubtext}>Create your first coupon to start promoting your services</Text>
               </Surface>
             ) : (
-              coupons.map((coupon) => (
-                <Surface key={coupon.id} style={styles.couponCard} elevation={2}>
-                  <View style={styles.couponHeader}>
-                    <View style={styles.couponInfo}>
-                      <Text style={styles.couponName}>{coupon.name}</Text>
-                      <Text style={styles.couponDescription}>{coupon.description}</Text>
-                    </View>
-                    <View style={styles.couponStatus}>
-                      <StatusPill status={coupon.status} size="small" />
-                      <Menu
-                        visible={menuVisible === coupon.id}
-                        onDismiss={() => setMenuVisible(null)}
-                        anchor={
-                          <IconButton
-                            icon="dots-vertical"
-                            size={20}
-                            onPress={() => setMenuVisible(coupon.id)}
-                          />
-                        }
-                      >
-                        <Menu.Item onPress={() => handleCouponAction(coupon, "edit")} title="Edit" />
-                        {coupon.status === "ACTIVE" && (
-                          <Menu.Item onPress={() => handleCouponAction(coupon, "deactivate")} title="Deactivate" />
-                        )}
-                        {coupon.status === "EXPIRING" && (
-                          <Menu.Item onPress={() => handleCouponAction(coupon, "extend")} title="Extend" />
-                        )}
-                        <Menu.Item onPress={() => handleCouponAction(coupon, "clone")} title="Clone" />
-                        <Menu.Item onPress={() => handleCouponAction(coupon, "archive")} title="Archive" />
-                      </Menu>
-                    </View>
-                  </View>
-
-                  <View style={styles.couponMetrics}>
-                    <View style={styles.metric}>
-                      <Text style={styles.metricValue}>{coupon.discount}</Text>
-                      <Text style={styles.metricLabel}>Discount</Text>
-                    </View>
-                    <View style={styles.metric}>
-                      <Text style={styles.metricValue}>{coupon.used}</Text>
-                      <Text style={styles.metricLabel}>Used</Text>
-                    </View>
-                    <View style={styles.metric}>
-                      <Text style={styles.metricValue}>{formatDate(coupon.expires)}</Text>
-                      <Text style={styles.metricLabel}>Expires</Text>
-                    </View>
-                  </View>
-
-                  {coupon.maxUses && (
-                    <View style={styles.usageBar}>
-                      <View style={styles.usageBarBackground}>
-                        <View
-                          style={[
-                            styles.usageBarFill,
-                            {
-                              width: `${getUsagePercentage(coupon)}%`,
-                              backgroundColor: theme.colors.primary,
-                            },
-                          ]}
-                        />
+              items.map((coupon) => {
+                const status = deriveStatus(coupon);
+                return (
+                  <Surface key={coupon.id} style={styles.couponCard} elevation={2}>
+                    <View style={styles.couponHeader}>
+                      <View style={styles.couponInfo}>
+                        <Text style={styles.couponName}>{coupon.code}</Text>
+                        {!!coupon.description && <Text style={styles.couponDescription}>{coupon.description}</Text>}
                       </View>
-                      <Text style={styles.usageText}>
-                        {coupon.used} / {coupon.maxUses} uses ({getUsagePercentage(coupon)}%)
-                      </Text>
+                      <View style={styles.couponStatus}>
+                        <StatusPill status={status} size="small" />
+                        <Menu
+                          visible={menuVisible === coupon.id}
+                          onDismiss={() => setMenuVisible(null)}
+                          anchor={
+                            <IconButton icon="dots-vertical" size={20} onPress={() => setMenuVisible(coupon.id)} />
+                          }
+                        >
+                          <Menu.Item onPress={() => handleCouponAction(coupon, "edit")} title="Edit" />
+                          <Menu.Item onPress={() => handleCouponAction(coupon, "extend")} title="Extend" />
+                          <Menu.Item onPress={() => handleCouponAction(coupon, "clone")} title="Clone" />
+                          <Menu.Item onPress={() => handleCouponAction(coupon, "archive")} title="Archive" />
+                        </Menu>
+                      </View>
                     </View>
-                  )}
-                </Surface>
-              ))
+
+                    <View style={styles.couponMetrics}>
+                      <View style={styles.metric}>
+                        <Text style={styles.metricValue}>
+                          {coupon.isPercentage ? `${coupon.discount}% off` : `KSh ${Number(coupon.discount).toLocaleString()}`}
+                        </Text>
+                        <Text style={styles.metricLabel}>Discount</Text>
+                      </View>
+                      <View style={styles.metric}>
+                        <Text style={styles.metricValue}>{usageText(coupon)}</Text>
+                        <Text style={styles.metricLabel}>Usage</Text>
+                      </View>
+                      <View style={styles.metric}>
+                        <Text style={styles.metricValue}>{formatDate(coupon.expiresAt)}</Text>
+                        <Text style={styles.metricLabel}>Expires</Text>
+                      </View>
+                    </View>
+                  </Surface>
+                );
+              })
             )}
           </View>
         </Section>
@@ -276,14 +314,52 @@ export default function CouponsScreen() {
           message={confirmDialog.message}
           onConfirm={confirmDialog.onConfirm}
           onCancel={() => setConfirmDialog((prev) => ({ ...prev, visible: false }))}
-          destructive={confirmDialog.title.includes("Archive") || confirmDialog.title.includes("Deactivate")}
+          destructive
         />
+
+        {/* Create dialog */}
+        <Portal>
+          <Dialog visible={showCreate} onDismiss={() => setShowCreate(false)}>
+            <Dialog.Title>Create Coupon</Dialog.Title>
+            <Dialog.Content>
+              <TextInput label="Code" value={code} onChangeText={setCode} autoCapitalize="characters" />
+              <TextInput label="Description" value={desc} onChangeText={setDesc} style={{ marginTop: 8 }} />
+              <TextInput
+                label={isPct ? "Discount (%)" : "Discount (KES)"}
+                keyboardType="numeric"
+                value={discount}
+                onChangeText={setDiscount}
+                style={{ marginTop: 8 }}
+              />
+              <TextInput
+                label="Expires (YYYY-MM-DD)"
+                placeholder="YYYY-MM-DD"
+                value={expires}
+                onChangeText={setExpires}
+                style={{ marginTop: 8 }}
+              />
+              <Button
+                mode="text"
+                onPress={() => setIsPct((v) => !v)}
+                style={{ alignSelf: "flex-start", marginTop: 4 }}
+              >
+                {isPct ? "Use fixed amount" : "Use percentage"}
+              </Button>
+            </Dialog.Content>
+            <Dialog.Actions>
+              <Button onPress={() => setShowCreate(false)}>Cancel</Button>
+              <Button onPress={handleCreate}>Create</Button>
+            </Dialog.Actions>
+          </Dialog>
+        </Portal>
 
         <View style={styles.bottomSpacing} />
       </ScrollView>
     </VerificationGate>
-  )
+  );
 }
+
+
 
 const styles = StyleSheet.create({
   container: {

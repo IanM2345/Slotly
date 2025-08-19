@@ -15,6 +15,7 @@ export type StatusType =
   | "ACTIVE"
   | "EXPIRED"
   | "EXPIRING"
+  | "RESCHEDULED"
 
 interface StatusPillProps {
   status: StatusType

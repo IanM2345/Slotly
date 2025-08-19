@@ -1,8 +1,9 @@
+// apps/mobile/app/business/dashboard/analytics.tsx
 "use client"
 
-import { useEffect, useState } from "react"
-import { View, ScrollView, StyleSheet } from "react-native"
-import { Text, Surface, ActivityIndicator, IconButton, Button, useTheme } from "react-native-paper"
+import { useEffect, useMemo, useState, useCallback } from "react"
+import { View, ScrollView, StyleSheet, Dimensions, Platform } from "react-native"
+import { Text, Surface, ActivityIndicator, IconButton, Button, useTheme, TextInput } from "react-native-paper"
 import { useRouter } from "expo-router"
 import { useTier } from "../../../context/TierContext"
 import { useVerification } from "../../../context/VerificationContext"
@@ -11,87 +12,417 @@ import { LockedFeature } from "../../../components/LockedFeature"
 import { KpiCard } from "../../../components/KpiCard"
 import { Section } from "../../../components/Section"
 import { FilterChipsRow } from "../../../components/FilterChipsRow"
-import { getPerformance } from "../../../lib/api/manager"
-import type { PerformanceData } from "../../../lib/types"
+
+// API
+import { getAnalytics, getAnalyticsCsv } from "../../../lib/api/modules/manager"
+
+// File export
+import * as FileSystem from "expo-file-system"
+import * as Sharing from "expo-sharing"
+
+// Date pickers
+import DateTimePicker from "@react-native-community/datetimepicker"
+
+// Charts
+import Svg from "react-native-svg"
+import {
+  VictoryAxis,
+  VictoryBar,
+  VictoryChart,
+  VictoryGroup,
+  VictoryLine,
+  VictoryPie,
+  VictoryLegend,
+  VictoryLabel,
+  VictoryTheme,
+  // VictoryTheme (only exists on web build)
+} from "victory-native";
+
+
+// Types
+interface ServiceData {
+  name: string
+  count: number
+}
+
+interface StaffPerformanceData {
+  name: string
+  performanceScore: number
+}
+
+interface AnalyticsData {
+  revenue?: Record<string, number>
+  bookings?: Record<string, number>
+  clients?: number
+  popularServices?: ServiceData[]
+  staffPerformance?: StaffPerformanceData[]
+  noShows?: Record<string, number>
+}
+
+interface AnalyticsResponse {
+  analytics: AnalyticsData
+  meta: {
+    startDate: string
+    endDate: string
+    view: string
+  }
+}
+
+interface KpiData {
+  label: string
+  value: string
+  caption: string
+  icon: string
+  color: string
+}
+
+interface ChartPoint {
+  x: string
+  y: number
+}
+
+interface PieDataPoint {
+  x: string
+  y: number
+  label: string
+}
+
+interface GroupedBarData {
+  x: string[]
+  a: number[]
+  b: number[]
+}
+
+// Constants
+const screenW = Dimensions.get("window").width
+const chartW = Math.min(screenW - 32, 720)
+
+type ViewKey = "DAILY" | "WEEKLY" | "MONTHLY"
+const viewToQuery = (v: ViewKey): string => v.toLowerCase()
+
+// Utility functions
+const fmtDate = (d?: Date | null): string | undefined => {
+  if (!d) return undefined
+  try {
+    return d.toISOString().slice(0, 10)
+  } catch (error) {
+    console.warn('Invalid date provided to fmtDate:', d)
+    return undefined
+  }
+}
+
+const labelDate = (d?: Date | null): string => {
+  if (!d) return "—"
+  try {
+    return d.toDateString()
+  } catch (error) {
+    console.warn('Invalid date provided to labelDate:', d)
+    return "—"
+  }
+}
+
+const isValidNumber = (value: unknown): value is number => {
+  return typeof value === 'number' && !isNaN(value) && isFinite(value)
+}
 
 export default function AnalyticsScreen() {
   const router = useRouter()
   const theme = useTheme()
   const { features } = useTier()
   const { isVerified } = useVerification()
+
   const [loading, setLoading] = useState(true)
-  const [performanceData, setPerformanceData] = useState<PerformanceData | null>(null)
-  const [selectedPeriod, setSelectedPeriod] = useState(["MONTHLY"])
-  const [selectedMetrics, setSelectedMetrics] = useState(["revenue", "bookings"])
+  const [error, setError] = useState<string | null>(null)
+
+  const [selectedPeriod, setSelectedPeriod] = useState<ViewKey[]>(["MONTHLY"])
+  const [selectedMetrics, setSelectedMetrics] = useState<string[]>([
+    "revenue",
+    "bookings",
+    "clients",
+    "services",
+    "staffPerformance",
+    "noShows",
+  ])
+
+  const [startDate, setStartDate] = useState<Date | null>(null)
+  const [endDate, setEndDate] = useState<Date | null>(null)
+  const [showStartPicker, setShowStartPicker] = useState(false)
+  const [showEndPicker, setShowEndPicker] = useState(false)
+
+  const [data, setData] = useState<AnalyticsResponse | null>(null)
+
+  // Cleanup date pickers on unmount
+  useEffect(() => {
+    return () => {
+      setShowStartPicker(false)
+      setShowEndPicker(false)
+    }
+  }, [])
+
+  const loadAnalytics = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await getAnalytics({
+        view: viewToQuery(selectedPeriod[0]),
+        metrics: selectedMetrics.join(","),
+        startDate: fmtDate(startDate),
+        endDate: fmtDate(endDate),
+        smoothing: "false",
+        staffLimit: 8,
+      })
+      setData(res)
+    } catch (e: unknown) {
+      const errorMessage = e instanceof Error ? e.message : "Failed to load analytics"
+      console.error("Error loading analytics:", e)
+      setError(errorMessage)
+    } finally {
+      setLoading(false)
+    }
+  }, [selectedPeriod, selectedMetrics, startDate, endDate])
 
   useEffect(() => {
     if (features.analytics && isVerified) {
       loadAnalytics()
     }
-  }, [features.analytics, isVerified, selectedPeriod])
-
-  const loadAnalytics = async () => {
-    setLoading(true)
-    try {
-      const data = await getPerformance("business-1", {
-        period: selectedPeriod[0] as any,
-        metrics: selectedMetrics,
-      })
-      setPerformanceData(data)
-    } catch (error) {
-      console.error("Error loading analytics:", error)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleUpgrade = () => {
-    router.push("/business/dashboard/billing")
-  }
-
-  const handleExportCSV = () => {
-    console.log("Export CSV")
-    // TODO: Implement CSV export
-  }
-
-  const handleGenerateReport = () => {
-    console.log("Generate Report")
-    // TODO: Navigate to reports
-    router.push("/business/dashboard/reports")
-  }
+  }, [features.analytics, isVerified, loadAnalytics])
 
   const periodOptions = [
     { key: "DAILY", label: "Daily" },
     { key: "WEEKLY", label: "Weekly" },
     { key: "MONTHLY", label: "Monthly" },
-  ]
+  ] as const
 
   const metricOptions = [
     { key: "revenue", label: "Revenue" },
     { key: "bookings", label: "Bookings" },
     { key: "clients", label: "Clients" },
-    { key: "staff", label: "Staff Performance" },
+    { key: "services", label: "Services" },
+    { key: "staffPerformance", label: "Staff Performance" },
+    { key: "noShows", label: "No-Shows" },
   ]
 
-  const renderPlaceholderChart = (title: string, description: string) => (
-    <Surface style={styles.chartContainer} elevation={2}>
-      <Text style={styles.chartTitle}>{title}</Text>
-      <View style={styles.placeholderChart}>
-        <Text style={styles.placeholderText}>{description}</Text>
-        <Text style={styles.placeholderSubtext}>Chart visualization will appear here</Text>
-      </View>
-    </Surface>
-  )
+  // Helper functions for data transformation
+  const dictToSeries = useCallback((d?: Record<string, number>): ChartPoint[] => {
+    if (!d) return []
+    return Object.keys(d)
+      .sort()
+      .map((k) => ({ x: k, y: isValidNumber(d[k]) ? d[k] : 0 }))
+  }, [])
 
+  const zipTwo = useCallback((
+    dictA?: Record<string, number>,
+    dictB?: Record<string, number>
+  ): GroupedBarData => {
+    const keysA = dictA ? Object.keys(dictA) : []
+    const keysB = dictB ? Object.keys(dictB) : []
+    const keys = Array.from(new Set([...keysA, ...keysB])).sort()
+    
+    return {
+      x: keys,
+      a: keys.map((k) => isValidNumber(dictA?.[k]) ? dictA[k] : 0),
+      b: keys.map((k) => isValidNumber(dictB?.[k]) ? dictB[k] : 0),
+    }
+  }, [])
+
+  const sumDict = useCallback((d?: Record<string, number>): number => {
+    if (!d) return 0
+    return Object.values(d).reduce((acc, val) => {
+      return acc + (isValidNumber(val) ? val : 0)
+    }, 0)
+  }, [])
+
+  const bookingsByWeekday = useCallback((bookings?: Record<string, number>): ChartPoint[] => {
+    if (!bookings) return []
+    
+    const days = Array(7).fill(0) as number[]
+    
+    Object.entries(bookings).forEach(([bucket, count]) => {
+      try {
+        const date = new Date(bucket.length >= 10 ? bucket : bucket + "-01")
+        if (!isNaN(date.getTime())) {
+          const dow = date.getDay()
+          if (dow >= 0 && dow <= 6 && isValidNumber(count)) {
+            days[dow] += count
+          }
+        }
+      } catch (error) {
+        console.warn('Invalid date in bookings data:', bucket)
+      }
+    })
+    
+    const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    return labels.map((label, i) => ({ x: label, y: days[i] }))
+  }, [])
+
+  // Derived data
+  const kpis = useMemo((): KpiData[] => {
+    const a = data?.analytics || {}
+    const totalRevenue = sumDict(a.revenue)
+    const totalBookings = sumDict(a.bookings)
+    const uniqueClients = isValidNumber(a.clients) ? a.clients : 0
+    
+    const topService = Array.isArray(a.popularServices) && a.popularServices.length > 0 
+      ? a.popularServices[0] 
+      : null
+
+    return [
+      {
+        label: "Revenue",
+        value: Intl.NumberFormat(undefined, { 
+          style: "currency", 
+          currency: "USD", 
+          maximumFractionDigits: 0 
+        }).format(totalRevenue / 100),
+        caption: selectedPeriod[0],
+        icon: "cash-multiple",
+        color: "#1559C1",
+      },
+      {
+        label: "Bookings",
+        value: String(totalBookings),
+        caption: selectedPeriod[0],
+        icon: "calendar-check",
+        color: "#0E7490",
+      },
+      {
+        label: "Clients",
+        value: String(uniqueClients),
+        caption: selectedPeriod[0],
+        icon: "account-group",
+        color: "#A16207",
+      },
+      {
+        label: "Top Service",
+        value: topService ? topService.name : "—",
+        caption: topService ? `${topService.count} bookings` : "",
+        icon: "star-circle",
+        color: "#7C3AED",
+      },
+    ]
+  }, [data, selectedPeriod, sumDict])
+
+  const groupBars = useMemo((): GroupedBarData => {
+    const a = data?.analytics
+    return zipTwo(a?.revenue, a?.bookings)
+  }, [data, zipTwo])
+
+  const pieData = useMemo((): PieDataPoint[] => {
+    const list = data?.analytics?.popularServices || []
+    const total = list.reduce((s, item) => {
+      const count = isValidNumber(item?.count) ? item.count : 0
+      return s + count
+    }, 0)
+    
+    if (total === 0) return []
+    
+    return list.map((item): PieDataPoint => {
+      const count = isValidNumber(item?.count) ? item.count : 0
+      const percentage = Math.round((count / total) * 1000) / 10
+      return {
+        x: item.name || "Unknown",
+        y: count,
+        label: `${item.name || "Unknown"} ${percentage.toFixed(1)}%`,
+      }
+    })
+  }, [data])
+
+  const staffBars = useMemo((): ChartPoint[] => {
+    const list = data?.analytics?.staffPerformance || []
+    const validData = list.filter(s => s && typeof s.name === 'string' && isValidNumber(s.performanceScore))
+    const sorted = [...validData].sort((a, b) => b.performanceScore - a.performanceScore)
+    return sorted.map((s): ChartPoint => ({ 
+      x: s.name || "Unknown", 
+      y: s.performanceScore 
+    }))
+  }, [data])
+
+  const weekdaySeries = useMemo((): ChartPoint[] => {
+    return bookingsByWeekday(data?.analytics?.bookings)
+  }, [data, bookingsByWeekday])
+
+  // Event handlers
+  const handleUpgrade = useCallback(() => {
+    router.push("/business/dashboard/billing")
+  }, [router])
+
+  const handleExportCSV = useCallback(async () => {
+    try {
+      setLoading(true)
+      
+      if (!FileSystem.documentDirectory) {
+        throw new Error('File system not available')
+      }
+      
+      const params = {
+        view: viewToQuery(selectedPeriod[0]),
+        metrics: selectedMetrics.join(","),
+        startDate: fmtDate(startDate),
+        endDate: fmtDate(endDate),
+      }
+      
+      const csv = await getAnalyticsCsv(params)
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-")
+      const startKey = fmtDate(startDate) || "start"
+      const endKey = fmtDate(endDate) || "end"
+      const filename = `analytics_${params.view}_${startKey}_${endKey}_${stamp}.csv`
+      const fileUri = FileSystem.documentDirectory + filename
+
+      await FileSystem.writeAsStringAsync(fileUri, csv, {
+        encoding: FileSystem.EncodingType.UTF8,
+      })
+
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, { dialogTitle: "Export Analytics CSV" })
+      } else {
+        alert(`CSV saved to ${fileUri}`)
+      }
+    } catch (e: unknown) {
+      const errorMessage = e instanceof Error ? e.message : "Failed to export CSV"
+      console.error("CSV export failed:", e)
+      alert(errorMessage)
+    } finally {
+      setLoading(false)
+    }
+  }, [selectedPeriod, selectedMetrics, startDate, endDate])
+
+  const handleGenerateReport = useCallback(() => {
+    router.push("/business/dashboard/reports")
+  }, [router])
+
+  const handleDateRangeClear = useCallback(() => {
+    setStartDate(null)
+    setEndDate(null)
+  }, [])
+
+  const handleStartDateChange = useCallback((event: any, selectedDate?: Date) => {
+    setShowStartPicker(false)
+    if (selectedDate) {
+      setStartDate(selectedDate)
+    }
+  }, [])
+
+  const handleEndDateChange = useCallback((event: any, selectedDate?: Date) => {
+    setShowEndPicker(false)
+    if (selectedDate) {
+      setEndDate(selectedDate)
+    }
+  }, [])
+
+  // Render locked state
   if (!features.analytics || !isVerified) {
     return (
       <VerificationGate>
         <View style={styles.container}>
           <View style={styles.header}>
-            <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={() => router.back()} />
+            <IconButton 
+              icon="arrow-left" 
+              size={24} 
+              iconColor={theme.colors.onSurface} 
+              onPress={() => router.back()} 
+            />
             <Text style={styles.title}>Analytics</Text>
           </View>
-
           <View style={styles.lockedContainer}>
             <LockedFeature
               title="Analytics Dashboard"
@@ -108,50 +439,111 @@ export default function AnalyticsScreen() {
     <VerificationGate>
       <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={() => router.back()} />
+          <IconButton 
+            icon="arrow-left" 
+            size={24} 
+            iconColor={theme.colors.onSurface} 
+            onPress={() => router.back()} 
+          />
           <Text style={styles.title}>Analytics</Text>
         </View>
 
         {loading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={theme.colors.primary} />
-            <Text style={styles.loadingText}>Loading analytics...</Text>
+            <Text style={styles.loadingText}>Working…</Text>
+          </View>
+        ) : error ? (
+          <View style={styles.loadingContainer}>
+            <Text style={[styles.loadingText, { color: theme.colors.error }]}>{error}</Text>
+            <Button onPress={loadAnalytics} style={{ marginTop: 12 }}>
+              Retry
+            </Button>
           </View>
         ) : (
           <>
             {/* KPI Metrics */}
-            {performanceData && (
-              <Section title="Key Metrics">
-                <View style={styles.kpiGrid}>
-                  {performanceData.kpis.map((kpi, index) => (
-                    <View key={index} style={styles.kpiItem}>
-                      <KpiCard kpi={kpi} />
-                    </View>
-                  ))}
-                </View>
-              </Section>
-            )}
+            <Section title="Key Metrics">
+              <View style={styles.kpiGrid}>
+                {kpis.map((kpi, i) => (
+                  <View key={i} style={styles.kpiItem}>
+                    <KpiCard kpi={kpi} />
+                  </View>
+                ))}
+              </View>
+            </Section>
 
             {/* Filters */}
             <Section title="Filters">
               <View style={styles.filtersContainer}>
                 <Text style={styles.filterLabel}>Time Period</Text>
                 <FilterChipsRow
-                  options={periodOptions}
-                  selectedKeys={selectedPeriod}
-                  onSelectionChange={setSelectedPeriod}
+                  options={periodOptions as unknown as { key: string; label: string }[]}
+                  selectedKeys={selectedPeriod as unknown as string[]}
+                  onSelectionChange={(v) => setSelectedPeriod(v as ViewKey[])}
                   multiSelect={false}
                 />
+
+                <Text style={styles.filterLabel}>Date Range (optional)</Text>
+                <View style={{ gap: 8 }}>
+                  <TextInput
+                    mode="outlined"
+                    label="Start date"
+                    value={labelDate(startDate)}
+                    right={<TextInput.Icon icon="calendar" onPress={() => setShowStartPicker(true)} />}
+                    onFocus={() => setShowStartPicker(true)}
+                    editable={false}
+                  />
+                  <TextInput
+                    mode="outlined"
+                    label="End date"
+                    value={labelDate(endDate)}
+                    right={<TextInput.Icon icon="calendar" onPress={() => setShowEndPicker(true)} />}
+                    onFocus={() => setShowEndPicker(true)}
+                    editable={false}
+                  />
+                  <View style={{ flexDirection: "row", gap: 8 }}>
+                    <Button mode="text" onPress={handleDateRangeClear}>
+                      Clear
+                    </Button>
+                    <Button mode="outlined" onPress={loadAnalytics}>
+                      Apply
+                    </Button>
+                  </View>
+                </View>
+
+                {/* Native date pickers */}
+                {showStartPicker && (
+                  <DateTimePicker
+                    value={startDate ?? new Date()}
+                    mode="date"
+                    display={Platform.OS === "ios" ? "inline" : "default"}
+                    onChange={handleStartDateChange}
+                  />
+                )}
+                {showEndPicker && (
+                  <DateTimePicker
+                    value={endDate ?? new Date()}
+                    mode="date"
+                    display={Platform.OS === "ios" ? "inline" : "default"}
+                    onChange={handleEndDateChange}
+                  />
+                )}
 
                 <Text style={styles.filterLabel}>Metrics</Text>
                 <FilterChipsRow
                   options={metricOptions}
                   selectedKeys={selectedMetrics}
                   onSelectionChange={setSelectedMetrics}
-                  multiSelect={true}
+                  multiSelect
                 />
 
-                <Button mode="contained" onPress={loadAnalytics} style={styles.updateButton} loading={loading}>
+                <Button 
+                  mode="contained" 
+                  onPress={loadAnalytics} 
+                  style={styles.updateButton} 
+                  loading={loading}
+                >
                   Update Charts
                 </Button>
               </View>
@@ -160,29 +552,132 @@ export default function AnalyticsScreen() {
             {/* Charts */}
             <Section title="Performance Charts">
               <View style={styles.chartsContainer}>
-                {renderPlaceholderChart(
-                  "Revenue & Bookings Trend",
-                  "Bar chart showing revenue and booking trends over time",
-                )}
+                {/* Grouped Bar Chart */}
+                <Surface style={styles.chartContainer} elevation={2}>
+                  <Text style={styles.chartTitle}>Revenue & Bookings Trend</Text>
+                  <Svg width={chartW} height={260}>
+                    <VictoryChart
+                      width={chartW}
+                      height={260}
+                      standalone={false}
+                      theme={VictoryTheme.material}
+                      domainPadding={{ x: 24, y: 12 }}
+                    >
+                      <VictoryLegend 
+                        x={16} 
+                        y={0} 
+                        orientation="horizontal" 
+                        gutter={20} 
+                        data={[
+                          { name: "Revenue", symbol: { type: "square" } },
+                          { name: "Bookings", symbol: { type: "square" } },
+                        ]}
+                      />
+                      <VictoryAxis 
+                        tickFormat={(t: string) => String(t).slice(5)} 
+                        style={{ 
+                          tickLabels: { angle: -30, fontSize: 9, padding: 18 } 
+                        }} 
+                      />
+                      <VictoryAxis dependentAxis tickFormat={(t: number) => `${t}`} />
+                      <VictoryGroup offset={10}>
+                        <VictoryBar
+                          data={groupBars.x.map((x, i) => ({ 
+                            x, 
+                            y: Math.round((groupBars.a[i] || 0) / 100) 
+                          }))}
+                          labels={({ datum }: { datum: ChartPoint }) => (datum.y ? `$${datum.y}` : "")}
+                          labelComponent={<VictoryLabel dy={-6} style={{ fontSize: 8 }} />}
+                        />
+                        <VictoryBar
+                          data={groupBars.x.map((x, i) => ({ 
+                            x, 
+                            y: groupBars.b[i] || 0 
+                          }))}
+                          labels={({ datum }: { datum: ChartPoint }) => (datum.y ? `${datum.y}` : "")}
+                          labelComponent={<VictoryLabel dy={-6} style={{ fontSize: 8 }} />}
+                        />
+                      </VictoryGroup>
+                    </VictoryChart>
+                  </Svg>
+                </Surface>
 
-                {renderPlaceholderChart("Service Distribution", "Pie chart showing distribution of services booked")}
+                {/* Pie Chart */}
+                <Surface style={styles.chartContainer} elevation={2}>
+                  <Text style={styles.chartTitle}>Service Distribution</Text>
+                  <Svg width={chartW} height={260}>
+                    <VictoryPie
+                      standalone={false}
+                      width={chartW}
+                      height={260}
+                      data={pieData}
+                      labels={({ datum }: { datum: PieDataPoint }) => datum.label}
+                      labelPlacement="parallel"
+                      labelRadius={(props) => typeof props.radius === "number" ? props.radius * 0.7 : 0}
+                      padding={{ left: 30, right: 30, top: 10, bottom: 10 }}
+                    />
+                  </Svg>
+                </Surface>
 
-                {renderPlaceholderChart(
-                  "Staff Performance",
-                  "Horizontal bar chart comparing staff performance metrics",
-                )}
+                {/* Staff Performance Horizontal Bar Chart */}
+                <Surface style={styles.chartContainer} elevation={2}>
+                  <Text style={styles.chartTitle}>Staff Performance (Score)</Text>
+                  <Svg width={chartW} height={260}>
+                    <VictoryChart
+                      width={chartW}
+                      height={260}
+                      standalone={false}
+                      domainPadding={{ x: 20, y: 20 }}
+                      theme={VictoryTheme.material}
+                    >
+                      <VictoryAxis dependentAxis tickFormat={(t: number) => `${t}%`} />
+                      <VictoryAxis />
+                      <VictoryBar
+                        horizontal
+                        data={staffBars}
+                        labels={({ datum }: { datum: ChartPoint }) => `${datum.y}%`}
+                        labelComponent={<VictoryLabel dx={-20} style={{ fontSize: 10 }} />}
+                      />
+                    </VictoryChart>
+                  </Svg>
+                </Surface>
 
-                {renderPlaceholderChart("Weekly Pattern", "Line chart showing booking patterns throughout the week")}
+                {/* Weekly Pattern Line Chart */}
+                <Surface style={styles.chartContainer} elevation={2}>
+                  <Text style={styles.chartTitle}>Weekly Pattern (Bookings by Day)</Text>
+                  <Svg width={chartW} height={220}>
+                    <VictoryChart
+                      width={chartW}
+                      height={220}
+                      standalone={false}
+                      theme={VictoryTheme.material}
+                      domainPadding={{ x: 12, y: 10 }}
+                    >
+                      <VictoryAxis />
+                      <VictoryAxis dependentAxis />
+                      <VictoryLine
+                        interpolation="monotoneX"
+                        data={weekdaySeries}
+                        labels={({ datum }: { datum: ChartPoint }) => (datum.y ? String(datum.y) : "")}
+                        labelComponent={<VictoryLabel dy={-8} style={{ fontSize: 9 }} />}
+                      />
+                    </VictoryChart>
+                  </Svg>
+                </Surface>
               </View>
             </Section>
 
-            {/* Actions */}
+            {/* Export & Reports Actions */}
             <Section title="Export & Reports">
               <View style={styles.actionsContainer}>
-                <Button mode="outlined" onPress={handleExportCSV} style={styles.actionButton} icon="download">
+                <Button 
+                  mode="outlined" 
+                  onPress={handleExportCSV} 
+                  style={styles.actionButton} 
+                  icon="download"
+                >
                   Export CSV
                 </Button>
-
                 <Button
                   mode="contained"
                   onPress={handleGenerateReport}
@@ -272,28 +767,6 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: "#1559C1",
     marginBottom: 16,
-  },
-  placeholderChart: {
-    height: 200,
-    backgroundColor: "#F1F5F9",
-    borderRadius: 8,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 2,
-    borderColor: "#E5E7EB",
-    borderStyle: "dashed",
-  },
-  placeholderText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#6B7280",
-    textAlign: "center",
-    marginBottom: 4,
-  },
-  placeholderSubtext: {
-    fontSize: 12,
-    color: "#9CA3AF",
-    textAlign: "center",
   },
   actionsContainer: {
     flexDirection: "row",

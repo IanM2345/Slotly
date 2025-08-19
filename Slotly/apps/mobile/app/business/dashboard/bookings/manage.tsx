@@ -1,7 +1,7 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import { View, ScrollView, StyleSheet } from "react-native"
+import { useEffect, useMemo, useState } from "react";
+import { View, ScrollView, StyleSheet, Alert, Platform } from "react-native";
 import {
   Text,
   Surface,
@@ -9,160 +9,210 @@ import {
   IconButton,
   Button,
   useTheme,
+  Dialog,
   Portal,
-  Modal,
-  TextInput,
+  Chip,
   Snackbar,
-} from "react-native-paper"
-import { useRouter } from "expo-router"
-import { VerificationGate } from "../../../../components/VerificationGate"
-import { Section } from "../../../../components/Section"
-import { FilterChipsRow } from "../../../../components/FilterChipsRow"
-import { StatusPill } from "../../../../components/StatusPill"
-import { ConfirmDialog } from "../../../../components/ConfirmDialog"
-import { getBookings, createWalkInBooking, getServices, getStaffList } from "../../../../lib/api/manager"
-import type { Booking, BookingStatus, Service, Staff } from "../../../../lib/types"
+} from "react-native-paper";
+import { useRouter } from "expo-router";
+import DateTimePicker from "@react-native-community/datetimepicker";
+
+import { VerificationGate } from "../../../../components/VerificationGate";
+import { Section } from "../../../../components/Section";
+import { FilterChipsRow } from "../../../../components/FilterChipsRow";
+import { StatusPill } from "../../../../components/StatusPill";
+
+// Manager API
+import {
+  listBookings,
+  listStaff,
+  reassignBookingStaff,
+  rescheduleBooking,
+  cancelManagerBooking,
+} from "../../../../lib/api/modules/manager"; // returns bookings, and PATCH actions (reassign/reschedule/cancel) :contentReference[oaicite:3]{index=3}
+
+// Payment API (IntaSend)
+import {
+  getPaymentStatus,
+  // startBookingPayment, // not needed here
+} from "../../../../lib/api/modules/payment"; // lets us check if the booking was paid via app (provider/txRef present) :contentReference[oaicite:4]{index=4}
+
+type BookingRow = {
+  id: string;
+  status: "CONFIRMED" | "PENDING" | "CANCELLED" | "COMPLETED" | "NO_SHOW" | "RESCHEDULED";
+  startTime: string; // ISO
+  endTime?: string;  // ISO (optional)
+  user?: { id: string; name?: string; email?: string };
+  staff?: { id: string; name?: string } | null;
+  service?: { id: string; name?: string; duration?: number };
+  price?: number;
+  businessId?: string;
+  lateCancellationFee?: number | null;
+  cancellationDeadlineMinutes?: number | null;
+};
+
+type StaffLite = { id: string; name?: string };
 
 export default function BookingsManageScreen() {
-  const router = useRouter()
-  const theme = useTheme()
-  const [loading, setLoading] = useState(true)
-  const [bookings, setBookings] = useState<Booking[]>([])
-  const [services, setServices] = useState<Service[]>([])
-  const [staff, setStaff] = useState<Staff[]>([])
-  const [selectedFilters, setSelectedFilters] = useState(["All"])
-  const [showWalkInModal, setShowWalkInModal] = useState(false)
-  const [walkInForm, setWalkInForm] = useState({
-    clientName: "",
-    clientPhone: "",
-    serviceId: "",
-    staffId: "",
-    date: new Date().toISOString().split("T")[0],
-    time: "10:00",
-  })
-  const [snackbarVisible, setSnackbarVisible] = useState(false)
-  const [snackbarMessage, setSnackbarMessage] = useState("")
+  const router = useRouter();
+  const theme = useTheme();
+
+  const [loading, setLoading] = useState(true);
+  const [bookings, setBookings] = useState<BookingRow[]>([]);
+  const [filters, setFilters] = useState<string[]>(["All"]);
+  const [snackbar, setSnackbar] = useState<{ visible: boolean; msg: string }>({ visible: false, msg: "" });
+
+  // Reassign dialog
+  const [reassignOpen, setReassignOpen] = useState<null | BookingRow>(null);
+  const [staffList, setStaffList] = useState<StaffLite[]>([]);
+  const [selectedStaffId, setSelectedStaffId] = useState<string>("");
+
+  // Reschedule dialog
+  const [reschedOpen, setReschedOpen] = useState<null | BookingRow>(null);
+  const [newDate, setNewDate] = useState<Date>(new Date());
+  const [showDate, setShowDate] = useState(false);
+  const [showTime, setShowTime] = useState(false);
 
   useEffect(() => {
-    loadData()
-  }, [selectedFilters])
+    load();
+  }, [filters]);
 
-  const loadData = async () => {
-    setLoading(true)
+  async function load() {
+    setLoading(true);
     try {
-      const [bookingsData, servicesData, staffData] = await Promise.all([
-        getBookings("business-1", getBookingFilters()),
-        getServices("business-1"),
-        getStaffList("business-1"),
-      ])
-      setBookings(bookingsData.rows)
-      setServices(servicesData)
-      setStaff(staffData)
-    } catch (error) {
-      console.error("Error loading bookings:", error)
+      const params: any = {};
+      if (filters[0] === "Today") params.date = new Date().toISOString().slice(0, 10);
+      const rows = await listBookings(params); // /api/manager/bookings → { bookings } mapped to array here :contentReference[oaicite:5]{index=5}
+      setBookings(Array.isArray(rows) ? rows : []);
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert("Error", e?.message || "Failed to load bookings");
     } finally {
-      setLoading(false)
-    }
-  }
-
-  const getBookingFilters = () => {
-    const filters = selectedFilters[0]
-    switch (filters) {
-      case "Today":
-        return { range: "TODAY" as const }
-      case "Tomorrow":
-        return { range: "TOMORROW" as const }
-      case "This Week":
-        return { range: "THIS_WEEK" as const }
-      case "Confirmed":
-        return { status: "CONFIRMED" as BookingStatus }
-      case "Pending":
-        return { status: "PENDING" as BookingStatus }
-      case "Cancelled":
-        return { status: "CANCELLED" as BookingStatus }
-      default:
-        return {}
-    }
-  }
-
-  const handleCreateWalkIn = async () => {
-    if (!walkInForm.clientName || !walkInForm.clientPhone || !walkInForm.serviceId || !walkInForm.staffId) {
-      setSnackbarMessage("Please fill all required fields")
-      setSnackbarVisible(true)
-      return
-    }
-
-    try {
-      const service = services.find((s) => s.id === walkInForm.serviceId)
-      const staffMember = staff.find((s) => s.id === walkInForm.staffId)
-
-      if (!service || !staffMember) return
-
-      const newBooking = await createWalkInBooking({
-        client: {
-          name: walkInForm.clientName,
-          phone: walkInForm.clientPhone,
-        },
-        serviceId: walkInForm.serviceId,
-        serviceName: service.name,
-        staffId: walkInForm.staffId,
-        staffName: staffMember.name,
-        dateISO: walkInForm.date,
-        timeISO: walkInForm.time,
-        price: service.price,
-      })
-
-      setBookings((prev) => [newBooking, ...prev])
-      setShowWalkInModal(false)
-      setWalkInForm({
-        clientName: "",
-        clientPhone: "",
-        serviceId: "",
-        staffId: "",
-        date: new Date().toISOString().split("T")[0],
-        time: "10:00",
-      })
-      setSnackbarMessage("Walk-in booking created successfully")
-      setSnackbarVisible(true)
-    } catch (error) {
-      console.error("Error creating walk-in booking:", error)
-      setSnackbarMessage("Failed to create booking")
-      setSnackbarVisible(true)
+      setLoading(false);
     }
   }
 
   const filterOptions = [
     { key: "All", label: "All" },
     { key: "Today", label: "Today" },
-    { key: "Tomorrow", label: "Tomorrow" },
-    { key: "This Week", label: "This Week" },
     { key: "Confirmed", label: "Confirmed" },
     { key: "Pending", label: "Pending" },
     { key: "Cancelled", label: "Cancelled" },
-  ]
+    { key: "Completed", label: "Completed" },
+    { key: "No-Show", label: "No-Show" },
+  ];
 
-  const formatTime = (timeISO: string) => {
-    return new Date(`2000-01-01T${timeISO}`).toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    })
+  const filtered = useMemo(() => {
+    const f = filters[0];
+    if (f === "All" || f === "Today") return bookings;
+    const map: Record<string, BookingRow["status"]> = {
+      Confirmed: "CONFIRMED",
+      Pending: "PENDING",
+      Cancelled: "CANCELLED",
+      Completed: "COMPLETED",
+      "No-Show": "NO_SHOW",
+    };
+    const status = map[f];
+    return status ? bookings.filter((b) => b.status === status) : bookings;
+  }, [bookings, filters]);
+
+  function fmtDay(d: string) {
+    const dt = new Date(d);
+    return dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+  function fmtTime(d: string) {
+    const dt = new Date(d);
+    return dt.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   }
 
-  const formatDate = (dateISO: string) => {
-    return new Date(dateISO).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    })
+  async function openReassign(b: BookingRow) {
+    try {
+      setReassignOpen(b);
+      const resp = await listStaff(); // { approvedStaff, pendingEnrollments } per your backend :contentReference[oaicite:6]{index=6}
+      setStaffList(resp?.approvedStaff || []);
+      setSelectedStaffId(b.staff?.id || "");
+    } catch (e) {
+      console.error(e);
+    }
+  }
+  async function saveReassign() {
+    if (!reassignOpen || !selectedStaffId) return;
+    try {
+      await reassignBookingStaff({ id: reassignOpen.id, staffId: selectedStaffId });
+      setReassignOpen(null);
+      setSnackbar({ visible: true, msg: "Staff reassigned" });
+      await load();
+    } catch (e: any) {
+      Alert.alert("Reassign failed", e?.message || "Unable to reassign");
+    }
+  }
+
+  function openReschedule(b: BookingRow) {
+    setReschedOpen(b);
+    setNewDate(new Date(b.startTime));
+  }
+  async function saveReschedule() {
+    if (!reschedOpen) return;
+    try {
+      await rescheduleBooking({ id: reschedOpen.id, startTime: newDate.toISOString() });
+      setReschedOpen(null);
+      setSnackbar({ visible: true, msg: "Booking rescheduled" });
+      await load();
+    } catch (e: any) {
+      Alert.alert("Reschedule failed", e?.message || "Unable to reschedule");
+    }
+  }
+
+  // Small helper to wrap Alert into a promise for async/await ergonomics
+  function confirmAsync(title: string, message: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      Alert.alert(title, message, [
+        { text: "No", style: "cancel", onPress: () => resolve(false) },
+        { text: "Yes", style: "destructive", onPress: () => resolve(true) },
+      ]);
+    });
+  }
+
+  // Heuristic to detect "paid via app" using latest Payment row
+  function isPaidViaApp(latestPayment: any | null): boolean {
+    if (!latestPayment) return false;
+    const status = String(latestPayment.status || "").toUpperCase();
+    const providerish = latestPayment.provider || latestPayment.txRef || latestPayment.checkoutLink;
+    return status === "SUCCESS" && !!providerish; // success + has provider/txRef/link ⇒ came through app (IntaSend) :contentReference[oaicite:7]{index=7}
+  }
+
+  async function doCancel(b: BookingRow) {
+    try {
+      // 1) Check latest payment for this booking
+      const latest = await getPaymentStatus(b.id).catch(() => null); // GET /api/payments?bookingId=... (latest first) :contentReference[oaicite:8]{index=8}
+      const paidApp = isPaidViaApp(latest);
+
+      // 2) Confirm with manager; if paid via app, clearly say refund will be initiated
+      const proceed = await confirmAsync(
+        paidApp ? "Refund & Cancel" : "Cancel booking?",
+        paidApp
+          ? "This booking was paid in-app (IntaSend). A refund will be initiated before the booking is cancelled. Continue?"
+          : "Are you sure you want to cancel this booking?"
+      );
+      if (!proceed) return;
+
+      // 3) Call manager cancel endpoint — backend should perform refund first when applicable
+      const resp = await cancelManagerBooking({ id: b.id, reason: "Cancelled by manager" }); // PATCH /api/manager/bookings { action: 'cancel' } :contentReference[oaicite:9]{index=9}
+      setSnackbar({ visible: true, msg: resp?.message || (paidApp ? "Cancelled and refund initiated" : "Booking cancelled") });
+
+      await load();
+    } catch (e: any) {
+      Alert.alert("Cancel failed", e?.message || "Unable to cancel");
+    }
   }
 
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={theme.colors.primary} />
-        <Text style={styles.loadingText}>Loading bookings...</Text>
+        <Text style={styles.loadingText}>Loading bookings…</Text>
       </View>
-    )
+    );
   }
 
   return (
@@ -177,61 +227,54 @@ export default function BookingsManageScreen() {
         <Section title="Filters">
           <FilterChipsRow
             options={filterOptions}
-            selectedKeys={selectedFilters}
-            onSelectionChange={setSelectedFilters}
+            selectedKeys={filters}
+            onSelectionChange={setFilters}
             multiSelect={false}
           />
         </Section>
 
-        {/* Create Walk-in Button */}
-        <View style={styles.actionContainer}>
-          <Button
-            mode="contained"
-            onPress={() => setShowWalkInModal(true)}
-            style={[styles.walkInButton, { backgroundColor: theme.colors.secondary }]}
-            icon="plus"
-          >
-            Create Walk-in Booking
-          </Button>
-        </View>
-
         {/* Bookings List */}
-        <Section title={`Bookings (${bookings.length})`}>
+        <Section title={`Bookings (${filtered.length})`}>
           <View style={styles.bookingsContainer}>
-            {bookings.length === 0 ? (
+            {filtered.length === 0 ? (
               <Surface style={styles.emptyState} elevation={1}>
-                <Text style={styles.emptyText}>No bookings found</Text>
-                <Text style={styles.emptySubtext}>Try adjusting your filters or create a new booking</Text>
+                <Text style={styles.emptyText}>No bookings</Text>
+                <Text style={styles.emptySubtext}>Try changing filters</Text>
               </Surface>
             ) : (
-              bookings.map((booking) => (
-                <Surface key={booking.id} style={styles.bookingCard} elevation={2}>
+              filtered.map((b) => (
+                <Surface key={b.id} style={styles.bookingCard} elevation={2}>
                   <View style={styles.bookingHeader}>
-                    <View style={styles.bookingTime}>
-                      <Text style={styles.timeText}>{formatTime(booking.timeISO)}</Text>
-                      <Text style={styles.dateText}>{formatDate(booking.dateISO)}</Text>
+                    <View>
+                      <Text style={styles.timeText}>{fmtTime(b.startTime)}</Text>
+                      <Text style={styles.dateText}>{fmtDay(b.startTime)}</Text>
                     </View>
-                    <StatusPill status={booking.status} />
+                    <StatusPill status={b.status} />
                   </View>
 
                   <View style={styles.bookingDetails}>
-                    <Text style={styles.clientName}>{booking.client.name}</Text>
-                    <Text style={styles.clientPhone}>{booking.client.phone}</Text>
                     <Text style={styles.serviceInfo}>
-                      {booking.serviceName} with {booking.staffName}
+                      {b.service?.name ?? "Service"} • {b.staff?.name ?? "Unassigned"}
                     </Text>
-                    <Text style={styles.priceText}>KSh {booking.price.toLocaleString()}</Text>
+                    <Text style={styles.clientName}>{b.user?.name ?? "Customer"}</Text>
+                    {!!b.price && <Text style={styles.priceText}>KSh {b.price.toLocaleString()}</Text>}
                   </View>
 
                   <View style={styles.bookingActions}>
-                    <Button mode="outlined" compact style={styles.actionBtn}>
+                    <Button mode="outlined" compact style={styles.actionBtn} onPress={() => openReassign(b)}>
+                      Reassign
+                    </Button>
+                    <Button mode="outlined" compact style={styles.actionBtn} onPress={() => openReschedule(b)}>
                       Reschedule
                     </Button>
-                    <Button mode="outlined" compact style={styles.actionBtn}>
+                    <Button
+                      mode="contained"
+                      compact
+                      style={styles.actionBtn}
+                      onPress={() => doCancel(b)}
+                      disabled={b.status === "CANCELLED" || b.status === "COMPLETED" || b.status === "NO_SHOW"}
+                    >
                       Cancel
-                    </Button>
-                    <Button mode="contained" compact style={styles.actionBtn}>
-                      Complete
                     </Button>
                   </View>
                 </Surface>
@@ -240,77 +283,94 @@ export default function BookingsManageScreen() {
           </View>
         </Section>
 
-        {/* Walk-in Booking Modal */}
+        {/* Reassign dialog */}
         <Portal>
-          <Modal
-            visible={showWalkInModal}
-            onDismiss={() => setShowWalkInModal(false)}
-            contentContainerStyle={styles.modalContainer}
-          >
-            <Surface style={styles.modalContent} elevation={4}>
-              <Text style={styles.modalTitle}>Create Walk-in Booking</Text>
-
-              <TextInput
-                mode="outlined"
-                label="Client Name *"
-                value={walkInForm.clientName}
-                onChangeText={(text) => setWalkInForm((prev) => ({ ...prev, clientName: text }))}
-                style={styles.input}
-              />
-
-              <TextInput
-                mode="outlined"
-                label="Client Phone *"
-                value={walkInForm.clientPhone}
-                onChangeText={(text) => setWalkInForm((prev) => ({ ...prev, clientPhone: text }))}
-                keyboardType="phone-pad"
-                style={styles.input}
-              />
-
-              <TextInput
-                mode="outlined"
-                label="Date"
-                value={walkInForm.date}
-                onChangeText={(text) => setWalkInForm((prev) => ({ ...prev, date: text }))}
-                style={styles.input}
-              />
-
-              <TextInput
-                mode="outlined"
-                label="Time"
-                value={walkInForm.time}
-                onChangeText={(text) => setWalkInForm((prev) => ({ ...prev, time: text }))}
-                style={styles.input}
-              />
-
-              <View style={styles.modalActions}>
-                <Button mode="outlined" onPress={() => setShowWalkInModal(false)} style={styles.modalButton}>
-                  Cancel
-                </Button>
-                <Button mode="contained" onPress={handleCreateWalkIn} style={styles.modalButton}>
-                  Create Booking
-                </Button>
+          <Dialog visible={!!reassignOpen} onDismiss={() => setReassignOpen(null)}>
+            <Dialog.Title>Reassign Staff</Dialog.Title>
+            <Dialog.Content>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {staffList.map((s) => (
+                  <Chip
+                    key={s.id}
+                    selected={selectedStaffId === s.id}
+                    onPress={() => setSelectedStaffId(s.id)}
+                    compact
+                  >
+                    {s.name || "Staff"}
+                  </Chip>
+                ))}
               </View>
-            </Surface>
-          </Modal>
+            </Dialog.Content>
+            <Dialog.Actions>
+              <Button onPress={() => setReassignOpen(null)}>Close</Button>
+              <Button onPress={saveReassign} disabled={!selectedStaffId}>Save</Button>
+            </Dialog.Actions>
+          </Dialog>
+        </Portal>
+
+        {/* Reschedule dialog */}
+        <Portal>
+          <Dialog visible={!!reschedOpen} onDismiss={() => setReschedOpen(null)}>
+            <Dialog.Title>Reschedule</Dialog.Title>
+            <Dialog.Content>
+              <Button onPress={() => setShowDate(true)} style={{ marginBottom: 8 }}>
+                Pick Date
+              </Button>
+              <Button onPress={() => setShowTime(true)}>Pick Time</Button>
+
+              {showDate && (
+                <DateTimePicker
+                  value={newDate}
+                  mode="date"
+                  display={Platform.OS === "ios" ? "inline" : "default"}
+                  onChange={(_, d) => {
+                    setShowDate(false);
+                    if (d) {
+                      const nd = new Date(newDate);
+                      nd.setFullYear(d.getFullYear(), d.getMonth(), d.getDate());
+                      setNewDate(nd);
+                    }
+                  }}
+                />
+              )}
+              {showTime && (
+                <DateTimePicker
+                  value={newDate}
+                  mode="time"
+                  display={Platform.OS === "ios" ? "spinner" : "default"}
+                  onChange={(_, d) => {
+                    setShowTime(false);
+                    if (d) {
+                      const nd = new Date(newDate);
+                      nd.setHours(d.getHours(), d.getMinutes(), 0, 0);
+                      setNewDate(nd);
+                    }
+                  }}
+                />
+              )}
+              <Text style={{ marginTop: 12, color: "#6B7280" }}>
+                New start: {newDate.toLocaleString()}
+              </Text>
+            </Dialog.Content>
+            <Dialog.Actions>
+              <Button onPress={() => setReschedOpen(null)}>Close</Button>
+              <Button onPress={saveReschedule}>Save</Button>
+            </Dialog.Actions>
+          </Dialog>
         </Portal>
 
         <Snackbar
-          visible={snackbarVisible}
-          onDismiss={() => setSnackbarVisible(false)}
-          duration={3000}
-          action={{
-            label: "OK",
-            onPress: () => setSnackbarVisible(false),
-          }}
+          visible={snackbar.visible}
+          onDismiss={() => setSnackbar({ visible: false, msg: "" })}
+          duration={2500}
         >
-          {snackbarMessage}
+          {snackbar.msg}
         </Snackbar>
 
         <View style={styles.bottomSpacing} />
       </ScrollView>
     </VerificationGate>
-  )
+  );
 }
 
 const styles = StyleSheet.create({
@@ -340,13 +400,6 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: "bold",
     color: "#1559C1",
-  },
-  actionContainer: {
-    paddingHorizontal: 16,
-    marginBottom: 20,
-  },
-  walkInButton: {
-    borderRadius: 25,
   },
   bookingsContainer: {
     paddingHorizontal: 16,
@@ -380,9 +433,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 12,
   },
-  bookingTime: {
-    alignItems: "flex-start",
-  },
   timeText: {
     fontSize: 16,
     fontWeight: "bold",
@@ -401,11 +451,6 @@ const styles = StyleSheet.create({
     color: "#1F2937",
     marginBottom: 2,
   },
-  clientPhone: {
-    fontSize: 14,
-    color: "#6B7280",
-    marginBottom: 4,
-  },
   serviceInfo: {
     fontSize: 14,
     color: "#374151",
@@ -423,34 +468,7 @@ const styles = StyleSheet.create({
   actionBtn: {
     flex: 1,
   },
-  modalContainer: {
-    flex: 1,
-    justifyContent: "center",
-    padding: 20,
-  },
-  modalContent: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 12,
-    padding: 20,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#1559C1",
-    marginBottom: 20,
-  },
-  input: {
-    marginBottom: 16,
-  },
-  modalActions: {
-    flexDirection: "row",
-    gap: 12,
-    marginTop: 8,
-  },
-  modalButton: {
-    flex: 1,
-  },
   bottomSpacing: {
     height: 40,
   },
-})
+});

@@ -5,6 +5,8 @@ import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform } from "re
 import { Text, TextInput, Button, useTheme, Surface, IconButton } from "react-native-paper"
 import { useRouter } from "expo-router"
 import { SafeAreaView } from "react-native-safe-area-context"
+// NEW: import your API call (adjust path as needed)
+import { login } from '../../lib/api/modules/auth' // <-- adjust path to where you exported it
 
 export default function LoginScreen() {
   const theme = useTheme()
@@ -14,21 +16,17 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({})
+  // NEW: server-side error message
+  const [serverError, setServerError] = useState<string | null>(null)
 
   const validateForm = () => {
     const newErrors: { email?: string; password?: string } = {}
 
-    if (!email.trim()) {
-      newErrors.email = "Email is required"
-    } else if (!/\S+@\S+\.\S+/.test(email)) {
-      newErrors.email = "Please enter a valid email"
-    }
+    if (!email.trim()) newErrors.email = "Email is required"
+    else if (!/\S+@\S+\.\S+/.test(email)) newErrors.email = "Please enter a valid email"
 
-    if (!password.trim()) {
-      newErrors.password = "Password is required"
-    } else if (password.length < 6) {
-      newErrors.password = "Password must be at least 6 characters"
-    }
+    if (!password.trim()) newErrors.password = "Password is required"
+    else if (password.length < 6) newErrors.password = "Password must be at least 6 characters"
 
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
@@ -38,30 +36,37 @@ export default function LoginScreen() {
     if (!validateForm()) return
 
     setLoading(true)
+    setServerError(null)
     try {
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 1500))
+      // NEW: real API call; your client fn already persists tokens
+      const res = await login({ email: email.trim(), password })
+      if (res?.error) {
+        setServerError(res.error || "Invalid credentials. Please try again.")
+        return
+      }
 
-      // Navigate to business dashboard on success
-      router.replace("/business/dashboard")
-    } catch (error) {
-      console.error("Login error:", error)
+      // Optional: route by role (if API returns user.role)
+      const role = res?.user?.role
+      if (role === "BUSINESS_OWNER") {
+        router.replace("/business/dashboard")
+      } else {
+        router.replace("/(tabs)") // or wherever your customer home is
+      }
+    } catch (e: any) {
+      console.error("Login error:", e)
+      setServerError(
+        e?.response?.data?.error ||
+        e?.message ||
+        "Unable to sign in. Please try again."
+      )
     } finally {
       setLoading(false)
     }
   }
 
-  const handleForgotPassword = () => {
-    router.push("../auth/forgot-password") 
-  }
-
-  const handleCreateAccount = () => {
-    router.push("../auth/signup")  
-  }
-
-  const handleBack = () => {
-    router.back()
-  }
+  const handleForgotPassword = () => router.push("../auth/forgot-password")
+  const handleCreateAccount = () => router.push("../auth/signup")
+  const handleBack = () => router.back()
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -91,6 +96,7 @@ export default function LoginScreen() {
                 onChangeText={(text) => {
                   setEmail(text)
                   if (errors.email) setErrors((prev) => ({ ...prev, email: undefined }))
+                  if (serverError) setServerError(null) // NEW
                 }}
                 keyboardType="email-address"
                 autoCapitalize="none"
@@ -112,6 +118,7 @@ export default function LoginScreen() {
                 onChangeText={(text) => {
                   setPassword(text)
                   if (errors.password) setErrors((prev) => ({ ...prev, password: undefined }))
+                  if (serverError) setServerError(null) // NEW
                 }}
                 secureTextEntry={!showPassword}
                 autoComplete="password"
@@ -130,6 +137,13 @@ export default function LoginScreen() {
                   {errors.password}
                 </Text>
               )}
+
+              {/* NEW: server error */}
+              {serverError ? (
+                <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
+                  {serverError}
+                </Text>
+              ) : null}
 
               <Button
                 mode="text"
@@ -168,6 +182,9 @@ export default function LoginScreen() {
     </SafeAreaView>
   )
 }
+
+
+
 
 const styles = StyleSheet.create({
   container: {

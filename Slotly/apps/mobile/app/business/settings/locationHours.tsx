@@ -1,7 +1,7 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import { View, ScrollView, StyleSheet } from "react-native"
+import { useEffect, useState } from "react";
+import { View, ScrollView, StyleSheet } from "react-native";
 import {
   Text,
   Surface,
@@ -12,12 +12,11 @@ import {
   useTheme,
   Switch,
   Snackbar,
-} from "react-native-paper"
-import { useRouter } from "expo-router"
-import { VerificationGate } from "../../../components/VerificationGate"
-import { Section } from "../../../components/Section"
-import { getBusinessProfile, updateBusinessProfile } from "../../../lib/api/manager"
-import type { BusinessProfile } from "../../../lib/types"
+} from "react-native-paper";
+import { useRouter } from "expo-router";
+import { VerificationGate } from "../../../components/VerificationGate";
+import { Section } from "../../../components/Section";
+import { getBusinessProfile, updateBusinessProfile } from "../../../lib/api/modules/manager";
 
 const DAYS_OF_WEEK = [
   { key: "monday", label: "Monday" },
@@ -27,57 +26,94 @@ const DAYS_OF_WEEK = [
   { key: "friday", label: "Friday" },
   { key: "saturday", label: "Saturday" },
   { key: "sunday", label: "Sunday" },
-]
+];
+
+const DEFAULT_DAY = { open: true, start: "09:00", end: "20:00" };
+const DEFAULT_HOURS = {
+  monday: { ...DEFAULT_DAY },
+  tuesday: { ...DEFAULT_DAY },
+  wednesday: { ...DEFAULT_DAY },
+  thursday: { ...DEFAULT_DAY },
+  friday: { ...DEFAULT_DAY },
+  saturday: { ...DEFAULT_DAY },
+  sunday: { ...DEFAULT_DAY },
+};
 
 export default function LocationHoursScreen() {
-  const router = useRouter()
-  const theme = useTheme()
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [profile, setProfile] = useState<BusinessProfile | null>(null)
-  const [snackbarVisible, setSnackbarVisible] = useState(false)
-  const [snackbarMessage, setSnackbarMessage] = useState("")
+  const router = useRouter();
+  const theme = useTheme();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [profile, setProfile] = useState<any>(null);
+  const [snackbarVisible, setSnackbarVisible] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState("");
 
   useEffect(() => {
-    loadProfile()
-  }, [])
+    loadProfile();
+  }, []);
 
-  const loadProfile = async () => {
-    setLoading(true)
+  async function loadProfile() {
+    setLoading(true);
     try {
-      const profileData = await getBusinessProfile("business-1")
-      setProfile(profileData)
+      const business = await getBusinessProfile(); // GET /api/manager/me
+      setProfile({
+        id: business.id,
+        address: business.address ?? "",
+        latitude: business.latitude ?? null,
+        longitude: business.longitude ?? null,
+        hours: sanitizeHours(business.hours),
+      });
     } catch (error) {
-      console.error("Error loading profile:", error)
+      console.error("Error loading profile:", error);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
   }
 
-  const handleSave = async () => {
-    if (!profile) return
+  function sanitizeHours(hoursObj: any) {
+    const h = hoursObj && typeof hoursObj === "object" ? hoursObj : {};
+    const out: any = { ...DEFAULT_HOURS };
+    for (const d of DAYS_OF_WEEK) {
+      const val = h[d.key];
+      if (val && typeof val === "object") {
+        out[d.key] = {
+          open: !!val.open,
+          start: val.start || DEFAULT_DAY.start,
+          end: val.end || DEFAULT_DAY.end,
+        };
+      }
+    }
+    return out;
+  }
 
-    setSaving(true)
+  async function handleSave() {
+    if (!profile) return;
+    setSaving(true);
     try {
-      await updateBusinessProfile("business-1", profile)
-      setSnackbarMessage("Location and hours updated successfully")
-      setSnackbarVisible(true)
+      await updateBusinessProfile({
+        address: profile.address,
+        latitude: profile.latitude,
+        longitude: profile.longitude,
+        hours: profile.hours,
+      }); // PUT /api/manager/me
+      setSnackbarMessage("Location and hours updated successfully");
+      setSnackbarVisible(true);
     } catch (error) {
-      console.error("Error updating profile:", error)
-      setSnackbarMessage("Failed to update information")
-      setSnackbarVisible(true)
+      console.error("Error updating profile:", error);
+      setSnackbarMessage("Failed to update information");
+      setSnackbarVisible(true);
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
   }
 
-  const updateAddress = (address: string) => {
-    if (!profile) return
-    setProfile({ ...profile, address })
+  function updateAddress(address: string) {
+    if (!profile) return;
+    setProfile({ ...profile, address });
   }
 
-  const updateDayHours = (day: string, field: "open" | "start" | "end", value: boolean | string) => {
-    if (!profile) return
+  function updateDayHours(day: string, field: "open" | "start" | "end", value: boolean | string) {
+    if (!profile) return;
     setProfile({
       ...profile,
       hours: {
@@ -87,7 +123,7 @@ export default function LocationHoursScreen() {
           [field]: value,
         },
       },
-    })
+    });
   }
 
   if (loading) {
@@ -96,7 +132,7 @@ export default function LocationHoursScreen() {
         <ActivityIndicator size="large" color={theme.colors.primary} />
         <Text style={styles.loadingText}>Loading information...</Text>
       </View>
-    )
+    );
   }
 
   if (!profile) {
@@ -107,7 +143,7 @@ export default function LocationHoursScreen() {
           Retry
         </Button>
       </View>
-    )
+    );
   }
 
   return (
@@ -136,18 +172,18 @@ export default function LocationHoursScreen() {
         <Section title="Operating Hours">
           <Surface style={styles.hoursCard} elevation={2}>
             {DAYS_OF_WEEK.map((day) => {
-              const dayHours = profile.hours[day.key]
+              const dayHours = profile.hours[day.key];
               return (
                 <View key={day.key} style={styles.dayRow}>
                   <View style={styles.dayHeader}>
                     <Text style={styles.dayLabel}>{day.label}</Text>
                     <Switch
-                      value={dayHours?.open || false}
+                      value={!!dayHours?.open}
                       onValueChange={(value) => updateDayHours(day.key, "open", value)}
                     />
                   </View>
 
-                  {dayHours?.open && (
+                  {dayHours?.open ? (
                     <View style={styles.timeInputs}>
                       <TextInput
                         mode="outlined"
@@ -164,18 +200,16 @@ export default function LocationHoursScreen() {
                         value={dayHours.end}
                         onChangeText={(text) => updateDayHours(day.key, "end", text)}
                         style={styles.timeInput}
-                        placeholder="18:00"
+                        placeholder="20:00"
                       />
                     </View>
-                  )}
-
-                  {!dayHours?.open && (
+                  ) : (
                     <View style={styles.closedIndicator}>
                       <Text style={styles.closedText}>Closed</Text>
                     </View>
                   )}
                 </View>
-              )
+              );
             })}
           </Surface>
         </Section>
@@ -197,10 +231,7 @@ export default function LocationHoursScreen() {
           visible={snackbarVisible}
           onDismiss={() => setSnackbarVisible(false)}
           duration={3000}
-          action={{
-            label: "OK",
-            onPress: () => setSnackbarVisible(false),
-          }}
+          action={{ label: "OK", onPress: () => setSnackbarVisible(false) }}
         >
           {snackbarMessage}
         </Snackbar>
@@ -208,8 +239,10 @@ export default function LocationHoursScreen() {
         <View style={styles.bottomSpacing} />
       </ScrollView>
     </VerificationGate>
-  )
+  );
 }
+
+
 
 const styles = StyleSheet.create({
   container: {

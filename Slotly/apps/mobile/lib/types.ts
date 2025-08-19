@@ -6,6 +6,7 @@ export interface TierFeatures {
   multiLocation: boolean
   reports: boolean
   advancedBooking: boolean
+  canUseCoupons: boolean
 }
 
 export interface Staff {

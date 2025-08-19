@@ -1,7 +1,8 @@
-"use client"
+// apps/mobile/app/business/dashboard/billing.tsx
+"use client";
 
-import { useEffect, useState } from "react"
-import { View, ScrollView, StyleSheet } from "react-native"
+import { useEffect, useMemo, useState } from "react";
+import { View, ScrollView, StyleSheet, Alert, Platform } from "react-native";
 import {
   Text,
   Surface,
@@ -11,197 +12,194 @@ import {
   useTheme,
   Switch,
   Divider,
-} from "react-native-paper"
-import { useRouter } from "expo-router"
-import { useTier } from "../../../context/TierContext"
-import { VerificationGate } from "../../../components/VerificationGate"
-import { Section } from "../../../components/Section"
-import { TIER_NAMES } from "../../../lib/featureMatrix"
-import type { BusinessTier } from "../../../lib/types"
+} from "react-native-paper";
+import { useRouter } from "expo-router";
+import * as WebBrowser from "expo-web-browser";
+import * as Linking from "expo-linking";
+import { useTier } from "../../../context/TierContext";
+import { VerificationGate } from "../../../components/VerificationGate";
+import { Section } from "../../../components/Section";
+import { TIER_NAMES } from "../../../lib/featureMatrix";
+import type { BusinessTier } from "../../../lib/types";
 
-interface BillingInfo {
-  currentPlan: {
-    name: string
-    tier: BusinessTier
-    price: number
-    status: "ACTIVE" | "CANCELLED" | "PAST_DUE"
-    nextBilling: string
-    autoRenew: boolean
-  }
-  paymentHistory: {
-    id: string
-    date: string
-    amount: number
-    status: "PAID" | "PENDING" | "FAILED"
-    description: string
-  }[]
-}
+// API
+import {
+  getCurrentSubscription,
+  getSubscriptionPayments,
+  startOrChangeSubscription,
+  payAndWait,
+} from "../../../lib/api/modules/subscription"; // Fixed import path
 
-interface PlanOption {
-  tier: BusinessTier
-  name: string
-  price: number
-  features: string[]
-  popular?: boolean
-}
+type SubscriptionRow = {
+  id: string;
+  businessId: string;
+  plan: "LEVEL_1" | "LEVEL_2" | "LEVEL_3" | "LEVEL_4" | "LEVEL_5" | "LEVEL_6";
+  startDate: string;
+  endDate: string;
+  isActive: boolean;
+  amount?: number | null;
+};
+
+type PaymentRow = {
+  id: string;
+  amount: number;
+  currency: string;
+  status: string; // PENDING | SUCCESS | FAILED | ...
+  createdAt: string;
+  checkoutLink?: string | null;
+};
+
+const planLabel: Record<SubscriptionRow["plan"], string> = {
+  LEVEL_1: "Starter",
+  LEVEL_2: "Basic",
+  LEVEL_3: "Pro",
+  LEVEL_4: "Business",
+  LEVEL_5: "Enterprise",
+  LEVEL_6: "Premium",
+};
+
+const tierToPlan: Record<BusinessTier, SubscriptionRow["plan"]> = {
+  level1: "LEVEL_1",
+  level2: "LEVEL_2",
+  level3: "LEVEL_3",
+  level4: "LEVEL_4",
+  level5: "LEVEL_5",
+  level6: "LEVEL_6",
+};
 
 export default function BillingScreen() {
-  const router = useRouter()
-  const theme = useTheme()
-  const { tier, setTier } = useTier()
-  const [loading, setLoading] = useState(true)
-  const [billingInfo, setBillingInfo] = useState<BillingInfo | null>(null)
-  const [autoRenew, setAutoRenew] = useState(true)
+  const router = useRouter();
+  const theme = useTheme();
+  const { tier, setTier } = useTier();
+
+  const [loading, setLoading] = useState(true);
+  const [sub, setSub] = useState<SubscriptionRow | null>(null);
+  const [payments, setPayments] = useState<PaymentRow[]>([]);
+  const [autoRenew, setAutoRenew] = useState(true); // placeholder toggle for now
+  const [busyPay, setBusyPay] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const s = await getCurrentSubscription(); // GET /api/manager/subscription
+      setSub(s);
+      if (s?.id) {
+        const list = await getSubscriptionPayments(s.id); // GET list
+        setPayments(Array.isArray(list) ? list : []);
+        // Sync TierContext (optional): map backend plan to UI tier
+        const uiTier = (Object.keys(tierToPlan) as BusinessTier[]).find((k) => tierToPlan[k] === s.plan);
+        if (uiTier && uiTier !== tier) setTier(uiTier);
+      } else {
+        setPayments([]);
+      }
+    } catch (e: any) {
+      console.error("Load billing failed:", e?.message || e);
+      setSub(null);
+      setPayments([]);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    loadBillingInfo()
-  }, [])
+    load();
+  }, []);
 
-  const loadBillingInfo = async () => {
-    setLoading(true)
-    try {
-      // Mock billing data
-      await new Promise((resolve) => setTimeout(resolve, 600))
-      
-      const mockBillingInfo: BillingInfo = {
-        currentPlan: {
-          name: TIER_NAMES[tier],
-          tier,
-          price: getPlanPrice(tier),
-          status: "ACTIVE",
-          nextBilling: "2024-02-15",
-          autoRenew: true,
-        },
-        paymentHistory: [
-          {
-            id: "1",
-            date: "2024-01-15",
-            amount: getPlanPrice(tier),
-            status: "PAID",
-            description: `${TIER_NAMES[tier]} Plan - Monthly`,
-          },
-          {
-            id: "2",
-            date: "2023-12-15",
-            amount: getPlanPrice(tier),
-            status: "PAID",
-            description: `${TIER_NAMES[tier]} Plan - Monthly`,
-          },
-        ],
-      }
-      
-      setBillingInfo(mockBillingInfo)
-      setAutoRenew(mockBillingInfo.currentPlan.autoRenew)
-    } catch (error) {
-      console.error("Error loading billing info:", error)
-    } finally {
-      setLoading(false)
-    }
-  }
+  const statusText = useMemo(() => {
+    if (!sub) return "NO SUBSCRIPTION";
+    if (sub.isActive) return "ACTIVE";
+    const end = sub.endDate ? new Date(sub.endDate) : null;
+    if (end && end < new Date()) return "PAST_DUE";
+    return "INACTIVE";
+  }, [sub]);
 
-  const getPlanPrice = (planTier: BusinessTier): number => {
-    const prices: Record<BusinessTier, number> = {
-      level1: 0,      // Starter - Free
-      level2: 2500,   // Basic
-      level3: 5000,   // Pro
-      level4: 8500,   // Business
-      level5: 15000,  // Enterprise
-      level6: 25000,  // Premium
-    }
-    return prices[planTier]
-  }
+  const nextBillingDate = useMemo(() => (sub?.endDate ? new Date(sub.endDate) : null), [sub]);
 
-  const availablePlans: PlanOption[] = [
-    {
-      tier: "level1",
-      name: "Starter",
-      price: 0,
-      features: ["Basic booking", "Up to 50 bookings/month", "Email support"],
-    },
-    {
-      tier: "level2",
-      name: "Basic",
-      price: 2500,
-      features: ["Everything in Starter", "Up to 200 bookings/month", "Staff management", "SMS notifications"],
-    },
-    {
-      tier: "level3",
-      name: "Pro",
-      price: 5000,
-      features: ["Everything in Basic", "Analytics dashboard", "Unlimited bookings", "Coupons & promotions"],
-      popular: true,
-    },
-    {
-      tier: "level4",
-      name: "Business",
-      price: 8500,
-      features: ["Everything in Pro", "Multi-location", "Advanced reports", "Priority support"],
-    },
-    {
-      tier: "level5",
-      name: "Enterprise",
-      price: 15000,
-      features: ["Everything in Business", "Custom integrations", "Dedicated account manager", "White-label options"],
-    },
-    {
-      tier: "level6",
-      name: "Premium",
-      price: 25000,
-      features: ["Everything in Enterprise", "Custom development", "24/7 phone support", "SLA guarantee"],
-    },
-  ]
+  const formatDate = (d?: Date | null) =>
+    d ? d.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : "—";
 
-  const handlePlanSelect = (selectedTier: BusinessTier) => {
-    if (selectedTier === tier) return
-    
-    console.log("Switching to plan:", selectedTier)
-    setTier(selectedTier)
-    
-    // Update billing info
-    if (billingInfo) {
-      setBillingInfo({
-        ...billingInfo,
-        currentPlan: {
-          ...billingInfo.currentPlan,
-          tier: selectedTier,
-          name: TIER_NAMES[selectedTier],
-          price: getPlanPrice(selectedTier),
-        },
-      })
-    }
-  }
-
-  const handleAutoRenewToggle = () => {
-    setAutoRenew(!autoRenew)
-    console.log("Auto-renew toggled:", !autoRenew)
-  }
-
-  const handleManagePayment = () => {
-    console.log("Navigate to payment management")
-    // TODO: Navigate to payment method management
-  }
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString("en-US", {
-      month: "long",
-      day: "numeric",
-      year: "numeric",
-    })
-  }
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
+  const getStatusColor = (s: string) => {
+    switch (s) {
       case "ACTIVE":
+      case "SUCCESS":
       case "PAID":
-        return "#2E7D32"
+        return "#2E7D32";
       case "PENDING":
-        return "#FBC02D"
-      case "CANCELLED":
+      case "INACTIVE":
+        return "#FBC02D";
       case "FAILED":
       case "PAST_DUE":
-        return "#C62828"
+      case "CANCELLED":
+        return "#C62828";
       default:
-        return "#6B7280"
+        return "#6B7280";
+    }
+  };
+
+  async function handlePayNow() {
+    try {
+      if (!sub?.id) return Alert.alert("No subscription", "Create a subscription first.");
+      setBusyPay(true);
+
+      // Deep links to return/cancel pages for the mobile app
+      const returnUrl = Linking.createURL("/subscription/return");
+      const cancelUrl = Linking.createURL("/subscription/cancel");
+
+      // Open checkout and poll until paid
+      const { paid } = await payAndWait({
+        subscriptionId: sub.id,
+        returnUrl,
+        cancelUrl,
+        amount: sub.amount ?? 0,
+        currency: "KES",
+        customer: null,
+        metadata: {},
+        open: (url: string) => WebBrowser.openBrowserAsync(url),
+      }); // uses /api/payments/subscriptionPayments under the hood
+
+      if (paid) {
+        Alert.alert("Payment successful", "Your subscription has been updated.");
+      } else {
+        Alert.alert("Pending", "We haven't received confirmation yet. You can refresh later.");
+      }
+      await load();
+    } catch (e: any) {
+      console.error("Pay now failed:", e?.message || e);
+      Alert.alert("Payment error", e?.message || "Something went wrong");
+    } finally {
+      setBusyPay(false);
+    }
+  }
+
+  async function handlePlanSelect(selectedTier: BusinessTier) {
+    const requestedPlan = tierToPlan[selectedTier];
+    if (!requestedPlan) return;
+
+    try {
+      // Ask server to start plan change; it will compute price & either activate or return a checkoutUrl
+      const res = await startOrChangeSubscription({ plan: requestedPlan });
+
+      // For LEVEL_1: activated immediately (active: true)
+      if (res?.active && res?.subscriptionId) {
+        Alert.alert("Plan updated", `${planLabel[requestedPlan]} is now active.`);
+        await load();
+        return;
+      }
+
+      // For paid plans: open returned checkout URL (if present), then refresh
+      if (res?.checkoutUrl && res?.subscriptionId) {
+        await WebBrowser.openBrowserAsync(res.checkoutUrl);
+        // Optional: also poll via getSubscriptionPayments if you want immediate update
+        await load();
+        return;
+      }
+
+      // Fallback: if server didn't start checkout, let user tap Pay now
+      Alert.alert("Plan requested", "Please complete payment to activate.");
+      await load();
+    } catch (e: any) {
+      console.error("Change plan failed:", e?.message || e);
+      Alert.alert("Change plan error", e?.message || "Could not change plan");
     }
   }
 
@@ -211,7 +209,7 @@ export default function BillingScreen() {
         <ActivityIndicator size="large" color={theme.colors.primary} />
         <Text style={styles.loadingText}>Loading billing information...</Text>
       </View>
-    )
+    );
   }
 
   return (
@@ -223,91 +221,87 @@ export default function BillingScreen() {
         </View>
 
         {/* Current Plan */}
-        {billingInfo && (
-          <Section title="Current Plan">
-            <Surface style={styles.currentPlanCard} elevation={2}>
-              <View style={styles.planHeader}>
-                <View style={styles.planInfo}>
-                  <Text style={styles.planName}>{billingInfo.currentPlan.name}</Text>
-                  <Text style={styles.planPrice}>
-                    KSh {billingInfo.currentPlan.price.toLocaleString()}/month
-                  </Text>
+        <Section title="Current Plan">
+          <Surface style={styles.currentPlanCard} elevation={2}>
+            {sub ? (
+              <>
+                <View style={styles.planHeader}>
+                  <View style={styles.planInfo}>
+                    <Text style={styles.planName}>{planLabel[sub.plan] ?? sub.plan}</Text>
+                    <Text style={styles.planPrice}>
+                      {sub.amount && sub.amount > 0 ? `KSh ${sub.amount.toLocaleString()}/month` : "Free"}
+                    </Text>
+                  </View>
+                  <View style={styles.planStatus}>
+                    <Text style={[styles.statusText, { color: getStatusColor(statusText) }]}>{statusText}</Text>
+                  </View>
                 </View>
-                <View style={styles.planStatus}>
-                  <Text style={[styles.statusText, { color: getStatusColor(billingInfo.currentPlan.status) }]}>
-                    {billingInfo.currentPlan.status}
-                  </Text>
-                </View>
-              </View>
 
-              <View style={styles.planDetails}>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Next billing date:</Text>
-                  <Text style={styles.detailValue}>{formatDate(billingInfo.currentPlan.nextBilling)}</Text>
+                <View style={styles.planDetails}>
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Renews on:</Text>
+                    <Text style={styles.detailValue}>{formatDate(nextBillingDate)}</Text>
+                  </View>
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Auto-renew:</Text>
+                    {/* Placeholder toggle — wire to backend when you add it */}
+                    <Switch value={autoRenew} onValueChange={() => setAutoRenew((v) => !v)} />
+                  </View>
                 </View>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Auto-renew:</Text>
-                  <Switch value={autoRenew} onValueChange={handleAutoRenewToggle} />
-                </View>
-              </View>
 
-              <View style={styles.planActions}>
-                <Button mode="outlined" onPress={handleManagePayment} style={styles.planActionBtn}>
-                  Update Payment
+                <View style={styles.planActions}>
+                  <Button mode="outlined" onPress={handlePayNow} style={styles.planActionBtn} loading={busyPay}>
+                    Pay now
+                  </Button>
+                  <Button
+                    mode="contained"
+                    onPress={() => router.push("/business/dashboard/coupons")}
+                    style={styles.planActionBtn}
+                  >
+                    Manage Plan
+                  </Button>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={{ marginBottom: 12 }}>No active subscription found.</Text>
+                <Button mode="contained" onPress={() => handlePlanSelect("level1")}>
+                  Activate Free Plan
                 </Button>
-                <Button mode="contained" onPress={handleManagePayment} style={styles.planActionBtn}>
-                  Manage Plan
-                </Button>
-              </View>
-            </Surface>
-          </Section>
-        )}
+              </>
+            )}
+          </Surface>
+        </Section>
 
-        {/* Available Plans */}
+        {/* Available Plans (wired to real plan change) */}
         <Section title="Available Plans">
           <View style={styles.plansContainer}>
-            {availablePlans.map((plan) => (
+            {(
+              [
+                { tier: "level1", name: "Starter", price: 0 },
+                { tier: "level2", name: "Basic", price: 999 },
+                { tier: "level3", name: "Pro", price: 2999 },
+                { tier: "level4", name: "Business", price: 6999 },
+                { tier: "level5", name: "Enterprise", price: 14999 },
+                { tier: "level6", name: "Premium", price: 30000 },
+              ] as { tier: BusinessTier; name: string; price: number }[]
+            ).map((p) => (
               <Surface
-                key={plan.tier}
-                style={[
-                  styles.planCard,
-                  plan.tier === tier && styles.currentPlanHighlight,
-                  plan.popular && styles.popularPlan,
-                ]}
-                elevation={plan.tier === tier ? 4 : 2}
+                key={p.tier}
+                style={[styles.planCard, p.tier === tier && styles.currentPlanHighlight]}
+                elevation={p.tier === tier ? 4 : 2}
               >
-                {plan.popular && (
-                  <View style={styles.popularBadge}>
-                    <Text style={styles.popularText}>MOST POPULAR</Text>
-                  </View>
-                )}
-
                 <View style={styles.planCardHeader}>
-                  <Text style={styles.planCardName}>{plan.name}</Text>
-                  <Text style={styles.planCardPrice}>
-                    {plan.price === 0 ? "Free" : `KSh ${plan.price.toLocaleString()}/mo`}
-                  </Text>
+                  <Text style={styles.planCardName}>{p.name}</Text>
+                  <Text style={styles.planCardPrice}>{p.price === 0 ? "Free" : `KSh ${p.price.toLocaleString()}/mo`}</Text>
                 </View>
-
-                <View style={styles.planFeatures}>
-                  {plan.features.map((feature, index) => (
-                    <View key={index} style={styles.featureRow}>
-                      <Text style={styles.featureIcon}>✓</Text>
-                      <Text style={styles.featureText}>{feature}</Text>
-                    </View>
-                  ))}
-                </View>
-
                 <Button
-                  mode={plan.tier === tier ? "outlined" : "contained"}
-                  onPress={() => handlePlanSelect(plan.tier)}
-                  style={[
-                    styles.selectPlanBtn,
-                    plan.tier === tier && styles.currentPlanBtn,
-                  ]}
-                  disabled={plan.tier === tier}
+                  mode={p.tier === tier ? "outlined" : "contained"}
+                  onPress={() => handlePlanSelect(p.tier)}
+                  style={[styles.selectPlanBtn, p.tier === tier && styles.currentPlanBtn]}
+                  disabled={p.tier === tier}
                 >
-                  {plan.tier === tier ? "CURRENT PLAN" : "Select Plan"}
+                  {p.tier === tier ? "CURRENT PLAN" : "Select Plan"}
                 </Button>
               </Surface>
             ))}
@@ -315,34 +309,42 @@ export default function BillingScreen() {
         </Section>
 
         {/* Payment History */}
-        {billingInfo && billingInfo.paymentHistory.length > 0 && (
-          <Section title="Payment History">
-            <Surface style={styles.historyCard} elevation={2}>
-              {billingInfo.paymentHistory.map((payment, index) => (
+        <Section title="Recent Payments">
+          <Surface style={styles.historyCard} elevation={2}>
+            {payments.length === 0 ? (
+              <View style={{ padding: 16 }}>
+                <Text style={{ color: "#6B7280" }}>No payments yet.</Text>
+              </View>
+            ) : (
+              payments.map((payment, idx) => (
                 <View key={payment.id}>
                   <View style={styles.historyRow}>
                     <View style={styles.historyInfo}>
-                      <Text style={styles.historyDescription}>{payment.description}</Text>
-                      <Text style={styles.historyDate}>{formatDate(payment.date)}</Text>
+                      <Text style={styles.historyDescription}>Subscription payment</Text>
+                      <Text style={styles.historyDate}>
+                        {new Date(payment.createdAt).toLocaleString()}
+                      </Text>
                     </View>
                     <View style={styles.historyAmount}>
-                      <Text style={styles.amountText}>KSh {payment.amount.toLocaleString()}</Text>
+                      <Text style={styles.amountText}>
+                        {payment.currency || "KES"} {Number(payment.amount).toLocaleString()}
+                      </Text>
                       <Text style={[styles.historyStatus, { color: getStatusColor(payment.status) }]}>
                         {payment.status}
                       </Text>
                     </View>
                   </View>
-                  {index < billingInfo.paymentHistory.length - 1 && <Divider style={styles.historyDivider} />}
+                  {idx < payments.length - 1 && <Divider style={styles.historyDivider} />}
                 </View>
-              ))}
-            </Surface>
-          </Section>
-        )}
+              ))
+            )}
+          </Surface>
+        </Section>
 
         <View style={styles.bottomSpacing} />
       </ScrollView>
     </VerificationGate>
-  )
+  );
 }
 
 const styles = StyleSheet.create({
@@ -552,4 +554,4 @@ const styles = StyleSheet.create({
   bottomSpacing: {
     height: 40,
   },
-})
+});

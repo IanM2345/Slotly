@@ -1,16 +1,28 @@
-import * as Sentry from '@sentry/nextjs'
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import bcrypt from 'bcryptjs';
-import { sendOTPviaSMS } from '@/lib/twilioClient'; 
-import { sendOTPviaEmail } from '@/lib/mailgunClient'; 
+import { sendOTPviaSMS } from '@/lib/twilioClient';
+import { sendOTPviaEmail } from '@/lib/mailgunClient';
 import { sendNotification } from '@/shared/notifications/sendNotification';
 import { sendEmailNotification } from '@/shared/notifications/sendEmailNotifciation';
 
 const prisma = new PrismaClient();
 
+// ✅ Shared CORS headers
+const CORS = {
+  'Access-Control-Allow-Origin': '*', // Or restrict: 'http://localhost:8081'
+  'Access-Control-Allow-Methods': 'POST,OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
 function generateOTP(length = 6) {
   return Math.floor(100000 + Math.random() * 900000).toString().slice(0, length);
+}
+
+// ✅ Preflight handler
+export function OPTIONS() {
+  return new Response(null, { status: 204, headers: CORS });
 }
 
 export async function POST(request) {
@@ -20,41 +32,45 @@ export async function POST(request) {
     if ((!email && !phone) || !password) {
       return NextResponse.json(
         { error: 'Email or phone and password are required' },
-        { status: 400 }
+        { status: 400, headers: CORS }
       );
     }
 
     const user = await prisma.user.findFirst({
       where: {
-        OR: [
-          { email: email ?? '' },
-          { phone: phone ?? '' }
-        ]
-      }
+        OR: [{ email: email ?? '' }, { phone: phone ?? '' }],
+      },
     });
 
     if (!user) {
-      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
+      return NextResponse.json(
+        { error: 'Invalid credentials' },
+        { status: 401, headers: CORS }
+      );
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
+      return NextResponse.json(
+        { error: 'Invalid credentials' },
+        { status: 401, headers: CORS }
+      );
     }
 
+    // 🔒 Check suspension
     if (user.suspended) {
       await sendNotification({
         userId: user.id,
         type: 'SUSPENSION',
         title: 'Account Suspended',
-        message: 'Your Slotly account has been suspended. Please contact support for assistance.'
+        message: 'Your Slotly account has been suspended. Please contact support for assistance.',
       });
 
       if (user.email) {
         await sendEmailNotification({
           to: user.email,
           subject: 'Your Slotly Account Has Been Suspended',
-          text: 'Your Slotly account has been suspended. Please contact support for assistance.'
+          text: 'Your Slotly account has been suspended. Please contact support for assistance.',
         });
       }
 
@@ -65,16 +81,24 @@ export async function POST(request) {
         );
       }
 
-      return NextResponse.json({ error: 'Account suspended. Contact support.' }, { status: 403 });
+      return NextResponse.json(
+        { error: 'Account suspended. Contact support.' },
+        { status: 403, headers: CORS }
+      );
     }
 
+    // 🔑 OTP flow
     const otp = generateOTP();
     const hashedOTP = await bcrypt.hash(otp, 8);
-    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); 
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
 
     await prisma.user.update({
       where: { id: user.id },
-      data: { otp: hashedOTP, otpExpiresAt: otpExpires, otpVerified: false }
+      data: {
+        otp: hashedOTP,
+        otpExpiresAt: otpExpires,
+        otpVerified: false,
+      },
     });
 
     if (user.phone) {
@@ -84,14 +108,19 @@ export async function POST(request) {
       await sendOTPviaEmail(user.email, otp);
     }
 
-    return NextResponse.json({
-      message: 'OTP sent to your registered contact. Please verify to complete login.',
-      user: { id: user.id, name: user.name, role: user.role }
-    }, { status: 200 });
-
+    return NextResponse.json(
+      {
+        message: 'OTP sent to your registered contact. Please verify to complete login.',
+        user: { id: user.id, name: user.name, role: user.role },
+      },
+      { status: 200, headers: CORS }
+    );
   } catch (error) {
     Sentry.captureException(error, { tags: { route: 'LOGIN' } });
     console.error('Login error:', error);
-    return NextResponse.json({ error: 'Login failed' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Login failed' },
+      { status: 500, headers: CORS }
+    );
   }
 }

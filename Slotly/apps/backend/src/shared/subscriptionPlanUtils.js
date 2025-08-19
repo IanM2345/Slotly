@@ -1,4 +1,5 @@
-const PLAN_FEATURES = {
+// ---------- Plans & features ----------
+export const PLAN_FEATURES = {
   LEVEL_1: {
     name: 'Individual / Solopreneur',
     monthlyPriceKES: 0,
@@ -79,22 +80,17 @@ const PLAN_FEATURES = {
   },
 };
 
-function getPlanFeatures(plan) {
-  return PLAN_FEATURES[plan] || PLAN_FEATURES.LEVEL_1;
-}
-
-module.exports = {
-  getPlanFeatures,
-};
-export const SubscriptionPlan = {
+// Canonical plan ids to avoid typos across the app/db
+export const SubscriptionPlan = Object.freeze({
   LEVEL_1: 'LEVEL_1',
   LEVEL_2: 'LEVEL_2',
   LEVEL_3: 'LEVEL_3',
   LEVEL_4: 'LEVEL_4',
   LEVEL_5: 'LEVEL_5',
   LEVEL_6: 'LEVEL_6',
-};
+});
 
+// Feature helpers / limits by plan
 export const serviceLimitByPlan = {
   LEVEL_1: 1,
   LEVEL_2: 5,
@@ -103,6 +99,7 @@ export const serviceLimitByPlan = {
   LEVEL_5: 100,
   LEVEL_6: 200,
 };
+
 export const staffLimitByPlan = {
   LEVEL_1: 1,
   LEVEL_2: 3,
@@ -119,4 +116,20 @@ export const couponAccessByPlan = {
   LEVEL_4: true,
   LEVEL_5: true,
   LEVEL_6: true,
+};
+
+// Primary API: returns the feature object for a given plan
+export function getPlanFeatures(plan) {
+  // ensure we return a valid plan feature object even if plan is null/unknown
+  return PLAN_FEATURES?.[plan] ?? PLAN_FEATURES[SubscriptionPlan.LEVEL_1];
+}
+
+// Optional default export (useful if someone imports default)
+export default {
+  PLAN_FEATURES,
+  SubscriptionPlan,
+  getPlanFeatures,
+  serviceLimitByPlan,
+  staffLimitByPlan,
+  couponAccessByPlan,
 };

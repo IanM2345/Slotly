@@ -7,6 +7,7 @@ export const FEATURE_MATRIX: Record<BusinessTier, TierFeatures> = {
     multiLocation: false,
     reports: false,
     advancedBooking: false,
+    canUseCoupons: false,     // ← add
   },
   level2: {
     analytics: false,
@@ -14,6 +15,7 @@ export const FEATURE_MATRIX: Record<BusinessTier, TierFeatures> = {
     multiLocation: false,
     reports: false,
     advancedBooking: false,
+    canUseCoupons: true,      // ← add
   },
   level3: {
     analytics: true,
@@ -21,6 +23,7 @@ export const FEATURE_MATRIX: Record<BusinessTier, TierFeatures> = {
     multiLocation: false,
     reports: true,
     advancedBooking: true,
+    canUseCoupons: true,      // ← add
   },
   level4: {
     analytics: true,
@@ -28,6 +31,7 @@ export const FEATURE_MATRIX: Record<BusinessTier, TierFeatures> = {
     multiLocation: true,
     reports: true,
     advancedBooking: true,
+    canUseCoupons: true,      // ← add
   },
   level5: {
     analytics: true,
@@ -35,6 +39,7 @@ export const FEATURE_MATRIX: Record<BusinessTier, TierFeatures> = {
     multiLocation: true,
     reports: true,
     advancedBooking: true,
+    canUseCoupons: true,      // ← add
   },
   level6: {
     analytics: true,
@@ -42,14 +47,6 @@ export const FEATURE_MATRIX: Record<BusinessTier, TierFeatures> = {
     multiLocation: true,
     reports: true,
     advancedBooking: true,
+    canUseCoupons: true,      // ← add
   },
-}
-
-export const TIER_NAMES: Record<BusinessTier, string> = {
-  level1: "Starter",
-  level2: "Basic",
-  level3: "Pro",
-  level4: "Business",
-  level5: "Enterprise",
-  level6: "Premium",
 }

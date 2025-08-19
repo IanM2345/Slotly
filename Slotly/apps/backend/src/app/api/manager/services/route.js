@@ -178,3 +178,44 @@ export async function PATCH(request) {
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
+
+export async function GET(request) {
+  try {
+    const { business, error, status } = await getBusinessFromRequest(request);
+    if (error) return NextResponse.json({ error }, { status });
+
+    const { searchParams } = new URL(request.url);
+    const category = searchParams.get("category")?.toLowerCase() || undefined;
+
+    const where = { businessId: business.id };
+    if (category) where.category = category;
+
+    const rows = await prisma.service.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      include: {
+        serviceStaff: {
+          include: { staff: { select: { id: true, name: true } } },
+        },
+      },
+    });
+
+    // 🔧 Shape to what the app expects: staff: [{id,name}]
+    const services = rows.map(s => ({
+      id: s.id,
+      name: s.name,
+      price: s.price,
+      duration: s.duration,
+      category: s.category,
+      available: s.available,
+      businessId: s.businessId,
+      createdAt: s.createdAt,
+      staff: s.serviceStaff.map(a => ({ id: a.staff.id, name: a.staff.name })),
+    }));
+
+    return NextResponse.json({ services }, { status: 200 });
+  } catch (e) {
+    Sentry.captureException(e);
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+  }
+}

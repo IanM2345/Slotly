@@ -28,6 +28,8 @@ model User {
   otpVerified  Boolean?       @default(false)
   otpExpiresAt DateTime?
   RecentSearch RecentSearch[]
+
+  serviceStaff ServiceStaff[]
 }
 
 model Business {
@@ -40,6 +42,8 @@ model Business {
   logoUrl        String?
   suspended      Boolean   @default(false)
   suspendedUntil DateTime?
+  type           String?
+  hours          Json?
   address        String
   latitude       Float
   longitude      Float
@@ -95,6 +99,8 @@ model Service {
   available  Boolean  @default(true)
   businessId String
   createdAt  DateTime @default(now())
+
+  serviceStaff ServiceStaff[]
 }
 
 model Booking {
@@ -106,10 +112,16 @@ model Booking {
   startTime                   DateTime
   endTime                     DateTime
   status                      BookingStatus @default(PENDING)
+  cancelReason                String?
+  completedAt                 DateTime?
+  noShowAt                    DateTime?
+  markedById                  String?       @db.ObjectId
   createdAt                   DateTime      @default(now())
   cancellationDeadlineMinutes Int           @default(120)
   lateCancellationFee         Int           @default(5000)
 
+  @@index([businessId, status])
+  @@index([staffId, startTime])
   @@index([businessId])
   @@index([userId])
   @@index([startTime])
@@ -272,6 +284,20 @@ model ServiceInBundle {
   position  Int
 }
 
+model ServiceStaff {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  businessId String   @db.ObjectId
+  serviceId  String   @db.ObjectId
+  staffId    String   @db.ObjectId
+  createdAt  DateTime @default(now())
+
+  service Service @relation(fields: [serviceId], references: [id])
+  staff   User    @relation(fields: [staffId], references: [id])
+
+  @@unique([serviceId, staffId])
+  @@index([businessId])
+}
+
 model MonthlyReport {
   id         String   @id @default(auto()) @map("_id") @db.ObjectId
   businessId String   @db.ObjectId
@@ -407,6 +433,7 @@ enum BookingStatus {
   CANCELLED
   COMPLETED
   RESCHEDULED
+  NO_SHOW
 }
 
 enum PaymentMethod {

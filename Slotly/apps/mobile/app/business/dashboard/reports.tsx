@@ -1,7 +1,7 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import { View, ScrollView, StyleSheet } from "react-native"
+import { useEffect, useMemo, useState } from "react";
+import { View, ScrollView, StyleSheet, Platform, Alert } from "react-native";
 import {
   Text,
   Surface,
@@ -9,106 +9,306 @@ import {
   IconButton,
   Button,
   useTheme,
-} from "react-native-paper"
-import { useRouter } from "expo-router"
-import { useTier } from "../../../context/TierContext"
-import { VerificationGate } from "../../../components/VerificationGate"
-import { LockedFeature } from "../../../components/LockedFeature"
-import { Section } from "../../../components/Section"
+} from "react-native-paper";
+import { useRouter } from "expo-router";
+import * as FileSystem from "expo-file-system";
+import * as Sharing from "expo-sharing";
 
-interface Report {
-  id: string
-  title: string
-  period: string
-  generatedDate: string
-  kpis: {
-    totalRevenue: string
-    totalBookings: number
-    uniqueClients: number
-    averageServiceValue: string
-  }
-}
+import { useTier } from "../../../context/TierContext";
+import { VerificationGate } from "../../../components/VerificationGate";
+import { LockedFeature } from "../../../components/LockedFeature";
+import { Section } from "../../../components/Section";
+
+// API modules (wired to your backend)
+import {
+  listReports,         // GET /api/manager/reports → { reports }
+  previewReport,       // GET /api/manager/reports/[id] → PDF bytes
+  getAnalytics,        // GET /api/manager/analytics (JSON KPIs)
+  getAnalyticsCsv,     // GET /api/manager/analytics?export=csv (CSV text)
+} from "../../../lib/api/modules/manager";
+
+type BackendReport = {
+  id: string;
+  businessId: string;
+  period: string;     // e.g. "2025-01" (month key) or similar
+  fileUrl?: string | null;
+  createdAt: string;  // ISO
+};
+
+type ReportCard = BackendReport & {
+  // enriched KPIs (best-effort)
+  kpis?: {
+    totalBookings?: number | string;
+    totalRevenue?: number | string;
+    uniqueClients?: number | string;
+    showRate?: number | string;
+  };
+};
 
 export default function ReportsScreen() {
-  const router = useRouter()
-  const theme = useTheme()
-  const { features } = useTier()
-  const [loading, setLoading] = useState(true)
-  const [reports, setReports] = useState<Report[]>([])
+  const router = useRouter();
+  const theme = useTheme();
+  const { features } = useTier();
+
+  const [loading, setLoading] = useState(true);
+  const [reports, setReports] = useState<ReportCard[]>([]);
 
   useEffect(() => {
     if (features.reports) {
-      loadReports()
+      loadReports();
     }
-  }, [features.reports])
+  }, [features.reports]);
 
-  const loadReports = async () => {
-    setLoading(true)
+  async function loadReports() {
+    setLoading(true);
     try {
-      // Mock reports data
-      await new Promise((resolve) => setTimeout(resolve, 800))
-      
-      const mockReports: Report[] = [
-        {
-          id: "1",
-          title: "January 2024 Report",
-          period: "January 1 - 31, 2024",
-          generatedDate: "2024-02-01",
-          kpis: {
-            totalRevenue: "KSh 456,780",
-            totalBookings: 234,
-            uniqueClients: 156,
-            averageServiceValue: "KSh 1,950",
-          },
-        },
-        {
-          id: "2",
-          title: "December 2023 Report",
-          period: "December 1 - 31, 2023",
-          generatedDate: "2024-01-01",
-          kpis: {
-            totalRevenue: "KSh 523,450",
-            totalBookings: 267,
-            uniqueClients: 178,
-            averageServiceValue: "KSh 1,960",
-          },
-        },
-      ]
-      
-      setReports(mockReports)
-    } catch (error) {
-      console.error("Error loading reports:", error)
+      // 1) Fetch available reports (owner-scoped, plan-gated)
+      const { reports: rows } = await listReports({});
+      const list: BackendReport[] = Array.isArray(rows) ? rows : [];
+
+      // 2) Enrich with KPIs from analytics (best-effort)
+      const enriched = await Promise.all(
+        list.map(async (r) => {
+          const range = periodToRange(r.period);
+          if (!range) return r as ReportCard;
+
+          try {
+            const analytics = await getAnalytics({
+              startDate: range.start.toISOString(),
+              endDate: range.end.toISOString(),
+              // metrics is optional; backend may ignore it
+              metrics: "totalBookings,totalRevenue,uniqueClients,showRate",
+              view: "monthly",
+            });
+            const kpis = extractKpis(analytics);
+            return { ...r, kpis };
+          } catch {
+            return { ...r, kpis: undefined };
+          }
+        })
+      );
+
+      setReports(enriched);
+    } catch (err: any) {
+      console.error("Error loading reports:", err);
+      Alert.alert("Error", err?.message || "Failed to load reports");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
   }
 
-  const handleUpgrade = () => {
-    router.push("/(business)/dashboard/billing")
+  // ----- Helpers -----
+
+  function extractKpis(analytics: any): ReportCard["kpis"] {
+    // Accept several shapes; fall back to "—" when missing
+    const n = (v: any) =>
+      typeof v === "number" ? v : typeof v === "string" && v.trim() ? Number(v) : undefined;
+
+    const totalBookings =
+      analytics?.totals?.bookings ??
+      analytics?.bookings ??
+      analytics?.totalBookings ??
+      analytics?.metrics?.totalBookings ??
+      undefined;
+
+    const totalRevenueRaw =
+      analytics?.totals?.revenue ??
+      analytics?.revenue ??
+      analytics?.totalRevenue ??
+      analytics?.metrics?.totalRevenue ??
+      undefined;
+
+    const uniqueClients =
+      analytics?.totals?.uniqueClients ??
+      analytics?.uniqueClients ??
+      analytics?.metrics?.uniqueClients ??
+      undefined;
+
+    const showRateRaw =
+      analytics?.totals?.showRate ??
+      analytics?.showRate ??
+      analytics?.metrics?.showRate ??
+      undefined;
+
+    const totalRevenue = formatMoney(n(totalRevenueRaw));
+    const showRate = formatPercent(n(showRateRaw));
+
+    return {
+      totalBookings: n(totalBookings) ?? "—",
+      totalRevenue: totalRevenue ?? "—",
+      uniqueClients: n(uniqueClients) ?? "—",
+      showRate: showRate ?? "—",
+    };
   }
 
-  const handlePreviewReport = (report: Report) => {
-    console.log("Preview report:", report.id)
-    // TODO: Implement report preview
+  function formatMoney(v?: number) {
+    if (typeof v !== "number" || Number.isNaN(v)) return undefined;
+    return `KSh ${Math.round(v).toLocaleString()}`;
+    // tweak if you need two decimals
   }
 
-  const handleDownloadReport = (report: Report) => {
-    console.log("Download report:", report.id)
-    // TODO: Implement PDF download
+  function formatPercent(v?: number) {
+    if (typeof v !== "number" || Number.isNaN(v)) return undefined;
+    return `${Math.round(v)}%`;
   }
 
-  const handleGenerateNewReport = () => {
-    console.log("Generate new report")
-    // TODO: Implement report generation
+  // Accepts "YYYY-MM" (monthly) or "YYYY-Qx" / "Qx YYYY" (quarterly)
+  function periodToRange(period: string):
+    | { start: Date; end: Date; text: string }
+    | null {
+    if (!period) return null;
+
+    // monthly "YYYY-MM"
+    const m = period.match(/^(\d{4})-(\d{2})$/);
+    if (m) {
+      const y = Number(m[1]);
+      const mon = Number(m[2]) - 1; // 0-based
+      const start = new Date(Date.UTC(y, mon, 1, 0, 0, 0));
+      const end = new Date(Date.UTC(y, mon + 1, 0, 23, 59, 59, 999));
+      return { start, end, text: formatMonthYear(start) };
+    }
+
+    // quarterly "YYYY-Qn" or "Qn YYYY"
+    const q1 = period.match(/^(\d{4})-Q([1-4])$/);
+    const q2 = period.match(/^Q([1-4])\s+(\d{4})$/i);
+    const qMatch = q1 || q2;
+    if (qMatch) {
+      const year = Number(q1 ? q1[1] : q2![2]);
+      const q = Number(q1 ? q1[2] : q2![1]);
+      const mon = (q - 1) * 3;
+      const start = new Date(Date.UTC(year, mon, 1, 0, 0, 0));
+      const end = new Date(Date.UTC(year, mon + 3, 0, 23, 59, 59, 999));
+      return { start, end, text: `Q${q} ${year}` };
+    }
+
+    // fallback: try YYYY-MM-DD..YYYY-MM-DD
+    const parts = period.split("..");
+    if (parts.length === 2) {
+      const start = new Date(parts[0]);
+      const end = new Date(parts[1]);
+      if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+        return { start, end, text: `${formatMonthYear(start)} – ${formatMonthYear(end)}` };
+      }
+    }
+
+    return null;
   }
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString("en-US", {
-      month: "long",
-      day: "numeric",
-      year: "numeric",
-    })
+  function formatMonthYear(d: Date) {
+    return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
   }
+
+  function formatDate(dateString: string) {
+    const d = new Date(dateString);
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  }
+
+  // ----- Actions -----
+
+  async function handlePreviewPDF(report: BackendReport) {
+    try {
+      const bytes = await previewReport({ reportId: report.id }); // arraybuffer
+      if (Platform.OS === "web") {
+        const blob = new Blob([bytes], { type: "application/pdf" });
+        const url = URL.createObjectURL(blob);
+        window.open(url, "_blank", "noopener,noreferrer");
+        // optional: URL.revokeObjectURL(url) later
+      } else {
+        const fileUri = `${FileSystem.cacheDirectory}slotly-report-${report.period}.pdf`;
+        await FileSystem.writeAsStringAsync(fileUri, bufferToBase64(bytes), {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        // open share sheet / viewer
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(fileUri, { mimeType: "application/pdf" });
+        } else {
+          Alert.alert("Saved", `Report saved to cache: ${fileUri}`);
+        }
+      }
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert("Preview failed", e?.message || "Could not open report.");
+    }
+  }
+
+  async function handleDownloadPDF(report: BackendReport) {
+    try {
+      const bytes = await previewReport({ reportId: report.id }); // reuse the same endpoint
+      if (Platform.OS === "web") {
+        const blob = new Blob([bytes], { type: "application/pdf" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `slotly-report-${report.period}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } else {
+        const fileUri = `${FileSystem.documentDirectory}slotly-report-${report.period}.pdf`;
+        await FileSystem.writeAsStringAsync(fileUri, bufferToBase64(bytes), {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(fileUri, { mimeType: "application/pdf" });
+        } else {
+          Alert.alert("Saved", `Report saved to: ${fileUri}`);
+        }
+      }
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert("Download failed", e?.message || "Could not download report.");
+    }
+  }
+
+  async function handleDownloadCSV(report: BackendReport) {
+    try {
+      const range = periodToRange(report.period);
+      if (!range) return Alert.alert("Unavailable", "Cannot compute dates for this period");
+
+      const csv = await getAnalyticsCsv({
+        startDate: range.start.toISOString(),
+        endDate: range.end.toISOString(),
+      }); // CSV string
+
+      if (Platform.OS === "web") {
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `slotly-report-${report.period}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } else {
+        const fileUri = `${FileSystem.documentDirectory}slotly-report-${report.period}.csv`;
+        await FileSystem.writeAsStringAsync(fileUri, csv, { encoding: FileSystem.EncodingType.UTF8 });
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(fileUri, { mimeType: "text/csv" });
+        } else {
+          Alert.alert("Saved", `CSV saved to: ${fileUri}`);
+        }
+      }
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert("CSV failed", e?.message || "Could not download CSV.");
+    }
+  }
+
+  function bufferToBase64(buf: ArrayBuffer): string {
+    // polyfill since atob/btoa work on strings
+    const bytes = new Uint8Array(buf);
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    // btoa is available on web; on native, global Buffer may exist; fall back to base64 from expo
+    // @ts-ignore
+    return typeof btoa === "function" ? btoa(binary) : Buffer.from(binary, "binary").toString("base64");
+  }
+
+  const cards = useMemo(() => reports, [reports]);
+
+  // ----- Render -----
 
   if (!features.reports) {
     return (
@@ -123,21 +323,21 @@ export default function ReportsScreen() {
             <LockedFeature
               title="Business Reports"
               description="Detailed business reports are available on Pro and above"
-              onPressUpgrade={handleUpgrade}
+              onPressUpgrade={() => router.push("/business/dashboard/billing")}
             />
           </View>
         </View>
       </VerificationGate>
-    )
+    );
   }
 
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={theme.colors.primary} />
-        <Text style={styles.loadingText}>Loading reports...</Text>
+        <Text style={styles.loadingText}>Loading reports…</Text>
       </View>
-    )
+    );
   }
 
   return (
@@ -148,80 +348,74 @@ export default function ReportsScreen() {
           <Text style={styles.title}>Business Reports</Text>
         </View>
 
-        {/* Generate New Report */}
-        <View style={styles.actionContainer}>
-          <Button
-            mode="contained"
-            onPress={handleGenerateNewReport}
-            style={[styles.generateButton, { backgroundColor: theme.colors.secondary }]}
-            icon="file-plus"
-          >
-            Generate New Report
-          </Button>
-        </View>
-
-        {/* Available Reports */}
         <Section title="Available Reports">
           <View style={styles.reportsContainer}>
-            {reports.length === 0 ? (
+            {cards.length === 0 ? (
               <Surface style={styles.emptyState} elevation={1}>
                 <Text style={styles.emptyText}>No reports available</Text>
                 <Text style={styles.emptySubtext}>Generate your first business report to get started</Text>
               </Surface>
             ) : (
-              reports.map((report) => (
-                <Surface key={report.id} style={styles.reportCard} elevation={2}>
+              cards.map((r) => (
+                <Surface key={r.id} style={styles.reportCard} elevation={2}>
                   <View style={styles.reportHeader}>
                     <View style={styles.reportInfo}>
-                      <Text style={styles.reportTitle}>{report.title}</Text>
-                      <Text style={styles.reportPeriod}>{report.period}</Text>
-                      <Text style={styles.reportDate}>Generated: {formatDate(report.generatedDate)}</Text>
+                      <Text style={styles.reportTitle}>
+                        {periodToRange(r.period)?.text ?? r.period} Business Report
+                      </Text>
+                      <Text style={styles.reportDate}>Generated: {formatDate(r.createdAt)}</Text>
                     </View>
                     <View style={styles.reportIcon}>
                       <Text style={styles.reportEmoji}>📊</Text>
                     </View>
                   </View>
 
-                  <View style={styles.reportKpis}>
-                    <Text style={styles.kpisTitle}>Key Performance Indicators</Text>
-                    <View style={styles.kpisGrid}>
-                      <View style={styles.kpiItem}>
-                        <Text style={styles.kpiValue}>{report.kpis.totalRevenue}</Text>
-                        <Text style={styles.kpiLabel}>Total Revenue</Text>
-                      </View>
-                      <View style={styles.kpiItem}>
-                        <Text style={styles.kpiValue}>{report.kpis.totalBookings}</Text>
-                        <Text style={styles.kpiLabel}>Total Bookings</Text>
-                      </View>
-                      <View style={styles.kpiItem}>
-                        <Text style={styles.kpiValue}>{report.kpis.uniqueClients}</Text>
-                        <Text style={styles.kpiLabel}>Unique Clients</Text>
-                      </View>
-                      <View style={styles.kpiItem}>
-                        <Text style={styles.kpiValue}>{report.kpis.averageServiceValue}</Text>
-                        <Text style={styles.kpiLabel}>Avg. Service Value</Text>
-                      </View>
+                  <View style={styles.kpisGrid}>
+                    <View style={styles.kpiItem}>
+                      <Text style={styles.kpiValue}>{r.kpis?.totalBookings ?? "—"}</Text>
+                      <Text style={styles.kpiLabel}>Total Bookings</Text>
+                    </View>
+                    <View style={styles.kpiItem}>
+                      <Text style={styles.kpiValue}>{r.kpis?.totalRevenue ?? "—"}</Text>
+                      <Text style={styles.kpiLabel}>Revenue</Text>
+                    </View>
+                    <View style={styles.kpiItem}>
+                      <Text style={styles.kpiValue}>{r.kpis?.uniqueClients ?? "—"}</Text>
+                      <Text style={styles.kpiLabel}>Unique Clients</Text>
+                    </View>
+                    <View style={styles.kpiItem}>
+                      <Text style={styles.kpiValue}>{r.kpis?.showRate ?? "—"}</Text>
+                      <Text style={styles.kpiLabel}>Show Rate</Text>
                     </View>
                   </View>
 
                   <View style={styles.reportActions}>
                     <Button
                       mode="outlined"
-                      onPress={() => handlePreviewReport(report)}
-                      style={styles.actionButton}
                       icon="eye"
                       compact
+                      style={styles.actionButton}
+                      onPress={() => handlePreviewPDF(r)}
                     >
                       Preview
                     </Button>
                     <Button
                       mode="contained"
-                      onPress={() => handleDownloadReport(report)}
-                      style={styles.actionButton}
                       icon="download"
                       compact
+                      style={styles.actionButton}
+                      onPress={() => handleDownloadPDF(r)}
                     >
                       Download PDF
+                    </Button>
+                    <Button
+                      mode="text"
+                      icon="file-delimited"
+                      compact
+                      style={styles.actionButton}
+                      onPress={() => handleDownloadCSV(r)}
+                    >
+                      CSV
                     </Button>
                   </View>
                 </Surface>
@@ -233,8 +427,11 @@ export default function ReportsScreen() {
         <View style={styles.bottomSpacing} />
       </ScrollView>
     </VerificationGate>
-  )
+  );
 }
+
+
+
 
 const styles = StyleSheet.create({
   container: {

@@ -1,7 +1,7 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import { View, ScrollView, StyleSheet } from "react-native"
+import { useEffect, useState } from "react";
+import { View, ScrollView, StyleSheet } from "react-native";
 import {
   Text,
   Surface,
@@ -11,59 +11,90 @@ import {
   TextInput,
   useTheme,
   Snackbar,
-} from "react-native-paper"
-import { useRouter } from "expo-router"
-import { VerificationGate } from "../../../components/VerificationGate"
-import { Section } from "../../../components/Section"
-import { getBusinessProfile, updateBusinessProfile } from "../../../lib/api/manager"
-import type { BusinessProfile } from "../../../lib/types"
+} from "react-native-paper";
+import { useRouter } from "expo-router";
+import { VerificationGate } from "../../../components/VerificationGate";
+import { Section } from "../../../components/Section";
+
+// ✅ use your existing manager API module that talks to /api/manager/me
+import {
+  getBusinessProfile,
+  updateBusinessProfile,
+} from "../../../lib/api/modules/manager"; // <— path matters
+
+type ProfileState = {
+  name: string;
+  description?: string;
+  address?: string;
+  phone?: string;
+  email?: string;
+  // If you later persist a business "type", add it here too
+  type?: string;
+};
 
 export default function BusinessProfileScreen() {
-  const router = useRouter()
-  const theme = useTheme()
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [profile, setProfile] = useState<BusinessProfile | null>(null)
-  const [snackbarVisible, setSnackbarVisible] = useState(false)
-  const [snackbarMessage, setSnackbarMessage] = useState("")
+  const router = useRouter();
+  const theme = useTheme();
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [profile, setProfile] = useState<ProfileState | null>(null);
+  const [snackbarVisible, setSnackbarVisible] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState("");
 
   useEffect(() => {
-    loadProfile()
-  }, [])
+    loadProfile();
+  }, []);
 
-  const loadProfile = async () => {
-    setLoading(true)
+  async function loadProfile() {
+    setLoading(true);
     try {
-      const profileData = await getBusinessProfile("business-1")
-      setProfile(profileData)
+      // GET /api/manager/me -> returns business plus (now) phone/email from owner
+      const b = await getBusinessProfile();
+      const p: ProfileState = {
+        name: b?.name ?? "",
+        description: b?.description ?? "",
+        address: b?.address ?? "",
+        phone: b?.phone ?? "",
+        email: b?.email ?? "",
+        type: b?.type ?? "", // only shows if you add it to the schema later
+      };
+      setProfile(p);
     } catch (error) {
-      console.error("Error loading profile:", error)
+      console.error("Error loading profile:", error);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
   }
 
-  const handleSave = async () => {
-    if (!profile) return
-
-    setSaving(true)
+  async function handleSave() {
+    if (!profile) return;
+    setSaving(true);
     try {
-      await updateBusinessProfile("business-1", profile)
-      setSnackbarMessage("Profile updated successfully")
-      setSnackbarVisible(true)
+      // PUT /api/manager/me -> updates Business + (owner) User phone/email
+      await updateBusinessProfile({
+        name: profile.name,
+        description: profile.description,
+        address: profile.address,
+        phone: profile.phone,   // updated on owner User
+        email: profile.email,   // updated on owner User
+        // type: profile.type,  // uncomment only if you add Business.type in schema
+      });
+      setSnackbarMessage("Profile updated successfully");
+      setSnackbarVisible(true);
     } catch (error) {
-      console.error("Error updating profile:", error)
-      setSnackbarMessage("Failed to update profile")
-      setSnackbarVisible(true)
+      console.error("Error updating profile:", error);
+      setSnackbarMessage("Failed to update profile");
+      setSnackbarVisible(true);
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
   }
 
-  const updateField = (field: keyof BusinessProfile, value: string) => {
-    if (!profile) return
-    setProfile({ ...profile, [field]: value })
-  }
+  const updateField = (field: keyof ProfileState, value: string) => {
+    if (!profile) return;
+    setProfile({ ...profile, [field]: value });
+  };
 
   if (loading) {
     return (
@@ -71,7 +102,7 @@ export default function BusinessProfileScreen() {
         <ActivityIndicator size="large" color={theme.colors.primary} />
         <Text style={styles.loadingText}>Loading profile...</Text>
       </View>
-    )
+    );
   }
 
   if (!profile) {
@@ -82,7 +113,7 @@ export default function BusinessProfileScreen() {
           Retry
         </Button>
       </View>
-    )
+    );
   }
 
   return (
@@ -93,7 +124,7 @@ export default function BusinessProfileScreen() {
           <Text style={styles.title}>Business Profile</Text>
         </View>
 
-        <Section title="Basic Information">
+        <Section title="Business Profile">
           <Surface style={styles.formCard} elevation={2}>
             <TextInput
               mode="outlined"
@@ -105,16 +136,17 @@ export default function BusinessProfileScreen() {
 
             <TextInput
               mode="outlined"
-              label="Business Type *"
-              value={profile.type}
+              label="Business Type"
+              value={profile.type ?? ""}
               onChangeText={(text) => updateField("type", text)}
               style={styles.input}
+              placeholder="e.g., Beauty Salon"
             />
 
             <TextInput
               mode="outlined"
-              label="Phone Number *"
-              value={profile.phone}
+              label="Phone Number"
+              value={profile.phone ?? ""}
               onChangeText={(text) => updateField("phone", text)}
               keyboardType="phone-pad"
               style={styles.input}
@@ -122,8 +154,8 @@ export default function BusinessProfileScreen() {
 
             <TextInput
               mode="outlined"
-              label="Email Address *"
-              value={profile.email}
+              label="Email Address"
+              value={profile.email ?? ""}
               onChangeText={(text) => updateField("email", text)}
               keyboardType="email-address"
               style={styles.input}
@@ -132,7 +164,7 @@ export default function BusinessProfileScreen() {
             <TextInput
               mode="outlined"
               label="Business Description"
-              value={profile.description}
+              value={profile.description ?? ""}
               onChangeText={(text) => updateField("description", text)}
               multiline
               numberOfLines={4}
@@ -146,7 +178,7 @@ export default function BusinessProfileScreen() {
             <TextInput
               mode="outlined"
               label="Business Address"
-              value={profile.address}
+              value={profile.address ?? ""}
               onChangeText={(text) => updateField("address", text)}
               multiline
               numberOfLines={3}
@@ -164,7 +196,7 @@ export default function BusinessProfileScreen() {
             style={[styles.saveButton, { backgroundColor: theme.colors.primary }]}
             icon="content-save"
           >
-            Save Changes
+            Save Profile Changes
           </Button>
         </View>
 
@@ -172,10 +204,7 @@ export default function BusinessProfileScreen() {
           visible={snackbarVisible}
           onDismiss={() => setSnackbarVisible(false)}
           duration={3000}
-          action={{
-            label: "OK",
-            onPress: () => setSnackbarVisible(false),
-          }}
+          action={{ label: "OK", onPress: () => setSnackbarVisible(false) }}
         >
           {snackbarMessage}
         </Snackbar>
@@ -183,8 +212,9 @@ export default function BusinessProfileScreen() {
         <View style={styles.bottomSpacing} />
       </ScrollView>
     </VerificationGate>
-  )
+  );
 }
+
 
 const styles = StyleSheet.create({
   container: {

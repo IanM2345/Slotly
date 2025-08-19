@@ -13,11 +13,14 @@
     "@expo/metro-runtime": "~5.0.4",
     "@react-native-community/datetimepicker": "8.4.1",
     "@tanstack/react-query": "^5.85.3",
+    "axios": "^1.11.0",
     "expo": "~53.0.0",
     "expo-camera": "~16.1.11",
+    "expo-file-system": "~18.1.11",
     "expo-linking": "~7.1.7",
     "expo-router": "~5.1.4",
     "expo-secure-store": "~14.2.3",
+    "expo-sharing": "~13.1.5",
     "expo-splash-screen": "^0.30.10",
     "expo-status-bar": "^2.2.3",
     "expo-web-browser": "~14.2.0",
@@ -25,13 +28,18 @@
     "react-dom": "^19.0.0",
     "react-native": "^0.79.5",
     "react-native-paper": "^5.14.5",
+    "react-native-svg": "15.11.2",
     "react-native-vector-icons": "^10.2.0",
     "react-native-web": "^0.20.0",
-    "zod": "^3.23.8"
+    "victory": "^37.3.6",
+    "victory-native": "^41.19.2",
+    "zod": "^3.23.8",
+    "typescript": "~5.8.3"
   },
   "devDependencies": {
     "metro": "^0.82.0",
     "metro-config": "^0.82.0",
-    "metro-resolver": "^0.82.0"
+    "metro-resolver": "^0.82.0",
+    "typescript": "^5.9.2"
   }
 }
