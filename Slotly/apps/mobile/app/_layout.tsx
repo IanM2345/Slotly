@@ -18,7 +18,8 @@ import {
 } from "@expo-google-fonts/inter";
 
 // ✅ theme is OUTSIDE app/ so expo-router doesn’t scan it as a route
-import { slotlyTheme } from "../theme/paper";
+import { slotlyTheme } from "./theme/paper";
+import { wireframeTheme } from "./theme/wireframe";
 
 // Context providers
 import { SessionProvider } from "../context/SessionContext";
@@ -73,8 +74,10 @@ export default function RootLayout() {
             <ThemeProvider value={navTheme}>
               <Stack screenOptions={{ headerShown: false }}>
                 <Stack.Screen name="index" />     {/* ← role gate */}
+                {/* Tabs (consumer) are wrapped with wireframe theme inside their own layout */}
                 <Stack.Screen name="(tabs)" />
                 <Stack.Screen name="modal" options={{ presentation: "modal" }} />
+                {/* Non-tabs consumer flows get explicit wireframe theme providers inside their layouts */}
               </Stack>
             </ThemeProvider>
           </PaperProvider>

@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, ScrollView, StyleSheet } from 'react-native';
 import {
   Text,
   Surface,
   IconButton,
   Button,
-  useTheme
+  useTheme,
+  Snackbar
 } from 'react-native-paper';
 import { useRouter } from 'expo-router';
+import { listGiftCards, purchaseGiftCard } from '../../lib/settings/api';
+import type { GiftCard } from '../../lib/settings/types';
 
 type TabType = 'active' | 'archive';
 
@@ -16,6 +19,9 @@ export default function GiftCardsScreen() {
   const router = useRouter();
   
   const [activeTab, setActiveTab] = useState<TabType>('active');
+  const [cards, setCards] = useState<GiftCard[]>([]);
+  const [snack, setSnack] = useState<{ visible: boolean; msg: string }>({ visible: false, msg: '' });
+  useEffect(() => { listGiftCards().then(setCards).catch(() => {}); }, []);
 
   const handleBack = () => {
     router.back();
@@ -26,17 +32,11 @@ export default function GiftCardsScreen() {
   };
 
   return (
-    <Surface style={styles.container}>
+    <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
-        <IconButton
-          icon="arrow-left"
-          size={24}
-          iconColor="#333"
-          onPress={handleBack}
-          style={styles.backButton}
-        />
-        <Text style={styles.headerTitle}>My Gift Cards</Text>
+        <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={handleBack} style={styles.backButton} />
+        <Text style={[styles.headerTitle, { color: theme.colors.onSurface }]}>My Gift Cards</Text>
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
@@ -80,35 +80,26 @@ export default function GiftCardsScreen() {
 
         {/* Content Area */}
         <View style={styles.contentContainer}>
-          {activeTab === 'active' ? (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyStateText}>No active gift cards</Text>
-              <Text style={styles.emptyStateSubtext}>
-                Your active gift cards will appear here
-              </Text>
+          {cards.filter(c => c.status === (activeTab === 'active' ? 'active' : 'archived')).map(c => (
+            <View key={c.id} style={{ borderWidth: 1, borderColor: theme.colors.outline, borderRadius: 12, padding: 12, marginBottom: 8 }}>
+              <Text style={{ fontWeight: '700' }}>{c.label}</Text>
+              <Text style={{ color: theme.colors.onSurfaceVariant }}>Balance: KSh {c.balance}</Text>
+              <Text style={{ color: theme.colors.onSurfaceVariant }}>Status: {c.status}</Text>
             </View>
-          ) : (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyStateText}>No archived gift cards</Text>
-              <Text style={styles.emptyStateSubtext}>
-                Your archived gift cards will appear here
-              </Text>
-            </View>
-          )}
+          ))}
+          <Button mode="contained" style={{ marginTop: 12, borderRadius: 24 }} onPress={async () => { const card: GiftCard = { id: Date.now().toString(), label: 'Gift Card', balance: 1000, status: 'active' }; await purchaseGiftCard(card); const refreshed = await listGiftCards(); setCards(refreshed); setSnack({ visible: true, msg: 'Gift card purchased' }); }}>Purchase Gift Card</Button>
         </View>
 
         {/* Bottom Spacing */}
         <View style={styles.bottomSpacing} />
       </ScrollView>
+      <Snackbar visible={snack.visible} onDismiss={() => setSnack({ visible: false, msg: '' })} duration={2000}>{snack.msg}</Snackbar>
     </Surface>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#ffc0cb', // Slotly pink background
-  },
+  container: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -119,14 +110,7 @@ const styles = StyleSheet.create({
   backButton: {
     marginRight: 8,
   },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#333',
-    flex: 1,
-    textAlign: 'center',
-    marginRight: 48, // Compensate for back button width
-  },
+  headerTitle: { fontSize: 28, fontWeight: 'bold', flex: 1, textAlign: 'center', marginRight: 48 },
   scrollView: {
     flex: 1,
     paddingHorizontal: 16,
@@ -135,17 +119,7 @@ const styles = StyleSheet.create({
     marginTop: 20,
     marginBottom: 24,
   },
-  tabButtons: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderRadius: 25,
-    padding: 4,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-  },
+  tabButtons: { flexDirection: 'row', borderRadius: 25, padding: 4 },
   tabButton: {
     flex: 1,
     margin: 0,
@@ -158,14 +132,8 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 0,
     borderBottomLeftRadius: 0,
   },
-  activeTabButton: {
-    backgroundColor: '#ff69b4',
-    borderColor: '#ff69b4',
-  },
-  inactiveTabButton: {
-    backgroundColor: 'transparent',
-    borderColor: 'transparent',
-  },
+  activeTabButton: {},
+  inactiveTabButton: {},
   tabButtonContent: {
     paddingVertical: 8,
   },
@@ -176,9 +144,7 @@ const styles = StyleSheet.create({
   activeTabText: {
     color: '#fff',
   },
-  inactiveTabText: {
-    color: '#333',
-  },
+  inactiveTabText: {},
   contentContainer: {
     flex: 1,
     minHeight: 300,
@@ -189,17 +155,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 60,
   },
-  emptyStateText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 8,
-  },
-  emptyStateSubtext: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-  },
+  emptyStateText: { fontSize: 18, fontWeight: 'bold', marginBottom: 8 },
+  emptyStateSubtext: { fontSize: 14, textAlign: 'center' },
   bottomSpacing: {
     height: 40,
   },

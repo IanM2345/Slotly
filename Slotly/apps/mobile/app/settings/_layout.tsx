@@ -1,11 +1,15 @@
 import { Stack } from 'expo-router';
+import { PaperProvider } from 'react-native-paper';
+import { slotlyTheme } from '../theme/paper';
 
 export default function SettingsLayout() {
   return (
-    <Stack
-      screenOptions={{
-        headerShown: false, // ✅ Hides the white header across all subpages in settings/
-      }}
-    />
+    <PaperProvider theme={slotlyTheme}>
+      <Stack
+        screenOptions={{
+          headerShown: false,
+        }}
+      />
+    </PaperProvider>
   );
 }

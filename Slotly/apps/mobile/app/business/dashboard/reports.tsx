@@ -84,7 +84,7 @@ export default function ReportsScreen() {
   }
 
   const handleUpgrade = () => {
-    router.push("/(business)/dashboard/billing")
+    router.push("/business/dashboard/billing" as any)
   }
 
   const handlePreviewReport = (report: Report) => {

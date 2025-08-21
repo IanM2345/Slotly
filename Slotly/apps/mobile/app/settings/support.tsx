@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, ScrollView, StyleSheet, Image } from 'react-native';
+import { View, ScrollView, StyleSheet, Linking } from 'react-native';
 import {
   Text,
   Surface,
@@ -18,30 +18,19 @@ export default function SupportScreen() {
     router.back();
   };
 
-  const handleFAQs = () => {
-    router.push('/settings/FAQs');
-  };
+  const handleFAQs = () => { router.push('/settings/FAQs' as any); };
 
-  const handleRateUs = () => {
-    router.push('/settings/feedback');
-  };
+  const handleRateUs = () => { router.push('/settings/feedback' as any); };
 
-  const handleContinue = (index: number) => {
-    console.log(`Continue button ${index} pressed`);
-    // Add specific navigation logic for each continue button
-  };
+  const openMail = () => Linking.openURL('mailto:support@slotly.app');
+  const openTel = () => Linking.openURL('tel:+254700000000');
+  const openChat = () => router.push('/settings/feedback' as any);
 
   return (
-    <Surface style={styles.container}>
+    <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
-        <IconButton
-          icon="arrow-left"
-          size={24}
-          iconColor="#333"
-          onPress={handleBack}
-          style={styles.backButton}
-        />
+        <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={handleBack} style={styles.backButton} />
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
@@ -53,60 +42,36 @@ export default function SupportScreen() {
         </View>
 
         {/* Title */}
-        <Text style={styles.title}>How can we help you?</Text>
+        <Text style={[styles.title, { color: theme.colors.onSurface }]}>How can we help you?</Text>
 
         {/* Support Options */}
         <View style={styles.optionsContainer}>
-          {/* Continue Buttons */}
-          {[1, 2, 3].map((index) => (
-            <TouchableRipple
-              key={index}
-              onPress={() => handleContinue(index)}
-              style={styles.optionButton}
-              rippleColor="rgba(0, 0, 0, 0.1)"
-            >
-              <View style={styles.optionContent}>
-                <Text style={styles.optionText}>Continue</Text>
-              </View>
-            </TouchableRipple>
-          ))}
+          <TouchableRipple onPress={openChat} style={styles.optionButton} rippleColor="rgba(0, 0, 0, 0.1)">
+            <View style={styles.optionContent}><Text style={styles.optionText}>Chat Support</Text><IconButton icon="chevron-right" size={20} /></View>
+          </TouchableRipple>
+          <TouchableRipple onPress={openMail} style={styles.optionButton} rippleColor="rgba(0, 0, 0, 0.1)">
+            <View style={styles.optionContent}><Text style={styles.optionText}>Email Support</Text><IconButton icon="chevron-right" size={20} /></View>
+          </TouchableRipple>
+          <TouchableRipple onPress={openTel} style={styles.optionButton} rippleColor="rgba(0, 0, 0, 0.1)">
+            <View style={styles.optionContent}><Text style={styles.optionText}>Phone Support</Text><IconButton icon="chevron-right" size={20} /></View>
+          </TouchableRipple>
 
           {/* FAQs Button */}
-          <TouchableRipple
-            onPress={handleFAQs}
-            style={styles.optionButton}
-            rippleColor="rgba(0, 0, 0, 0.1)"
-          >
+          <TouchableRipple onPress={handleFAQs} style={styles.optionButton} rippleColor="rgba(0, 0, 0, 0.1)">
             <View style={styles.optionContent}>
               <Text style={styles.optionText}>FAQs</Text>
-              <IconButton
-                icon="chevron-right"
-                size={20}
-                iconColor="#666"
-                style={styles.chevronIcon}
-              />
+              <IconButton icon="chevron-right" size={20} style={styles.chevronIcon} />
             </View>
           </TouchableRipple>
 
           {/* Rate Us Button */}
-          <TouchableRipple
-            onPress={handleRateUs}
-            style={styles.optionButton}
-            rippleColor="rgba(0, 0, 0, 0.1)"
-          >
+          <TouchableRipple onPress={handleRateUs} style={styles.optionButton} rippleColor="rgba(0, 0, 0, 0.1)">
             <View style={styles.optionContent}>
-              <View style={styles.rateUsContent}>
-                <Text style={styles.optionText}>Rate us</Text>
-                <Text style={styles.starIcon}>⭐</Text>
-              </View>
-              <IconButton
-                icon="chevron-right"
-                size={20}
-                iconColor="#666"
-                style={styles.chevronIcon}
-              />
+              <View style={styles.rateUsContent}><Text style={styles.optionText}>Rate us</Text><Text style={styles.starIcon}>⭐</Text></View>
+              <IconButton icon="chevron-right" size={20} style={styles.chevronIcon} />
             </View>
           </TouchableRipple>
+          <Button mode="contained" style={{ marginTop: 16, borderRadius: 28 }} onPress={openChat}>Start Chat</Button>
         </View>
 
         {/* Bottom Spacing */}

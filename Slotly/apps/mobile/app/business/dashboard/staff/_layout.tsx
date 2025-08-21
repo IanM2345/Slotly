@@ -5,7 +5,7 @@ import { createContext, useContext, useState } from "react";
 import { Stack, Redirect } from "expo-router";
 import { Snackbar } from "react-native-paper";
 import { useSession } from "../../../../context/SessionContext";
-import { slotlyTheme } from "../../../../theme/paper";
+import { slotlyTheme } from "../../../theme/paper";
 
 
 interface ToastContextType {

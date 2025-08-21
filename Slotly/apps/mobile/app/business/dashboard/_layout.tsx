@@ -1,6 +1,6 @@
 // apps/mobile/app/business/dashboard/_layout.tsx
 "use client";
-import { slotlyTheme } from "../../../theme/paper";
+import { slotlyTheme } from "../../theme/paper";
 import { Stack, Redirect } from "expo-router";
 import { TierProvider } from "../../../context/TierContext";
 import { VerificationProvider } from "../../../context/VerificationContext";

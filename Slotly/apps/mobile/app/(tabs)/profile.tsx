@@ -13,9 +13,9 @@ import {
   Snackbar,
 } from "react-native-paper";
 import { useRouter } from "expo-router";
-
-// If your SessionContext exports differently, adjust this import:
 import { SessionContext } from "../../context/SessionContext";
+import ListRow from "../components/ui/ListRow";
+import UICard from "../components/ui/Card";
 
 type UserData = {
   name: string;
@@ -31,7 +31,6 @@ export default function ProfileScreen() {
   const theme = useTheme();
   const router = useRouter();
   const session: any = useContext(SessionContext as any);
-  // Mock + fallback data; we’ll prefer session values if present
   const [userData] = useState<UserData>({
     name: "John Doe",
     email: "john.doe@email.com",
@@ -39,19 +38,15 @@ export default function ProfileScreen() {
     profileImage: "https://via.placeholder.com/150x150.png?text=JD",
     joinDate: "January 2024",
     totalBookings: 12,
-    userId: "u1001", // fallback example
+    userId: "u1001",
   });
 
-  // Try to derive a userId from session if your app sets it there
   const resolvedUserId: string | undefined = useMemo(() => {
-  const u = (session && session.user) ? session.user : {};
-  return u.userId || u.id || userData.userId;
-}, [session, userData.userId]);
+    const u = (session && session.user) ? session.user : {};
+    return u.userId || u.id || userData.userId;
+  }, [session, userData.userId]);
 
   const [snack, setSnack] = useState<{ visible: boolean; msg: string }>({ visible: false, msg: "" });
-
-  const handleEditProfile = () => router.push("/edit-profile" as any);
-  const handleSettings = () => router.push("/settings" as any);
 
   const copyOrShareUserId = async () => {
     if (!resolvedUserId) return;
@@ -76,11 +71,11 @@ export default function ProfileScreen() {
     >
       {/* Header */}
       <View style={{ flexDirection: "row", justifyContent: "flex-end", paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 }}>
-        <IconButton icon="cog" size={24} onPress={handleSettings} />
+        <IconButton icon="cog" size={24} onPress={() => router.push("/settings" as any)} />
       </View>
 
       {/* Profile summary */}
-      <Surface style={[styles.card, { backgroundColor: theme.colors.surface }]} elevation={2}>
+      <UICard style={{ marginHorizontal: 16, marginBottom: 16, padding: 16 }}>
         <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 16 }}>
           <Avatar.Image size={80} source={{ uri: userData.profileImage }} />
           <View style={{ marginLeft: 16, flex: 1 }}>
@@ -101,7 +96,7 @@ export default function ProfileScreen() {
           <View style={{ flexDirection: "row", alignItems: "center", padding: 12, gap: 10 }}>
             <View
               style={{
-                backgroundColor: "rgba(245,124,0,0.15)", // soft orange badge
+                backgroundColor: "rgba(245,124,0,0.15)",
                 borderRadius: 8,
                 paddingHorizontal: 10,
                 paddingVertical: 6,
@@ -132,14 +127,14 @@ export default function ProfileScreen() {
         {/* Contact stats */}
         <Card mode="outlined" style={{ marginTop: 12 }}>
           <Card.Content>
-            <Row label="Email" value={userData.email} />
+            <ListRow label="Email" value={userData.email} />
             <Divider />
-            <Row label="Phone" value={userData.phone} />
+            <ListRow label="Phone" value={userData.phone} />
             <Divider />
-            <Row label="Total Bookings" value={String(userData.totalBookings)} />
+            <ListRow label="Total Bookings" value={String(userData.totalBookings)} />
           </Card.Content>
         </Card>
-      </Surface>
+      </UICard>
 
       {/* Favourites */}
       <Section title="Favourites">
@@ -171,7 +166,7 @@ export default function ProfileScreen() {
 
       {/* Quick actions */}
       <View style={{ flexDirection: "row", gap: 12, paddingHorizontal: 16, marginBottom: 20 }}>
-        <Button mode="outlined" style={{ flex: 1 }} onPress={() => router.push("/booking-history" as any)}>
+        <Button mode="outlined" style={{ flex: 1 }} onPress={() => router.push("/(tabs)/history" as any)}>
           Booking History
         </Button>
         <Button mode="outlined" style={{ flex: 1 }} onPress={() => router.push("/favorites" as any)}>
@@ -181,7 +176,7 @@ export default function ProfileScreen() {
 
       {/* Edit Profile CTA */}
       <View style={{ paddingHorizontal: 16 }}>
-        <Button mode="contained" onPress={handleEditProfile}>
+        <Button mode="contained" onPress={() => router.push("/edit-profile" as any)}>
           Edit Profile
         </Button>
       </View>
@@ -200,18 +195,6 @@ export default function ProfileScreen() {
   );
 }
 
-/* ---- Helpers ---- */
-
-function Row({ label, value }: { label: string; value?: string }) {
-  const theme = useTheme();
-  return (
-    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12 }}>
-      <Text style={{ color: theme.colors.onSurfaceVariant, fontWeight: "600" }}>{label}</Text>
-      <Text style={{ color: theme.colors.onSurface, fontWeight: "700" }}>{value ?? "—"}</Text>
-    </View>
-  );
-}
-
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   const theme = useTheme();
   return (
@@ -219,9 +202,9 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <Text variant="titleMedium" style={{ fontWeight: "800", color: theme.colors.primary, marginBottom: 8 }}>
         {title}
       </Text>
-      <Surface style={[styles.card, { backgroundColor: theme.colors.surface }]} elevation={1}>
+      <UICard>
         {children}
-      </Surface>
+      </UICard>
     </View>
   );
 }
@@ -245,8 +228,3 @@ function HScroller({ items }: { items: { id: number; name: string; image: string
     </ScrollView>
   );
 }
-
-/* ---- Styles ---- */
-const styles = StyleSheet.create({
-  card: { marginHorizontal: 16, marginBottom: 16, borderRadius: 16, padding: 16 },
-});

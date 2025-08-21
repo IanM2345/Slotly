@@ -68,7 +68,7 @@ export default function CouponsScreen() {
   }
 
   const handleUpgrade = () => {
-    router.push("/(business)/dashboard/billing")
+    router.push("/business/dashboard/billing" as any)
   }
 
   const handleCouponAction = (coupon: Coupon, action: string) => {

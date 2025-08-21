@@ -1,108 +1,96 @@
 // explore.tsx
 
-import React from 'react';
+import React, { useState } from 'react';
+import { View, ScrollView, Image, StyleSheet, TouchableOpacity } from 'react-native';
+import { Text, SegmentedButtons, useTheme } from 'react-native-paper';
 import { useRouter } from 'expo-router';
-import { TouchableOpacity } from 'react-native';
+import SearchBar from '../components/ui/SearchBar';
+import Chip from '../components/ui/Chip';
+import UICard from '../components/ui/Card';
 
-import { View, ScrollView, StyleSheet, Image } from 'react-native';
-import { Text, TextInput, Chip, useTheme } from 'react-native-paper';
+type Mode = 'institutions' | 'services';
 
 export default function ExploreScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const [query, setQuery] = useState('');
+  const [mode, setMode] = useState<Mode>('institutions');
 
   return (
-    <ScrollView style={styles.container}>
-      {/* Location Header */}
-      <Text style={styles.locationText}>📍 Nairobi, Kenya</Text>
+    <ScrollView style={{ flex: 1, backgroundColor: theme.colors.background }} contentContainerStyle={{ paddingBottom: 24 }}>
+      <View style={{ height: 12 }} />
+      <SearchBar placeholder="Search" value={query} onChangeText={setQuery} onPressFilters={() => router.push('/filters' as any)} />
 
-      {/* Search Bar */}
-      <TextInput
-        mode="outlined"
-        placeholder="Search services..."
-        style={styles.searchBar}
-        left={<TextInput.Icon icon="magnify" />}
-      />
+      {/* Toggle */}
+      <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
+        <SegmentedButtons
+          value={mode}
+          onValueChange={(v) => setMode(v as Mode)}
+          buttons={[
+            { value: 'institutions', label: 'Institutions' },
+            { value: 'services', label: 'Services' },
+          ]}
+          density="small"
+          style={{ borderRadius: 12 }}
+        />
+      </View>
 
-      {/* Categories */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categories}>
-        {['Hair', 'Nails', 'Barber', 'Massage', 'Spa', 'Makeup'].map((category, index) => (
-          <Chip key={index} style={styles.chip} mode="outlined">
-            {category}
-          </Chip>
-        ))}
+      {/* Top chips */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hScroll}>
+        <Chip>Near me</Chip>
+        <Chip>When?</Chip>
+        <Chip>Open now</Chip>
+        <Chip>Offers</Chip>
       </ScrollView>
 
-      {/* Featured Services */}
-      <Text style={styles.sectionTitle}>Featured Services</Text>
-      <View style={styles.cards}>
-        {[1, 2, 3].map((id) => (
-         <TouchableOpacity
-  key={id}
-  style={styles.card}
-  onPress={() => router.push('/service-details')}
->
-  <Image
-    source={{ uri: 'https://via.placeholder.com/150x100.png?text=Service+Image' }}
-    style={styles.cardImage}
-  />
-  <Text style={styles.cardTitle}>Service Name</Text>
-  <Text style={styles.cardSub}>Salon · KSh 1,500</Text>
-</TouchableOpacity>
+      {mode === 'institutions' ? (
+        <View style={{ paddingHorizontal: 16, gap: 12 }}>
+          {[1, 2, 3, 4].map((i) => (
+            <TouchableOpacity key={i} onPress={() => router.push(`/institution/${i}` as any)}>
+              <UICard>
+                <Image source={{ uri: 'https://via.placeholder.com/600x160.png?text=Institution' }} style={{ width: '100%', height: 140 }} />
+                <View style={{ padding: 12 }}>
+                  <Text variant="titleSmall" style={{ fontWeight: '700' }}>Bella Salon</Text>
+                  <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Nairobi · 1.2 km</Text>
+                </View>
+              </UICard>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : (
+        <>
+          <View style={{ paddingHorizontal: 16, gap: 12 }}>
+            {[1, 2, 3, 4, 5].map((i) => (
+              <TouchableOpacity key={i} onPress={() => router.push({ pathname: '/booking/service', params: { serviceId: String(i) } } as any)}>
+                <UICard>
+                  <Image source={{ uri: 'https://via.placeholder.com/600x160.png?text=Service' }} style={{ width: '100%', height: 140 }} />
+                  <View style={{ padding: 12 }}>
+                    <Text variant="titleSmall" style={{ fontWeight: '700' }}>Deluxe Haircut</Text>
+                    <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Bella Salon · KSh 1,500</Text>
+                  </View>
+                </UICard>
+              </TouchableOpacity>
+            ))}
+          </View>
 
-        ))}
-      </View>
+          <Text style={{ marginTop: 16, marginBottom: 8, paddingHorizontal: 16, fontWeight: '800' }}>Popular in your area (12)</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hScroll}>
+            {[1, 2, 3].map((i) => (
+              <UICard key={i} style={{ width: 220, overflow: 'hidden' }}>
+                <Image source={{ uri: 'https://via.placeholder.com/220x120.png?text=Popular' }} style={{ width: '100%', height: 120 }} />
+                <View style={{ padding: 12 }}>
+                  <Text variant="titleSmall" style={{ fontWeight: '700' }}>Beard Trim</Text>
+                  <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>Gents Barber · KSh 800</Text>
+                </View>
+              </UICard>
+            ))}
+          </ScrollView>
+        </>
+      )}
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    padding: 16,
-    backgroundColor: '#fff',
-  },
-  locationText: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 12,
-  },
-  searchBar: {
-    marginBottom: 20,
-  },
-  categories: {
-    marginBottom: 24,
-  },
-  chip: {
-    marginRight: 10,
-    backgroundColor: '#ffc0cb', // Light pink theme
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 12,
-  },
-  cards: {
-    gap: 16,
-  },
-  card: {
-    borderRadius: 8,
-    overflow: 'hidden',
-    backgroundColor: '#f8f8f8',
-    marginBottom: 16,
-  },
-  cardImage: {
-    width: '100%',
-    height: 120,
-  },
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    padding: 8,
-  },
-  cardSub: {
-    fontSize: 14,
-    color: '#777',
-    paddingHorizontal: 8,
-    paddingBottom: 8,
-  },
+  hScroll: { paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
 });
