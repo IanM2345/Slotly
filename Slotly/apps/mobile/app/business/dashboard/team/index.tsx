@@ -28,7 +28,7 @@ export default function TeamList() {
         <Text variant="headlineSmall" style={{ fontWeight: "700" }}>
           Team
         </Text>
-        <Link href="./new" asChild>
+        <Link href="/business/dashboard/team/new" asChild>
           <Button mode="contained">Add Staff</Button>
         </Link>
       </View>
@@ -40,7 +40,7 @@ export default function TeamList() {
           <Link key={m.id} href={`./${m.id}`} asChild>
             <List.Item
               title={`${m.firstName} ${m.lastName}`}
-              description={`${m.role} • ${m.email}`}
+              description={`${m.role} • ${m.userId ?? "no-id"}`}
               right={() => (
                 <Chip compact style={{ alignSelf: "center" }}>
                   {m.status}

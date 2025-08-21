@@ -3,6 +3,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Link, Tabs } from 'expo-router';
 import { Pressable, Platform } from 'react-native';
 import { PaperProvider } from 'react-native-paper';
+import { slotlyTheme } from "../../theme/paper";
 
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';

@@ -57,9 +57,8 @@ export default function TeamDetail() {
       </View>
 
       <Surface style={styles.card} elevation={2}>
-        <Text style={{ marginBottom: 6 }}>{m.role}</Text>
-        <Text style={{ marginBottom: 6 }}>{m.email}</Text>
-        <Text style={{ marginBottom: 6 }}>{m.phone}</Text>
+        <Text style={{ marginBottom: 6 }}>Role: {m.role}</Text>
+        <Text style={{ marginBottom: 6 }}>User ID: {m.userId}</Text>
 
         <View style={styles.row}>
           <Text>Status: {m.status}</Text>

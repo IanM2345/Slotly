@@ -89,15 +89,7 @@ export default function StaffHubScreen() {
         <Text variant="headlineSmall" style={{ fontWeight: "700" }}>
           Staff Dashboard
         </Text>
-        <Button
-          mode="contained"
-          buttonColor="#FBC02D"
-          textColor={theme.colors.onPrimary}
-         onPress={() => router.push("/business/dashboard/staff/register" as RelativePathString)}
-
-        >
-          Register
-        </Button>
+      
       </View>
 
       {loading ? (

@@ -1,337 +1,252 @@
-import React, { useState } from 'react';
-import { View, ScrollView, StyleSheet, Image, TouchableOpacity } from 'react-native';
-import { 
-  Text, 
-  Avatar, 
-  Button, 
-  Card, 
-  Divider, 
+import React, { useState, useMemo, useContext } from "react";
+import { View, ScrollView, StyleSheet, Platform, Share } from "react-native";
+import {
+  Text,
+  Avatar,
+  Button,
+  Card,
+  Divider,
   IconButton,
   useTheme,
-  Surface
-} from 'react-native-paper';
-import { useRouter } from 'expo-router';
+  Surface,
+  Chip,
+  Snackbar,
+} from "react-native-paper";
+import { useRouter } from "expo-router";
 
-interface UserData {
+// If your SessionContext exports differently, adjust this import:
+import { SessionContext } from "../../context/SessionContext";
+
+type UserData = {
   name: string;
   email: string;
   phone: string;
   profileImage?: string;
   joinDate: string;
   totalBookings: number;
-}
+  userId?: string;
+};
 
 export default function ProfileScreen() {
   const theme = useTheme();
   const router = useRouter();
-  
-  // Mock user data - replace with actual user data from your state management
+  const session: any = useContext(SessionContext as any);
+  // Mock + fallback data; we’ll prefer session values if present
   const [userData] = useState<UserData>({
-    name: 'John Doe',
-    email: 'john.doe@email.com',
-    phone: '+254 712 345 678',
-    profileImage: 'https://via.placeholder.com/150x150.png?text=JD',
-    joinDate: 'January 2024',
-    totalBookings: 12
+    name: "John Doe",
+    email: "john.doe@email.com",
+    phone: "+254 712 345 678",
+    profileImage: "https://via.placeholder.com/150x150.png?text=JD",
+    joinDate: "January 2024",
+    totalBookings: 12,
+    userId: "u1001", // fallback example
   });
 
-  const favoriteServices = [
-    { id: 1, name: 'Hair Cut', image: 'https://via.placeholder.com/60x60.png?text=Hair' },
-    { id: 2, name: 'Manicure', image: 'https://via.placeholder.com/60x60.png?text=Nails' },
-    { id: 3, name: 'Massage', image: 'https://via.placeholder.com/60x60.png?text=Spa' },
-    { id: 4, name: 'Barber', image: 'https://via.placeholder.com/60x60.png?text=Cut' },
-    { id: 5, name: 'Facial', image: 'https://via.placeholder.com/60x60.png?text=Face' },
-    { id: 6, name: 'Makeup', image: 'https://via.placeholder.com/60x60.png?text=MU' },
-  ];
+  // Try to derive a userId from session if your app sets it there
+  const resolvedUserId: string | undefined = useMemo(() => {
+  const u = (session && session.user) ? session.user : {};
+  return u.userId || u.id || userData.userId;
+}, [session, userData.userId]);
 
-  const frequentlyVisited = [
-    { id: 1, name: 'Bella Salon', image: 'https://via.placeholder.com/60x60.png?text=BS' },
-    { id: 2, name: 'Gents Barber', image: 'https://via.placeholder.com/60x60.png?text=GB' },
-    { id: 3, name: 'Spa Relax', image: 'https://via.placeholder.com/60x60.png?text=SR' },
-    { id: 4, name: 'Nail Studio', image: 'https://via.placeholder.com/60x60.png?text=NS' },
-    { id: 5, name: 'Hair Plus', image: 'https://via.placeholder.com/60x60.png?text=HP' },
-    { id: 6, name: 'Beauty Hub', image: 'https://via.placeholder.com/60x60.png?text=BH' },
-  ];
+  const [snack, setSnack] = useState<{ visible: boolean; msg: string }>({ visible: false, msg: "" });
 
-  const handleEditProfile = () => {
-    // Navigate to edit profile screen
-    router.push('/edit-profile' as any);
-  };
+  const handleEditProfile = () => router.push("/edit-profile" as any);
+  const handleSettings = () => router.push("/settings" as any);
 
-  const handleSettings = () => {
-    // Navigate to settings screen
-    router.push('/settings' as any);
+  const copyOrShareUserId = async () => {
+    if (!resolvedUserId) return;
+    try {
+      if (Platform.OS === "web" && typeof navigator !== "undefined" && (navigator as any).clipboard?.writeText) {
+        await (navigator as any).clipboard.writeText(resolvedUserId);
+        setSnack({ visible: true, msg: "User ID copied" });
+      } else {
+        await Share.share({ message: `My Slotly User ID: ${resolvedUserId}` });
+        setSnack({ visible: true, msg: "User ID ready to share" });
+      }
+    } catch {
+      setSnack({ visible: true, msg: "Could not copy/share User ID" });
+    }
   };
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      {/* Header with Settings */}
-      <View style={styles.header}>
-        <IconButton
-          icon="cog"
-          size={28}
-          iconColor="#666"
-          onPress={handleSettings}
-          style={styles.settingsButton}
-        />
+    <ScrollView
+      style={{ flex: 1, backgroundColor: theme.colors.background }}
+      contentContainerStyle={{ paddingBottom: 24 }}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* Header */}
+      <View style={{ flexDirection: "row", justifyContent: "flex-end", paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 }}>
+        <IconButton icon="cog" size={24} onPress={handleSettings} />
       </View>
 
-      {/* Profile Section */}
-      <Surface style={styles.profileSection} elevation={2}>
-        <View style={styles.profileHeader}>
-          <Avatar.Image
-            size={80}
-            source={{ uri: userData.profileImage }}
-            style={styles.avatar}
-          />
-          <View style={styles.profileInfo}>
-            <Text style={styles.greeting}>hello,</Text>
-            <Text style={styles.userName}>{userData.name}</Text>
-            <Text style={styles.memberSince}>Member since {userData.joinDate}</Text>
+      {/* Profile summary */}
+      <Surface style={[styles.card, { backgroundColor: theme.colors.surface }]} elevation={2}>
+        <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 16 }}>
+          <Avatar.Image size={80} source={{ uri: userData.profileImage }} />
+          <View style={{ marginLeft: 16, flex: 1 }}>
+            <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant, marginBottom: 2 }}>
+              Hello,
+            </Text>
+            <Text variant="headlineSmall" style={{ fontWeight: "800", color: theme.colors.primary, marginBottom: 2 }}>
+              {userData.name}
+            </Text>
+            <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
+              Member since {userData.joinDate}
+            </Text>
           </View>
         </View>
 
-        {/* User Details Card */}
-        <Card style={styles.detailsCard} mode="outlined">
+        {/* ID row (prominent) */}
+        <Card mode="contained" style={{ borderRadius: 12, overflow: "hidden" }}>
+          <View style={{ flexDirection: "row", alignItems: "center", padding: 12, gap: 10 }}>
+            <View
+              style={{
+                backgroundColor: "rgba(245,124,0,0.15)", // soft orange badge
+                borderRadius: 8,
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+              }}
+            >
+              <Text style={{ fontWeight: "800", color: theme.colors.secondary }}>USER ID</Text>
+            </View>
+            <Text
+              selectable
+              style={{
+                fontSize: 16,
+                fontWeight: "700",
+                letterSpacing: 0.4,
+                color: theme.colors.onSurface,
+                flex: 1,
+              }}
+            >
+              {resolvedUserId ?? "—"}
+            </Text>
+            {!!resolvedUserId && (
+              <Chip icon={Platform.OS === "web" ? "content-copy" : "share-variant"} onPress={copyOrShareUserId} compact>
+                {Platform.OS === "web" ? "Copy" : "Share"}
+              </Chip>
+            )}
+          </View>
+        </Card>
+
+        {/* Contact stats */}
+        <Card mode="outlined" style={{ marginTop: 12 }}>
           <Card.Content>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Email</Text>
-              <Text style={styles.detailValue}>{userData.email}</Text>
-            </View>
-            <Divider style={styles.divider} />
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Phone</Text>
-              <Text style={styles.detailValue}>{userData.phone}</Text>
-            </View>
-            <Divider style={styles.divider} />
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Total Bookings</Text>
-              <Text style={styles.detailValue}>{userData.totalBookings}</Text>
-            </View>
+            <Row label="Email" value={userData.email} />
+            <Divider />
+            <Row label="Phone" value={userData.phone} />
+            <Divider />
+            <Row label="Total Bookings" value={String(userData.totalBookings)} />
           </Card.Content>
         </Card>
       </Surface>
 
-      {/* Favorites Section */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Favourites:</Text>
-        <ScrollView 
-          horizontal 
-          showsHorizontalScrollIndicator={false}
-          style={styles.horizontalScroll}
-          contentContainerStyle={styles.scrollContent}
-        >
-          {favoriteServices.map((service) => (
-            <TouchableOpacity key={service.id} style={styles.serviceItem}>
-              <Avatar.Image
-                size={60}
-                source={{ uri: service.image }}
-                style={styles.serviceAvatar}
-              />
-              <Text style={styles.serviceName}>{service.name}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
+      {/* Favourites */}
+      <Section title="Favourites">
+        <HScroller
+          items={[
+            { id: 1, name: "Hair Cut", image: "https://via.placeholder.com/60x60.png?text=Hair" },
+            { id: 2, name: "Manicure", image: "https://via.placeholder.com/60x60.png?text=Nails" },
+            { id: 3, name: "Massage", image: "https://via.placeholder.com/60x60.png?text=Spa" },
+            { id: 4, name: "Barber", image: "https://via.placeholder.com/60x60.png?text=Cut" },
+            { id: 5, name: "Facial", image: "https://via.placeholder.com/60x60.png?text=Face" },
+            { id: 6, name: "Makeup", image: "https://via.placeholder.com/60x60.png?text=MU" },
+          ]}
+        />
+      </Section>
 
-      {/* Frequently Visited Section */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Frequently visited:</Text>
-        <ScrollView 
-          horizontal 
-          showsHorizontalScrollIndicator={false}
-          style={styles.horizontalScroll}
-          contentContainerStyle={styles.scrollContent}
-        >
-          {frequentlyVisited.map((place) => (
-            <TouchableOpacity key={place.id} style={styles.serviceItem}>
-              <Avatar.Image
-                size={60}
-                source={{ uri: place.image }}
-                style={styles.serviceAvatar}
-              />
-              <Text style={styles.serviceName}>{place.name}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
+      {/* Frequently visited */}
+      <Section title="Frequently visited">
+        <HScroller
+          items={[
+            { id: 1, name: "Bella Salon", image: "https://via.placeholder.com/60x60.png?text=BS" },
+            { id: 2, name: "Gents Barber", image: "https://via.placeholder.com/60x60.png?text=GB" },
+            { id: 3, name: "Spa Relax", image: "https://via.placeholder.com/60x60.png?text=SR" },
+            { id: 4, name: "Nail Studio", image: "https://via.placeholder.com/60x60.png?text=NS" },
+            { id: 5, name: "Hair Plus", image: "https://via.placeholder.com/60x60.png?text=HP" },
+            { id: 6, name: "Beauty Hub", image: "https://via.placeholder.com/60x60.png?text=BH" },
+          ]}
+        />
+      </Section>
 
-      {/* Quick Actions */}
-      <View style={styles.quickActions}>
-        <Button
-          mode="outlined"
-          onPress={() => router.push('/booking-history' as any)}
-          style={[styles.actionButton, styles.outlinedButton]}
-          labelStyle={styles.outlinedButtonText}
-        >
+      {/* Quick actions */}
+      <View style={{ flexDirection: "row", gap: 12, paddingHorizontal: 16, marginBottom: 20 }}>
+        <Button mode="outlined" style={{ flex: 1 }} onPress={() => router.push("/booking-history" as any)}>
           Booking History
         </Button>
-        <Button
-          mode="outlined"
-          onPress={() => router.push('/favorites' as any)}
-          style={[styles.actionButton, styles.outlinedButton]}
-          labelStyle={styles.outlinedButtonText}
-        >
+        <Button mode="outlined" style={{ flex: 1 }} onPress={() => router.push("/favorites" as any)}>
           My Favorites
         </Button>
       </View>
 
-      {/* Edit Profile Button */}
-      <View style={styles.editButtonContainer}>
-        <Button
-          mode="contained"
-          onPress={handleEditProfile}
-          style={styles.editButton}
-          labelStyle={styles.editButtonText}
-          contentStyle={styles.editButtonContent}
-        >
+      {/* Edit Profile CTA */}
+      <View style={{ paddingHorizontal: 16 }}>
+        <Button mode="contained" onPress={handleEditProfile}>
           Edit Profile
         </Button>
       </View>
 
-      {/* Bottom Spacing */}
-      <View style={styles.bottomSpacing} />
+      <Snackbar
+        visible={snack.visible}
+        onDismiss={() => setSnack({ visible: false, msg: "" })}
+        duration={2200}
+        style={{ marginHorizontal: 16, marginTop: 10 }}
+      >
+        {snack.msg}
+      </Snackbar>
+
+      <View style={{ height: 80 }} />
     </ScrollView>
   );
 }
 
+/* ---- Helpers ---- */
+
+function Row({ label, value }: { label: string; value?: string }) {
+  const theme = useTheme();
+  return (
+    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12 }}>
+      <Text style={{ color: theme.colors.onSurfaceVariant, fontWeight: "600" }}>{label}</Text>
+      <Text style={{ color: theme.colors.onSurface, fontWeight: "700" }}>{value ?? "—"}</Text>
+    </View>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const theme = useTheme();
+  return (
+    <View style={{ marginHorizontal: 16, marginBottom: 18 }}>
+      <Text variant="titleMedium" style={{ fontWeight: "800", color: theme.colors.primary, marginBottom: 8 }}>
+        {title}
+      </Text>
+      <Surface style={[styles.card, { backgroundColor: theme.colors.surface }]} elevation={1}>
+        {children}
+      </Surface>
+    </View>
+  );
+}
+
+function HScroller({ items }: { items: { id: number; name: string; image: string }[] }) {
+  const theme = useTheme();
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 12, gap: 12 }}
+    >
+      {items.map((x) => (
+        <View key={x.id} style={{ alignItems: "center", width: 84 }}>
+          <Avatar.Image size={60} source={{ uri: x.image }} style={{ backgroundColor: theme.colors.surface }} />
+          <Text numberOfLines={1} style={{ fontSize: 12, marginTop: 6, color: theme.colors.onSurface, fontWeight: "600" }}>
+            {x.name}
+          </Text>
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+
+/* ---- Styles ---- */
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#ffc0cb', // Light pink background
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 8,
-  },
-  settingsButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-  },
-  profileSection: {
-    margin: 16,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    padding: 20,
-  },
-  profileHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  avatar: {
-    marginRight: 16,
-    backgroundColor: '#fff',
-  },
-  profileInfo: {
-    flex: 1,
-  },
-  greeting: {
-    fontSize: 16,
-    color: '#666',
-    marginBottom: 4,
-  },
-  userName: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 4,
-  },
-  memberSince: {
-    fontSize: 14,
-    color: '#888',
-  },
-  detailsCard: {
-    backgroundColor: '#fff',
-    borderColor: '#f0f0f0',
-  },
-  detailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-  },
-  detailLabel: {
-    fontSize: 16,
-    color: '#666',
-    fontWeight: '500',
-  },
-  detailValue: {
-    fontSize: 16,
-    color: '#333',
-    fontWeight: '600',
-  },
-  divider: {
-    backgroundColor: '#f0f0f0',
-  },
-  section: {
-    marginHorizontal: 16,
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 16,
-  },
-  horizontalScroll: {
-    marginHorizontal: -8,
-  },
-  scrollContent: {
-    paddingHorizontal: 8,
-  },
-  serviceItem: {
-    alignItems: 'center',
-    marginHorizontal: 8,
-    width: 80,
-  },
-  serviceAvatar: {
-    backgroundColor: '#fff',
-    marginBottom: 8,
-  },
-  serviceName: {
-    fontSize: 12,
-    textAlign: 'center',
-    color: '#333',
-    fontWeight: '500',
-  },
-  quickActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginHorizontal: 16,
-    marginBottom: 24,
-    gap: 12,
-  },
-  actionButton: {
-    flex: 1,
-  },
-  outlinedButton: {
-    borderColor: '#fff',
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-  },
-  outlinedButtonText: {
-    color: '#333',
-    fontWeight: '600',
-  },
-  editButtonContainer: {
-    marginHorizontal: 16,
-    marginBottom: 24,
-  },
-  editButton: {
-    backgroundColor: '#ff69b4', // Darker pink for the main button
-    borderRadius: 25,
-  },
-  editButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  editButtonContent: {
-    paddingVertical: 8,
-  },
-  bottomSpacing: {
-    height: 100, // Extra space for bottom navigation
-  },
+  card: { marginHorizontal: 16, marginBottom: 16, borderRadius: 16, padding: 16 },
 });

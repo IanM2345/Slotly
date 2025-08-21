@@ -1,8 +1,17 @@
-import { Stack } from "expo-router"
-import { TierProvider } from "../../../context/TierContext"
-import { VerificationProvider } from "../../../context/VerificationContext"
+// apps/mobile/app/business/dashboard/_layout.tsx
+"use client";
+import { slotlyTheme } from "../../../theme/paper";
+import { Stack, Redirect } from "expo-router";
+import { TierProvider } from "../../../context/TierContext";
+import { VerificationProvider } from "../../../context/VerificationContext";
+import { useSession } from "../../../context/SessionContext";
 
 export default function DashboardLayout() {
+  const { user } = useSession();
+
+  if (!user) return <Redirect href="/login" />;
+  if (user.accountType !== "business") return <Redirect href="/" />;
+
   return (
     <TierProvider initialTier="level4">
       <VerificationProvider initialStatus="verified">
@@ -22,6 +31,5 @@ export default function DashboardLayout() {
         </Stack>
       </VerificationProvider>
     </TierProvider>
-  )
+  );
 }
-

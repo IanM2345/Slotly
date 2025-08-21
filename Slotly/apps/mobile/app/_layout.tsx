@@ -8,7 +8,6 @@ import { Provider as PaperProvider } from "react-native-paper";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import type { MD3Theme } from "react-native-paper";
 
-// ✅ Load Inter weights from the Google Fonts package
 import {
   useFonts,
   Inter_400Regular,
@@ -18,22 +17,21 @@ import {
   Inter_800ExtraBold,
 } from "@expo-google-fonts/inter";
 
-// ✅ Import your theme from OUTSIDE app/ (so expo-router doesn’t scan it as a route)
-import { slotlyTheme } from "./theme/paper";
+// ✅ theme is OUTSIDE app/ so expo-router doesn’t scan it as a route
+import { slotlyTheme } from "../theme/paper";
 
-// Context providers (keep your relative imports)
+// Context providers
 import { SessionProvider } from "../context/SessionContext";
 import { OnboardingProvider } from "../context/OnboardingContext";
 
 export { ErrorBoundary } from "expo-router";
 
 export const unstable_settings = {
-  initialRouteName: "(tabs)",
+  initialRouteName: "index", // role gate runs first
   ssr: false,
 };
 
 export default function RootLayout() {
-  // Load Inter + FontAwesome (icons)
   const [loaded, error] = useFonts({
     Inter_400Regular,
     Inter_500Medium,
@@ -52,9 +50,8 @@ export default function RootLayout() {
   }, [loaded, error]);
 
   if (error) throw error;
-  if (!loaded) return null; // Avoid flashing system font
+  if (!loaded) return null;
 
-  // React Navigation theme bridged to Paper colors
   const navTheme = {
     ...NavDefaultTheme,
     colors: {
@@ -75,6 +72,7 @@ export default function RootLayout() {
           <PaperProvider theme={slotlyTheme as MD3Theme}>
             <ThemeProvider value={navTheme}>
               <Stack screenOptions={{ headerShown: false }}>
+                <Stack.Screen name="index" />     {/* ← role gate */}
                 <Stack.Screen name="(tabs)" />
                 <Stack.Screen name="modal" options={{ presentation: "modal" }} />
               </Stack>
