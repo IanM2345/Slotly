@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
 import {
   Text,
@@ -6,9 +6,12 @@ import {
   IconButton,
   TextInput,
   Button,
-  useTheme
+  useTheme,
+  Snackbar
 } from 'react-native-paper';
 import { useRouter } from 'expo-router';
+import { createReview, listReviews } from '../../lib/settings/api';
+import type { Review } from '../../lib/settings/types';
 
 export default function ReviewsScreen() {
   const theme = useTheme();
@@ -17,6 +20,9 @@ export default function ReviewsScreen() {
   const [rating, setRating] = useState(0);
   const [reviewText, setReviewText] = useState('');
   const [loading, setLoading] = useState(false);
+  const [snack, setSnack] = useState<{ visible: boolean; msg: string }>({ visible: false, msg: '' });
+  const [reviews, setReviews] = useState<Review[]>([]);
+  useEffect(() => { listReviews().then(setReviews).catch(() => {}); }, []);
 
   const handleBack = () => {
     router.back();
@@ -40,19 +46,12 @@ export default function ReviewsScreen() {
 
     setLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      const reviewData = {
-        rating,
-        reviewText: reviewText.trim(),
-        timestamp: new Date().toISOString()
-      };
-      
-      console.log('Saving review:', reviewData);
-      
-      // Navigate back or show success message
-      router.back();
+      await createReview({ id: Date.now().toString(), serviceName: 'Hair Styling & Cut', rating: rating as any, comment: reviewText.trim() });
+      setReviewText('');
+      setRating(0);
+      setSnack({ visible: true, msg: 'Review saved' });
+      const refreshed = await listReviews();
+      setReviews(refreshed);
     } catch (error) {
       console.error('Error saving review:', error);
     } finally {
@@ -83,30 +82,24 @@ export default function ReviewsScreen() {
   };
 
   return (
-    <Surface style={styles.container}>
+    <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
-        <IconButton
-          icon="arrow-left"
-          size={24}
-          iconColor="#333"
-          onPress={handleBack}
-          style={styles.backButton}
-        />
-        <Text style={styles.headerTitle}>Reviews</Text>
+        <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={handleBack} style={styles.backButton} />
+        <Text style={[styles.headerTitle, { color: theme.colors.onSurface }]}>Reviews</Text>
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <View style={styles.content}>
           {/* Service Name Section */}
           <View style={styles.section}>
-            <Text style={styles.sectionLabel}>Service Name</Text>
-            <Text style={styles.serviceName}>Hair Styling & Cut</Text>
+            <Text style={[styles.sectionLabel, { color: theme.colors.onSurface }]}>Service Name</Text>
+            <Text style={[styles.serviceName, { color: theme.colors.onSurfaceVariant }]}>Hair Styling & Cut</Text>
           </View>
 
           {/* Rating Section */}
           <View style={styles.section}>
-            <Text style={styles.sectionLabel}>Rate your experience</Text>
+            <Text style={[styles.sectionLabel, { color: theme.colors.onSurface }]}>Rate your experience</Text>
             <View style={styles.starsContainer}>
               {renderStars()}
             </View>
@@ -114,15 +107,15 @@ export default function ReviewsScreen() {
 
           {/* Review Text Section */}
           <View style={styles.section}>
-            <Text style={styles.sectionLabel}>Describe your experience</Text>
+            <Text style={[styles.sectionLabel, { color: theme.colors.onSurface }]}>Describe your experience</Text>
             <TextInput
               mode="outlined"
               value={reviewText}
               onChangeText={setReviewText}
               style={styles.reviewInput}
-              outlineColor="#333"
-              activeOutlineColor="#333"
-              textColor="#333"
+              outlineColor={theme.colors.outline}
+              activeOutlineColor={theme.colors.primary}
+              textColor={theme.colors.onSurface}
               multiline
               numberOfLines={6}
               placeholder="Share your thoughts about the service..."
@@ -160,18 +153,28 @@ export default function ReviewsScreen() {
           </Button>
         </View>
 
+        {/* Your Reviews */}
+        <View style={{ marginTop: 12 }}>
+          <Text style={[styles.sectionLabel, { color: theme.colors.onSurface }]}>Your Reviews</Text>
+          {reviews.map(r => (
+            <View key={r.id} style={{ borderWidth: 1, borderColor: theme.colors.outline, borderRadius: 12, padding: 12, marginBottom: 8 }}>
+              <Text style={{ fontWeight: '700' }}>{r.serviceName}</Text>
+              <Text style={{ color: theme.colors.onSurfaceVariant }}>Rating: {r.rating}/5</Text>
+              {!!r.comment && <Text style={{ color: theme.colors.onSurfaceVariant }}>{r.comment}</Text>}
+            </View>
+          ))}
+        </View>
+
         {/* Bottom Spacing */}
         <View style={styles.bottomSpacing} />
       </ScrollView>
+      <Snackbar visible={snack.visible} onDismiss={() => setSnack({ visible: false, msg: '' })} duration={2000}>{snack.msg}</Snackbar>
     </Surface>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#ffc0cb', // Slotly pink background
-  },
+  container: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -182,14 +185,7 @@ const styles = StyleSheet.create({
   backButton: {
     marginRight: 8,
   },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#333',
-    flex: 1,
-    textAlign: 'center',
-    marginRight: 48, // Compensate for back button width
-  },
+  headerTitle: { fontSize: 28, fontWeight: 'bold', flex: 1, textAlign: 'center', marginRight: 48 },
   scrollView: {
     flex: 1,
     paddingHorizontal: 16,
@@ -200,17 +196,8 @@ const styles = StyleSheet.create({
   section: {
     marginBottom: 32,
   },
-  sectionLabel: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 12,
-  },
-  serviceName: {
-    fontSize: 16,
-    color: '#555',
-    fontStyle: 'italic',
-  },
+  sectionLabel: { fontSize: 18, fontWeight: '600', marginBottom: 12 },
+  serviceName: { fontSize: 16, fontStyle: 'italic' },
   starsContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -227,16 +214,8 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 2,
   },
-  reviewInput: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    minHeight: 120,
-  },
-  addPhotoButton: {
-    borderColor: '#333',
-    borderWidth: 2,
-    backgroundColor: 'rgba(255, 255, 255, 0.7)',
-    borderRadius: 25,
-  },
+  reviewInput: { backgroundColor: 'transparent', minHeight: 120 },
+  addPhotoButton: { borderRadius: 25 },
   addPhotoButtonText: {
     color: '#333',
     fontSize: 16,
@@ -249,18 +228,11 @@ const styles = StyleSheet.create({
     marginTop: 20,
     marginBottom: 24,
   },
-  saveButton: {
-    backgroundColor: '#ff69b4',
-    borderRadius: 25,
-  },
+  saveButton: { borderRadius: 25 },
   saveButtonContent: {
     paddingVertical: 12,
   },
-  saveButtonText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
+  saveButtonText: { fontSize: 18, fontWeight: 'bold' },
   bottomSpacing: {
     height: 32,
   },

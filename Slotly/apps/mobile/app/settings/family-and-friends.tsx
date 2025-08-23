@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, ScrollView, StyleSheet, Image } from 'react-native';
 import {
   Text,
@@ -11,35 +11,22 @@ import {
   TextInput,
   Button,
   Card,
-  useTheme
+  useTheme,
+  Snackbar
 } from 'react-native-paper';
 import { useRouter } from 'expo-router';
-
-interface FamilyMember {
-  id: string;
-  name: string;
-  phoneNumber: string;
-  relationship?: string;
-}
+import { addFamilyMember, listFamily, removeFamilyMember } from '../../lib/settings/api';
+import type { FamilyMember as FamilyMemberType } from '../../lib/settings/types';
 
 export default function FamilyAndFriendsScreen() {
   const theme = useTheme();
   const router = useRouter();
   
-  const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>([
-    {
-      id: '1',
-      name: 'Sarah Doe',
-      phoneNumber: '+254712345679',
-      relationship: 'Sister'
-    },
-    {
-      id: '2',
-      name: 'Michael Doe',
-      phoneNumber: '+254712345680',
-      relationship: 'Brother'
-    }
-  ]);
+  const [familyMembers, setFamilyMembers] = useState<FamilyMemberType[]>([]);
+  const [snack, setSnack] = useState<{ visible: boolean; msg: string }>({ visible: false, msg: '' });
+  useEffect(() => {
+    listFamily().then(setFamilyMembers).catch(() => {});
+  }, []);
   
   const [showAddModal, setShowAddModal] = useState(false);
   const [newMember, setNewMember] = useState({
@@ -60,19 +47,19 @@ export default function FamilyAndFriendsScreen() {
 
     setLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      const member: FamilyMember = {
+      const member: FamilyMemberType = {
         id: Date.now().toString(),
         name: newMember.name.trim(),
-        phoneNumber: newMember.phoneNumber.trim(),
-        relationship: newMember.relationship.trim() || undefined
+        phone: newMember.phoneNumber.trim(),
+        relation: newMember.relationship.trim() || undefined
       };
 
-      setFamilyMembers(prev => [...prev, member]);
+      await addFamilyMember(member);
+      const refreshed = await listFamily();
+      setFamilyMembers(refreshed);
       setNewMember({ name: '', phoneNumber: '', relationship: '' });
       setShowAddModal(false);
+      setSnack({ visible: true, msg: 'Member added' });
     } catch (error) {
       console.error('Error adding family member:', error);
     } finally {
@@ -80,8 +67,11 @@ export default function FamilyAndFriendsScreen() {
     }
   };
 
-  const handleRemoveMember = (id: string) => {
-    setFamilyMembers(prev => prev.filter(member => member.id !== id));
+  const handleRemoveMemberAction = async (id: string) => {
+    await removeFamilyMember(id);
+    const refreshed = await listFamily();
+    setFamilyMembers(refreshed);
+    setSnack({ visible: true, msg: 'Member removed' });
   };
 
   const handleCancel = () => {
@@ -90,16 +80,11 @@ export default function FamilyAndFriendsScreen() {
   };
 
   return (
-    <Surface style={styles.container}>
+    <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
-        <IconButton
-          icon="arrow-left"
-          size={24}
-          iconColor="#333"
-          onPress={handleBack}
-        />
-        <Text style={styles.headerTitle}>Family and Friends</Text>
+        <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={handleBack} />
+        <Text style={[styles.headerTitle, { color: theme.colors.onSurface }]}>Family and Friends</Text>
         <View style={styles.headerSpacer} />
       </View>
 
@@ -113,39 +98,33 @@ export default function FamilyAndFriendsScreen() {
               resizeMode="contain"
             />
             
-            <Text style={styles.emptyTitle}>Add your Family & Friends</Text>
-            <Text style={styles.emptyDescription}>
+            <Text style={[styles.emptyTitle, { color: theme.colors.onSurface }]}>Add your Family & Friends</Text>
+            <Text style={[styles.emptyDescription, { color: theme.colors.onSurfaceVariant }]}>
               link an account to schedule an appointment on behalf of your family or friends.
             </Text>
             
-            <Button
-              mode="outlined"
-              onPress={() => setShowAddModal(true)}
-              style={styles.addMemberButton}
-              labelStyle={styles.addMemberButtonText}
-              contentStyle={styles.addMemberButtonContent}
-            >
+            <Button mode="outlined" onPress={() => setShowAddModal(true)} style={{ borderRadius: 24 }}>
               Add member
             </Button>
           </View>
         ) : (
           // List of Family Members
           <View style={styles.listContainer}>
-            <Text style={styles.listTitle}>Family & Friends</Text>
+            <Text style={[styles.listTitle, { color: theme.colors.onSurface }]}>Family & Friends</Text>
             
             {familyMembers.map((member) => (
               <Card key={member.id} style={styles.memberCard} mode="outlined">
                 <List.Item
                   title={member.name}
-                  description={`${member.phoneNumber}${member.relationship ? ` • ${member.relationship}` : ''}`}
+                  description={`${member.phone ?? ''}${member.relation ? ` • ${member.relation}` : ''}`}
                   left={(props) => <List.Icon {...props} icon="account" />}
                   right={(props) => (
                     <IconButton
                       {...props}
                       icon="delete"
                       size={20}
-                      iconColor="#ff4444"
-                      onPress={() => handleRemoveMember(member.id)}
+                      iconColor={theme.colors.error}
+                      onPress={() => handleRemoveMemberAction(member.id)}
                     />
                   )}
                   titleStyle={styles.memberName}
@@ -166,7 +145,6 @@ export default function FamilyAndFriendsScreen() {
           icon="plus"
           style={styles.fab}
           onPress={() => setShowAddModal(true)}
-          color="#fff"
         />
       )}
 
@@ -177,9 +155,9 @@ export default function FamilyAndFriendsScreen() {
           onDismiss={handleCancel}
           contentContainerStyle={styles.modalContainer}
         >
-          <Card style={styles.modalCard}>
+          <Card style={[styles.modalCard, { backgroundColor: theme.colors.surface }]}>
             <Card.Content>
-              <Text style={styles.modalTitle}>Add Family Member</Text>
+              <Text style={[styles.modalTitle, { color: theme.colors.onSurface }]}>Add Family Member</Text>
               
               <View style={styles.modalForm}>
                 <TextInput
@@ -188,9 +166,9 @@ export default function FamilyAndFriendsScreen() {
                   value={newMember.name}
                   onChangeText={(text) => setNewMember(prev => ({ ...prev, name: text }))}
                   style={styles.modalInput}
-                  outlineColor="#333"
-                  activeOutlineColor="#333"
-                  textColor="#333"
+                  outlineColor={theme.colors.outline}
+                  activeOutlineColor={theme.colors.primary}
+                  textColor={theme.colors.onSurface}
                 />
 
                 <TextInput
@@ -199,9 +177,9 @@ export default function FamilyAndFriendsScreen() {
                   value={newMember.phoneNumber}
                   onChangeText={(text) => setNewMember(prev => ({ ...prev, phoneNumber: text }))}
                   style={styles.modalInput}
-                  outlineColor="#333"
-                  activeOutlineColor="#333"
-                  textColor="#333"
+                  outlineColor={theme.colors.outline}
+                  activeOutlineColor={theme.colors.primary}
+                  textColor={theme.colors.onSurface}
                   keyboardType="phone-pad"
                 />
 
@@ -211,30 +189,18 @@ export default function FamilyAndFriendsScreen() {
                   value={newMember.relationship}
                   onChangeText={(text) => setNewMember(prev => ({ ...prev, relationship: text }))}
                   style={styles.modalInput}
-                  outlineColor="#333"
-                  activeOutlineColor="#333"
-                  textColor="#333"
+                  outlineColor={theme.colors.outline}
+                  activeOutlineColor={theme.colors.primary}
+                  textColor={theme.colors.onSurface}
                   placeholder="e.g., Sister, Friend, etc."
                 />
               </View>
 
               <View style={styles.modalButtons}>
-                <Button
-                  mode="outlined"
-                  onPress={handleCancel}
-                  style={styles.cancelButton}
-                  labelStyle={styles.cancelButtonText}
-                >
+                <Button mode="outlined" onPress={handleCancel} style={styles.cancelButton}>
                   Cancel
                 </Button>
-                <Button
-                  mode="contained"
-                  onPress={handleAddMember}
-                  loading={loading}
-                  disabled={loading || !newMember.name.trim() || !newMember.phoneNumber.trim()}
-                  style={styles.addButton}
-                  labelStyle={styles.addButtonText}
-                >
+                <Button mode="contained" onPress={handleAddMember} loading={loading} disabled={loading || !newMember.name.trim() || !newMember.phoneNumber.trim()} style={styles.addButton}>
                   Add
                 </Button>
               </View>
@@ -242,6 +208,9 @@ export default function FamilyAndFriendsScreen() {
           </Card>
         </Modal>
       </Portal>
+      <Snackbar visible={snack.visible} onDismiss={() => setSnack({ visible: false, msg: '' })} duration={2000}>
+        {snack.msg}
+      </Snackbar>
     </Surface>
   );
 }
@@ -249,7 +218,6 @@ export default function FamilyAndFriendsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#ffc0cb', // Light pink background
   },
   header: {
     flexDirection: 'row',
@@ -262,7 +230,6 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#333',
     textAlign: 'center',
   },
   headerSpacer: {
@@ -286,31 +253,15 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#333',
     textAlign: 'center',
     marginBottom: 16,
   },
   emptyDescription: {
     fontSize: 16,
-    color: '#333',
     textAlign: 'center',
     lineHeight: 24,
     marginBottom: 40,
     paddingHorizontal: 20,
-  },
-  addMemberButton: {
-    borderColor: '#333',
-    borderWidth: 2,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-  },
-  addMemberButtonText: {
-    color: '#333',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  addMemberButtonContent: {
-    paddingVertical: 8,
-    paddingHorizontal: 24,
   },
   listContainer: {
     paddingTop: 16,
@@ -318,40 +269,33 @@ const styles = StyleSheet.create({
   listTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#333',
     marginBottom: 16,
   },
   memberCard: {
     marginBottom: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderColor: '#333',
+    borderColor: 'transparent',
   },
   memberName: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#333',
   },
   memberDetails: {
     fontSize: 14,
-    color: '#666',
   },
   fab: {
     position: 'absolute',
     margin: 16,
     right: 0,
     bottom: 0,
-    backgroundColor: '#ff69b4',
   },
   modalContainer: {
     padding: 20,
   },
   modalCard: {
-    backgroundColor: '#fff',
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#333',
     textAlign: 'center',
     marginBottom: 20,
   },
@@ -360,7 +304,7 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   modalInput: {
-    backgroundColor: '#f8f8f8',
+    backgroundColor: 'transparent',
   },
   modalButtons: {
     flexDirection: 'row',
@@ -369,18 +313,9 @@ const styles = StyleSheet.create({
   },
   cancelButton: {
     flex: 1,
-    borderColor: '#666',
-  },
-  cancelButtonText: {
-    color: '#666',
   },
   addButton: {
     flex: 1,
-    backgroundColor: '#ff69b4',
-  },
-  addButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
   },
   bottomSpacing: {
     height: 100,

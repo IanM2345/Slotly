@@ -1,4 +1,5 @@
 "use client";
+"use client";
 
 import { useState } from "react";
 import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
@@ -51,6 +52,9 @@ export default function LoginScreen() {
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
 
   const handleSignIn = async () => {
     if (!validateForm()) return;
@@ -93,7 +97,9 @@ export default function LoginScreen() {
       setServerError(e?.response?.data?.error || e?.message || "Unable to sign in. Please try again.");
     } finally {
       setLoading(false);
+      setLoading(false);
     }
+  };
   };
 
   const handleForgotPassword = () => router.push("../auth/forgot-password");
@@ -102,7 +108,10 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      <KeyboardAvoidingView style={styles.keyboardView} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+      <KeyboardAvoidingView
+        style={styles.keyboardView}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      >
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <View style={styles.header}>
             <IconButton
@@ -217,6 +226,7 @@ export default function LoginScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
+  );
   );
 }
 

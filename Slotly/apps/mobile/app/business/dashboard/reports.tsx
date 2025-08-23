@@ -97,218 +97,32 @@ export default function ReportsScreen() {
     }
   }
 
-  // ----- Helpers -----
-
-  function extractKpis(analytics: any): ReportCard["kpis"] {
-    // Accept several shapes; fall back to "—" when missing
-    const n = (v: any) =>
-      typeof v === "number" ? v : typeof v === "string" && v.trim() ? Number(v) : undefined;
-
-    const totalBookings =
-      analytics?.totals?.bookings ??
-      analytics?.bookings ??
-      analytics?.totalBookings ??
-      analytics?.metrics?.totalBookings ??
-      undefined;
-
-    const totalRevenueRaw =
-      analytics?.totals?.revenue ??
-      analytics?.revenue ??
-      analytics?.totalRevenue ??
-      analytics?.metrics?.totalRevenue ??
-      undefined;
-
-    const uniqueClients =
-      analytics?.totals?.uniqueClients ??
-      analytics?.uniqueClients ??
-      analytics?.metrics?.uniqueClients ??
-      undefined;
-
-    const showRateRaw =
-      analytics?.totals?.showRate ??
-      analytics?.showRate ??
-      analytics?.metrics?.showRate ??
-      undefined;
-
-    const totalRevenue = formatMoney(n(totalRevenueRaw));
-    const showRate = formatPercent(n(showRateRaw));
-
-    return {
-      totalBookings: n(totalBookings) ?? "—",
-      totalRevenue: totalRevenue ?? "—",
-      uniqueClients: n(uniqueClients) ?? "—",
-      showRate: showRate ?? "—",
-    };
+  const handleUpgrade = () => {
+    router.push("/business/dashboard/billing" as any)
   }
 
-  function formatMoney(v?: number) {
-    if (typeof v !== "number" || Number.isNaN(v)) return undefined;
-    return `KSh ${Math.round(v).toLocaleString()}`;
-    // tweak if you need two decimals
+  const handlePreviewReport = (report: Report) => {
+    console.log("Preview report:", report.id)
+    // TODO: Implement report preview
   }
 
-  function formatPercent(v?: number) {
-    if (typeof v !== "number" || Number.isNaN(v)) return undefined;
-    return `${Math.round(v)}%`;
+  const handleDownloadReport = (report: Report) => {
+    console.log("Download report:", report.id)
+    // TODO: Implement PDF download
   }
 
-  // Accepts "YYYY-MM" (monthly) or "YYYY-Qx" / "Qx YYYY" (quarterly)
-  function periodToRange(period: string):
-    | { start: Date; end: Date; text: string }
-    | null {
-    if (!period) return null;
-
-    // monthly "YYYY-MM"
-    const m = period.match(/^(\d{4})-(\d{2})$/);
-    if (m) {
-      const y = Number(m[1]);
-      const mon = Number(m[2]) - 1; // 0-based
-      const start = new Date(Date.UTC(y, mon, 1, 0, 0, 0));
-      const end = new Date(Date.UTC(y, mon + 1, 0, 23, 59, 59, 999));
-      return { start, end, text: formatMonthYear(start) };
-    }
-
-    // quarterly "YYYY-Qn" or "Qn YYYY"
-    const q1 = period.match(/^(\d{4})-Q([1-4])$/);
-    const q2 = period.match(/^Q([1-4])\s+(\d{4})$/i);
-    const qMatch = q1 || q2;
-    if (qMatch) {
-      const year = Number(q1 ? q1[1] : q2![2]);
-      const q = Number(q1 ? q1[2] : q2![1]);
-      const mon = (q - 1) * 3;
-      const start = new Date(Date.UTC(year, mon, 1, 0, 0, 0));
-      const end = new Date(Date.UTC(year, mon + 3, 0, 23, 59, 59, 999));
-      return { start, end, text: `Q${q} ${year}` };
-    }
-
-    // fallback: try YYYY-MM-DD..YYYY-MM-DD
-    const parts = period.split("..");
-    if (parts.length === 2) {
-      const start = new Date(parts[0]);
-      const end = new Date(parts[1]);
-      if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
-        return { start, end, text: `${formatMonthYear(start)} – ${formatMonthYear(end)}` };
-      }
-    }
-
-    return null;
+  const handleGenerateNewReport = () => {
+    console.log("Generate new report")
+    // TODO: Implement report generation
   }
 
-  function formatMonthYear(d: Date) {
-    return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString("en-US", {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    })
   }
-
-  function formatDate(dateString: string) {
-    const d = new Date(dateString);
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-  }
-
-  // ----- Actions -----
-
-  async function handlePreviewPDF(report: BackendReport) {
-    try {
-      const bytes = await previewReport({ reportId: report.id }); // arraybuffer
-      if (Platform.OS === "web") {
-        const blob = new Blob([bytes], { type: "application/pdf" });
-        const url = URL.createObjectURL(blob);
-        window.open(url, "_blank", "noopener,noreferrer");
-        // optional: URL.revokeObjectURL(url) later
-      } else {
-        const fileUri = `${FileSystem.cacheDirectory}slotly-report-${report.period}.pdf`;
-        await FileSystem.writeAsStringAsync(fileUri, bufferToBase64(bytes), {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        // open share sheet / viewer
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(fileUri, { mimeType: "application/pdf" });
-        } else {
-          Alert.alert("Saved", `Report saved to cache: ${fileUri}`);
-        }
-      }
-    } catch (e: any) {
-      console.error(e);
-      Alert.alert("Preview failed", e?.message || "Could not open report.");
-    }
-  }
-
-  async function handleDownloadPDF(report: BackendReport) {
-    try {
-      const bytes = await previewReport({ reportId: report.id }); // reuse the same endpoint
-      if (Platform.OS === "web") {
-        const blob = new Blob([bytes], { type: "application/pdf" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `slotly-report-${report.period}.pdf`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-      } else {
-        const fileUri = `${FileSystem.documentDirectory}slotly-report-${report.period}.pdf`;
-        await FileSystem.writeAsStringAsync(fileUri, bufferToBase64(bytes), {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(fileUri, { mimeType: "application/pdf" });
-        } else {
-          Alert.alert("Saved", `Report saved to: ${fileUri}`);
-        }
-      }
-    } catch (e: any) {
-      console.error(e);
-      Alert.alert("Download failed", e?.message || "Could not download report.");
-    }
-  }
-
-  async function handleDownloadCSV(report: BackendReport) {
-    try {
-      const range = periodToRange(report.period);
-      if (!range) return Alert.alert("Unavailable", "Cannot compute dates for this period");
-
-      const csv = await getAnalyticsCsv({
-        startDate: range.start.toISOString(),
-        endDate: range.end.toISOString(),
-      }); // CSV string
-
-      if (Platform.OS === "web") {
-        const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `slotly-report-${report.period}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-      } else {
-        const fileUri = `${FileSystem.documentDirectory}slotly-report-${report.period}.csv`;
-        await FileSystem.writeAsStringAsync(fileUri, csv, { encoding: FileSystem.EncodingType.UTF8 });
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(fileUri, { mimeType: "text/csv" });
-        } else {
-          Alert.alert("Saved", `CSV saved to: ${fileUri}`);
-        }
-      }
-    } catch (e: any) {
-      console.error(e);
-      Alert.alert("CSV failed", e?.message || "Could not download CSV.");
-    }
-  }
-
-  function bufferToBase64(buf: ArrayBuffer): string {
-    // polyfill since atob/btoa work on strings
-    const bytes = new Uint8Array(buf);
-    let binary = "";
-    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-    // btoa is available on web; on native, global Buffer may exist; fall back to base64 from expo
-    // @ts-ignore
-    return typeof btoa === "function" ? btoa(binary) : Buffer.from(binary, "binary").toString("base64");
-  }
-
-  const cards = useMemo(() => reports, [reports]);
-
-  // ----- Render -----
 
   if (!features.reports) {
     return (

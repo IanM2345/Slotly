@@ -12,7 +12,7 @@ export default function LandingScreen() {
       <Button mode="contained" style={styles.button} onPress={() => router.push('/login')}>
         Login
       </Button>
-      <Button mode="outlined" style={styles.button} onPress={() => router.push('/register')}>
+      <Button mode="outlined" style={styles.button} onPress={() => router.push('/auth/signup' as any)}>
         Register
       </Button>
     </View>

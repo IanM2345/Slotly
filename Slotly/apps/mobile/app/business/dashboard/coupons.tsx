@@ -101,36 +101,13 @@ export default function CouponsScreen() {
     }
   }
 
-  const filterOptions = [
-    { key: "All", label: "All" },
-    { key: "Active", label: "Active" },
-    { key: "Expired", label: "Expired" },
-    { key: "Expiring Soon", label: "Expiring Soon" },
-  ];
-
-  function deriveStatus(c: CouponRow): "ACTIVE" | "EXPIRED" | "EXPIRING" {
-    const now = new Date();
-    const end = new Date(c.expiresAt);
-    if (end < now) return "EXPIRED";
-    const soon = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-    return end <= soon ? "EXPIRING" : "ACTIVE";
+  const handleUpgrade = () => {
+    router.push("/business/dashboard/billing" as any)
   }
 
-  const formatDate = (dateString: string) =>
-    new Date(dateString).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  const handleCouponAction = (coupon: Coupon, action: string) => {
+    setMenuVisible(null)
 
-  const usageText = (c: CouponRow) => {
-    const used = Number(c.usageCount ?? 0);
-    const users = Number(c.redeemedUsers ?? c.userCoupons?.length ?? 0);
-    return `${used} uses • ${users} customers`;
-  };
-
-  function handleUpgrade() {
-    router.push("/business/dashboard/billing");
-  }
-
-  function handleCouponAction(coupon: CouponRow, action: string) {
-    setMenuVisible(null);
     switch (action) {
       case "edit":
         Alert.alert("Not implemented", "Editing coupons is not available yet.");

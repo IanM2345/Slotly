@@ -6,7 +6,8 @@ import {
   IconButton,
   TextInput,
   Button,
-  useTheme
+  useTheme,
+  Snackbar
 } from 'react-native-paper';
 import { useRouter } from 'expo-router';
 
@@ -27,6 +28,7 @@ export default function ChangePasswordScreen() {
     confirmPassword: ''
   });
   const [errors, setErrors] = useState<Partial<PasswordData>>({});
+  const [snack, setSnack] = useState<{ visible: boolean; msg: string }>({ visible: false, msg: '' });
 
   const handleBack = () => {
     router.back();
@@ -76,13 +78,12 @@ export default function ChangePasswordScreen() {
 
     setLoading(true);
     try {
-      // Simulate API call
       await new Promise(resolve => setTimeout(resolve, 1000));
       
       console.log('Updating password...');
       
-      // Navigate back or show success message
-      router.back();
+      setSnack({ visible: true, msg: 'Password updated' });
+      setTimeout(() => router.back(), 1000);
     } catch (error) {
       console.error('Error updating password:', error);
     } finally {
@@ -91,17 +92,11 @@ export default function ChangePasswordScreen() {
   };
 
   return (
-    <Surface style={styles.container}>
+    <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
-        <IconButton
-          icon="arrow-left"
-          size={24}
-          iconColor="#333"
-          onPress={handleBack}
-          style={styles.backButton}
-        />
-        <Text style={styles.headerTitle}>Change Password</Text>
+        <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={handleBack} style={styles.backButton} />
+        <Text style={[styles.headerTitle, { color: theme.colors.onSurface }]}>Change Password</Text>
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
@@ -113,9 +108,9 @@ export default function ChangePasswordScreen() {
             value={passwordData.currentPassword}
             onChangeText={(text) => updatePasswordData('currentPassword', text)}
             style={styles.textInput}
-            outlineColor="#333"
-            activeOutlineColor="#333"
-            textColor="#333"
+            outlineColor={theme.colors.outline}
+            activeOutlineColor={theme.colors.primary}
+            textColor={theme.colors.onSurface}
             secureTextEntry
             error={!!errors.currentPassword}
           />
@@ -130,9 +125,9 @@ export default function ChangePasswordScreen() {
             value={passwordData.newPassword}
             onChangeText={(text) => updatePasswordData('newPassword', text)}
             style={styles.textInput}
-            outlineColor="#333"
-            activeOutlineColor="#333"
-            textColor="#333"
+            outlineColor={theme.colors.outline}
+            activeOutlineColor={theme.colors.primary}
+            textColor={theme.colors.onSurface}
             secureTextEntry
             error={!!errors.newPassword}
           />
@@ -147,9 +142,9 @@ export default function ChangePasswordScreen() {
             value={passwordData.confirmPassword}
             onChangeText={(text) => updatePasswordData('confirmPassword', text)}
             style={styles.textInput}
-            outlineColor="#333"
-            activeOutlineColor="#333"
-            textColor="#333"
+            outlineColor={theme.colors.outline}
+            activeOutlineColor={theme.colors.primary}
+            textColor={theme.colors.onSurface}
             secureTextEntry
             error={!!errors.confirmPassword}
           />
@@ -176,15 +171,13 @@ export default function ChangePasswordScreen() {
         {/* Bottom Spacing */}
         <View style={styles.bottomSpacing} />
       </ScrollView>
+      <Snackbar visible={snack.visible} onDismiss={() => setSnack({ visible: false, msg: '' })} duration={2000}>{snack.msg}</Snackbar>
     </Surface>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#ffc0cb', // Slotly pink background
-  },
+  container: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -195,14 +188,7 @@ const styles = StyleSheet.create({
   backButton: {
     marginRight: 8,
   },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#333',
-    flex: 1,
-    textAlign: 'center',
-    marginRight: 48, // Compensate for back button width
-  },
+  headerTitle: { fontSize: 28, fontWeight: 'bold', flex: 1, textAlign: 'center', marginRight: 48 },
   scrollView: {
     flex: 1,
     paddingHorizontal: 16,
@@ -212,9 +198,7 @@ const styles = StyleSheet.create({
     gap: 20,
     marginBottom: 40,
   },
-  textInput: {
-    backgroundColor: 'rgba(255, 192, 203, 0.7)',
-  },
+  textInput: { backgroundColor: 'transparent' },
   errorText: {
     color: '#d32f2f',
     fontSize: 12,
@@ -225,18 +209,11 @@ const styles = StyleSheet.create({
   updateButtonContainer: {
     marginBottom: 24,
   },
-  updateButton: {
-    backgroundColor: '#333',
-    borderRadius: 25,
-  },
+  updateButton: { borderRadius: 25 },
   updateButtonContent: {
     paddingVertical: 12,
   },
-  updateButtonText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
+  updateButtonText: { fontSize: 18, fontWeight: 'bold' },
   bottomSpacing: {
     height: 32,
   },

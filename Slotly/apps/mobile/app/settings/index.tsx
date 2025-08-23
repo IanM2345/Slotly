@@ -1,7 +1,7 @@
 // apps/mobile/app/settings/index.tsx
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { View, ScrollView, StyleSheet } from "react-native";
 import {
   Text,
@@ -15,12 +15,17 @@ import {
 } from "react-native-paper";
 import { useRouter } from "expo-router";
 import { useSession } from "../../context/SessionContext";
+import { getNotificationsEnabled, setNotificationsEnabled } from "../../lib/settings/api";
 
 export default function SettingsScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { user, setUser } = useSession();
-  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [notificationsEnabledState, setNotificationsEnabledState] = useState(true);
+
+  useEffect(() => {
+    getNotificationsEnabled().then(setNotificationsEnabledState).catch(() => {});
+  }, []);
 
   const ONBOARDING_START = "/business/onboarding" as const;
 
@@ -99,7 +104,7 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>Personal Information</Text>
 
-          <TouchableRipple onPress={() => handleNavigation("/settings/account details")} rippleColor="rgba(0,0,0,0.1)">
+          <TouchableRipple onPress={() => handleNavigation("/settings/account-details")} rippleColor="rgba(0,0,0,0.1)">
             <List.Item title="Account Details" titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} style={styles.listItem} />
           </TouchableRipple>
 
@@ -121,7 +126,14 @@ export default function SettingsScreen() {
           <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>Notification</Text>
           <View style={styles.notificationRow}>
             <Text style={{ color: theme.colors.onBackground, fontSize: 16 }}>Turn on notifications</Text>
-            <Switch value={notificationsEnabled} onValueChange={setNotificationsEnabled} color={theme.colors.primary} />
+            <Switch
+              value={notificationsEnabledState}
+              onValueChange={async (v) => {
+                setNotificationsEnabledState(v);
+                try { await setNotificationsEnabled(v); } catch {}
+              }}
+              color={theme.colors.primary}
+            />
           </View>
         </View>
 
@@ -177,7 +189,7 @@ export default function SettingsScreen() {
             <List.Item title="Gift Cards" titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} style={styles.listItem} />
           </TouchableRipple>
 
-          <TouchableRipple onPress={() => handleNavigation("/settings/AboutUs")} rippleColor="rgba(0,0,0,0.1)">
+          <TouchableRipple onPress={() => handleNavigation("/settings/about")} rippleColor="rgba(0,0,0,0.1)">
             <List.Item title="About" titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} style={styles.listItem} />
           </TouchableRipple>
         </View>

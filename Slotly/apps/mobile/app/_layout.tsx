@@ -1,7 +1,6 @@
 /* apps/mobile/app/_layout.tsx */
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { DefaultTheme as NavDefaultTheme, ThemeProvider } from "@react-navigation/native";
-import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
@@ -9,22 +8,37 @@ import { Provider as PaperProvider } from "react-native-paper";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import type { MD3Theme } from "react-native-paper";
 
-import { slotlyTheme } from "./theme/paper";
+import {
+  useFonts,
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+  Inter_800ExtraBold,
+} from "@expo-google-fonts/inter";
 
-// ⬇️ Use relative imports so TS doesn’t complain about `@/*`
+// ✅ theme is OUTSIDE app/ so expo-router doesn’t scan it as a route
+import { slotlyTheme } from "./theme/paper";
+import { wireframeTheme } from "./theme/wireframe";
+
+// Context providers
 import { SessionProvider } from "../context/SessionContext";
 import { OnboardingProvider } from "../context/OnboardingContext";
 
 export { ErrorBoundary } from "expo-router";
 
 export const unstable_settings = {
-  initialRouteName: "(tabs)",
+  initialRouteName: "index", // role gate runs first
   ssr: false,
 };
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
-    SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+    Inter_800ExtraBold,
     ...FontAwesome.font,
   });
 
@@ -33,13 +47,12 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
-    if (loaded) SplashScreen.hideAsync();
-  }, [loaded]);
+    if (loaded || error) SplashScreen.hideAsync();
+  }, [loaded, error]);
 
   if (error) throw error;
   if (!loaded) return null;
 
-  // React Navigation theme mapped to our Paper theme colors
   const navTheme = {
     ...NavDefaultTheme,
     colors: {
@@ -60,8 +73,11 @@ export default function RootLayout() {
           <PaperProvider theme={slotlyTheme as MD3Theme}>
             <ThemeProvider value={navTheme}>
               <Stack screenOptions={{ headerShown: false }}>
+                <Stack.Screen name="index" />     {/* ← role gate */}
+                {/* Tabs (consumer) are wrapped with wireframe theme inside their own layout */}
                 <Stack.Screen name="(tabs)" />
                 <Stack.Screen name="modal" options={{ presentation: "modal" }} />
+                {/* Non-tabs consumer flows get explicit wireframe theme providers inside their layouts */}
               </Stack>
             </ThemeProvider>
           </PaperProvider>

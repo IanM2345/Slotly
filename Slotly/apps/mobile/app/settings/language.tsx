@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, ScrollView, StyleSheet } from 'react-native';
 import {
   Text,
@@ -9,6 +9,7 @@ import {
   useTheme
 } from 'react-native-paper';
 import { useRouter } from 'expo-router';
+import { getLanguage, setLanguage } from '../../lib/settings/api';
 
 interface Language {
   id: string;
@@ -20,12 +21,12 @@ export default function LanguageScreen() {
   const theme = useTheme();
   const router = useRouter();
   
-  const [selectedLanguage, setSelectedLanguage] = useState('automatic');
+  const [selectedLanguage, setSelectedLanguage] = useState('auto');
 
   const languages: Language[] = [
-    { id: 'automatic', name: 'Automatic' },
-    { id: 'en-gb', name: 'English (United Kingdom)' },
-    { id: 'en-us', name: 'English (United States)' },
+    { id: 'auto', name: 'Automatic' },
+    { id: 'en-UK', name: 'English (United Kingdom)' },
+    { id: 'en-US', name: 'English (United States)' },
     { id: 'sw', name: 'Swahili' },
     { id: 'es', name: 'Español (Spanish)' },
     { id: 'fr', name: 'Français (French)' },
@@ -37,24 +38,21 @@ export default function LanguageScreen() {
     router.back();
   };
 
-  const handleLanguageSelect = (languageId: string) => {
+  useEffect(() => {
+    getLanguage().then((lang) => setSelectedLanguage(lang || 'auto')).catch(() => {});
+  }, []);
+
+  const handleLanguageSelect = async (languageId: string) => {
     setSelectedLanguage(languageId);
-    // Here you would typically save to AsyncStorage or your preferred storage
-    console.log('Selected language:', languageId);
+    try { await setLanguage(languageId as any); } catch {}
   };
 
   return (
-    <Surface style={styles.container}>
+    <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
-        <IconButton
-          icon="arrow-left"
-          size={24}
-          iconColor="#333"
-          onPress={handleBack}
-          style={styles.backButton}
-        />
-        <Text style={styles.headerTitle}>Language</Text>
+        <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={handleBack} style={styles.backButton} />
+        <Text style={[styles.headerTitle, { color: theme.colors.onSurface }]}>Language</Text>
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
@@ -96,10 +94,7 @@ export default function LanguageScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#ffc0cb', // Slotly pink background
-  },
+  container: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -110,29 +105,12 @@ const styles = StyleSheet.create({
   backButton: {
     marginRight: 8,
   },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#333',
-    flex: 1,
-    textAlign: 'center',
-    marginRight: 48, // Compensate for back button width
-  },
+  headerTitle: { fontSize: 28, fontWeight: 'bold', flex: 1, textAlign: 'center', marginRight: 48 },
   scrollView: {
     flex: 1,
     paddingHorizontal: 16,
   },
-  languageContainer: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderRadius: 12,
-    marginTop: 20,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    overflow: 'hidden',
-  },
+  languageContainer: { borderRadius: 12, marginTop: 20, overflow: 'hidden' },
   languageItem: {
     backgroundColor: 'transparent',
   },
@@ -142,16 +120,8 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     paddingHorizontal: 16,
   },
-  languageText: {
-    fontSize: 16,
-    color: '#666',
-    marginLeft: 12,
-    fontWeight: '500',
-  },
-  selectedText: {
-    color: '#333',
-    fontWeight: 'bold',
-  },
+  languageText: { fontSize: 16, marginLeft: 12, fontWeight: '500' },
+  selectedText: { fontWeight: 'bold' },
   bottomSpacing: {
     height: 40,
   },

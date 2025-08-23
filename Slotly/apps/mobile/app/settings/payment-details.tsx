@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, ScrollView, StyleSheet } from 'react-native';
 import {
   Text,
@@ -8,9 +8,12 @@ import {
   IconButton,
   RadioButton,
   Card,
-  useTheme
+  useTheme,
+  Snackbar
 } from 'react-native-paper';
 import { useRouter } from 'expo-router';
+import { listPaymentMethods, addPaymentMethod as apiAdd, removePaymentMethod as apiRemove, setDefaultPaymentMethod } from '../../lib/settings/api';
+import type { PaymentMethod as StoredMethod } from '../../lib/settings/types';
 
 type PaymentMethod = 'card' | 'mpesa';
 
@@ -20,6 +23,10 @@ export default function PaymentDetailsScreen() {
   
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('card');
   const [loading, setLoading] = useState(false);
+  const [snack, setSnack] = useState<{ visible: boolean; msg: string }>({ visible: false, msg: '' });
+  const [methods, setMethods] = useState<StoredMethod[]>([]);
+  const [defaultId, setDefaultId] = useState<string | null>(null);
+  useEffect(() => { (async () => { const { methods, defaultId } = await listPaymentMethods(); setMethods(methods); setDefaultId(defaultId); })(); }, []);
   
   // Card details state
   const [cardDetails, setCardDetails] = useState({
@@ -40,19 +47,39 @@ export default function PaymentDetailsScreen() {
   const handleSave = async () => {
     setLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      const paymentData = paymentMethod === 'card' ? cardDetails : mpesaDetails;
-      console.log('Saving payment details:', { method: paymentMethod, ...paymentData });
-      
-      // Navigate back or show success message
-      router.back();
+      if (paymentMethod === 'card') {
+        const digits = cardDetails.cardNumber.replace(/\D/g, '');
+        if (digits.length < 12) throw new Error('Invalid card number');
+        const last4 = digits.slice(-4);
+        const brand = digits.startsWith('4') ? 'Visa' : digits.startsWith('5') ? 'Mastercard' : 'Card';
+        await apiAdd({ id: Date.now().toString(), type: 'card', brand, last4 });
+      } else {
+        if (!mpesaDetails.phoneNumber.trim()) throw new Error('Phone required');
+        await apiAdd({ id: Date.now().toString(), type: 'mpesa', mpesaPhone: mpesaDetails.phoneNumber.trim() });
+      }
+      const next = await listPaymentMethods();
+      setMethods(next.methods);
+      setDefaultId(next.defaultId);
+      setSnack({ visible: true, msg: 'Payment method saved' });
     } catch (error) {
       console.error('Error saving payment details:', error);
     } finally {
       setLoading(false);
     }
+  };
+
+  const removeMethod = async (id: string) => {
+    await apiRemove(id);
+    const next = await listPaymentMethods();
+    setMethods(next.methods);
+    setDefaultId(next.defaultId);
+    setSnack({ visible: true, msg: 'Removed' });
+  };
+
+  const makeDefault = async (id: string) => {
+    await setDefaultPaymentMethod(id);
+    setDefaultId(id);
+    setSnack({ visible: true, msg: 'Set as default' });
   };
 
   const updateCardDetails = (field: keyof typeof cardDetails, value: string) => {
@@ -70,17 +97,13 @@ export default function PaymentDetailsScreen() {
   };
 
   const formatCardNumber = (text: string) => {
-    // Remove all non-digit characters
     const cleaned = text.replace(/\D/g, '');
-    // Add spaces every 4 digits
     const formatted = cleaned.replace(/(\d{4})(?=\d)/g, '$1 ');
-    return formatted.substring(0, 19); // Limit to 16 digits + 3 spaces
+    return formatted.substring(0, 19);
   };
 
   const formatExpiryDate = (text: string) => {
-    // Remove all non-digit characters
     const cleaned = text.replace(/\D/g, '');
-    // Add slash after 2 digits
     if (cleaned.length >= 2) {
       return cleaned.substring(0, 2) + '/' + cleaned.substring(2, 4);
     }
@@ -88,26 +111,47 @@ export default function PaymentDetailsScreen() {
   };
 
   return (
-    <Surface style={styles.container}>
+    <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
         <IconButton
           icon="arrow-left"
           size={24}
-          iconColor="#333"
+          iconColor={theme.colors.onSurface}
           onPress={handleBack}
         />
-        <Text style={styles.headerTitle}>Payment Details</Text>
+        <Text style={[styles.headerTitle, { color: theme.colors.onSurface }]}>Payment Details</Text>
         <View style={styles.headerSpacer} />
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+        {/* Saved methods */}
+        <View style={{ marginBottom: 12 }}>
+          {methods.map(m => (
+            <Card key={m.id} mode="outlined" style={{ marginBottom: 8 }}>
+              <Card.Content>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <View>
+                    <Text style={{ fontWeight: '700' }}>{m.type === 'card' ? `${m.brand} •••• ${m.last4}` : `M-Pesa ${m.mpesaPhone}`}</Text>
+                    {defaultId === m.id && <Text style={{ color: theme.colors.onSurfaceVariant }}>Default</Text>}
+                  </View>
+                  <View style={{ flexDirection: 'row' }}>
+                    {defaultId !== m.id && (
+                      <Button onPress={() => makeDefault(m.id)}>Set default</Button>
+                    )}
+                    <IconButton icon="delete" onPress={() => removeMethod(m.id)} />
+                  </View>
+                </View>
+              </Card.Content>
+            </Card>
+          ))}
+        </View>
         {/* Payment Methods Button */}
         <View style={styles.methodsButtonContainer}>
           <Button
             mode="contained"
-            style={styles.methodsButton}
-            labelStyle={styles.methodsButtonText}
+            style={[styles.methodsButton, { backgroundColor: theme.colors.surface }]}
+            labelStyle={[styles.methodsButtonText, { color: theme.colors.onSurface }]}
             contentStyle={styles.methodsButtonContent}
           >
             Payment Methods
@@ -115,7 +159,7 @@ export default function PaymentDetailsScreen() {
         </View>
 
         {/* Payment Method Selection */}
-        <Card style={styles.selectionCard} mode="outlined">
+        <Card style={[styles.selectionCard, { backgroundColor: theme.colors.surface, borderColor: theme.colors.outline }]} mode="outlined">
           <Card.Content style={styles.selectionContent}>
             <RadioButton.Group
               onValueChange={(value) => setPaymentMethod(value as PaymentMethod)}
@@ -123,17 +167,17 @@ export default function PaymentDetailsScreen() {
             >
               <View style={styles.radioOption}>
                 <View style={styles.radioRow}>
-                  <RadioButton value="card" color="#ff69b4" />
-                  <Text style={styles.radioLabel}>Credit or debit card</Text>
+                  <RadioButton value="card" color={theme.colors.primary} />
+                  <Text style={[styles.radioLabel, { color: theme.colors.onSurface }]}>Credit or debit card</Text>
                 </View>
               </View>
               
-              <View style={styles.divider} />
+              <View style={[styles.divider, { backgroundColor: theme.colors.outline }]} />
               
               <View style={styles.radioOption}>
                 <View style={styles.radioRow}>
-                  <RadioButton value="mpesa" color="#ff69b4" />
-                  <Text style={styles.radioLabel}>Mpesa</Text>
+                  <RadioButton value="mpesa" color={theme.colors.primary} />
+                  <Text style={[styles.radioLabel, { color: theme.colors.onSurface }]}>M-Pesa</Text>
                 </View>
               </View>
             </RadioButton.Group>
@@ -151,12 +195,12 @@ export default function PaymentDetailsScreen() {
                 value={cardDetails.cardNumber}
                 onChangeText={(text) => updateCardDetails('cardNumber', formatCardNumber(text))}
                 style={styles.textInput}
-                outlineColor="#333"
-                activeOutlineColor="#333"
-                textColor="#333"
+                outlineColor={theme.colors.outline}
+                activeOutlineColor={theme.colors.primary}
+                textColor={theme.colors.onSurface}
                 keyboardType="numeric"
                 maxLength={19}
-                right={<TextInput.Icon icon="lock" color="#666" />}
+                right={<TextInput.Icon icon="lock" color={theme.colors.onSurfaceVariant} />}
               />
 
               <View style={styles.cardRow}>
@@ -166,9 +210,9 @@ export default function PaymentDetailsScreen() {
                   value={cardDetails.expiryDate}
                   onChangeText={(text) => updateCardDetails('expiryDate', formatExpiryDate(text))}
                   style={[styles.textInput, styles.halfWidth]}
-                  outlineColor="#333"
-                  activeOutlineColor="#333"
-                  textColor="#333"
+                  outlineColor={theme.colors.outline}
+                  activeOutlineColor={theme.colors.primary}
+                  textColor={theme.colors.onSurface}
                   keyboardType="numeric"
                   maxLength={5}
                   placeholder="MM/YY"
@@ -180,13 +224,13 @@ export default function PaymentDetailsScreen() {
                   value={cardDetails.securityCode}
                   onChangeText={(text) => updateCardDetails('securityCode', text.replace(/\D/g, '').substring(0, 4))}
                   style={[styles.textInput, styles.halfWidth]}
-                  outlineColor="#333"
-                  activeOutlineColor="#333"
-                  textColor="#333"
+                  outlineColor={theme.colors.outline}
+                  activeOutlineColor={theme.colors.primary}
+                  textColor={theme.colors.onSurface}
                   keyboardType="numeric"
                   maxLength={4}
                   secureTextEntry
-                  right={<TextInput.Icon icon="help-circle" color="#666" />}
+                  right={<TextInput.Icon icon="help-circle" color={theme.colors.onSurfaceVariant} />}
                 />
               </View>
             </View>
@@ -199,9 +243,9 @@ export default function PaymentDetailsScreen() {
                 value={mpesaDetails.phoneNumber}
                 onChangeText={(text) => updateMpesaDetails('phoneNumber', text)}
                 style={styles.textInput}
-                outlineColor="#333"
-                activeOutlineColor="#333"
-                textColor="#333"
+                outlineColor={theme.colors.outline}
+                activeOutlineColor={theme.colors.primary}
+                textColor={theme.colors.onSurface}
                 keyboardType="phone-pad"
                 placeholder="+254 712 345 678"
               />
@@ -216,8 +260,8 @@ export default function PaymentDetailsScreen() {
             onPress={handleSave}
             loading={loading}
             disabled={loading}
-            style={styles.saveButton}
-            labelStyle={styles.saveButtonText}
+            style={[styles.saveButton, { backgroundColor: theme.colors.primary }]}
+            labelStyle={[styles.saveButtonText, { color: theme.colors.onPrimary }]}
             contentStyle={styles.saveButtonContent}
           >
             Save
@@ -227,6 +271,7 @@ export default function PaymentDetailsScreen() {
         {/* Bottom Spacing */}
         <View style={styles.bottomSpacing} />
       </ScrollView>
+      <Snackbar visible={snack.visible} onDismiss={() => setSnack({ visible: false, msg: '' })} duration={2000}>{snack.msg}</Snackbar>
     </Surface>
   );
 }
@@ -234,7 +279,6 @@ export default function PaymentDetailsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f4a3c3', // Pink background
   },
   header: {
     flexDirection: 'row',
@@ -247,7 +291,6 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#333',
     textAlign: 'center',
   },
   headerSpacer: {
@@ -263,11 +306,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   methodsButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
     borderRadius: 25,
   },
   methodsButtonText: {
-    color: '#333',
     fontSize: 16,
     fontWeight: '600',
   },
@@ -276,8 +317,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   selectionCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderColor: '#333',
     borderWidth: 2,
     marginBottom: 24,
   },
@@ -294,13 +333,11 @@ const styles = StyleSheet.create({
   },
   radioLabel: {
     fontSize: 16,
-    color: '#333',
     marginLeft: 8,
     fontWeight: '500',
   },
   divider: {
     height: 1,
-    backgroundColor: '#333',
     marginHorizontal: 16,
   },
   formContainer: {
@@ -320,13 +357,12 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   textInput: {
-    backgroundColor: 'rgba(255, 192, 203, 0.7)',
+    backgroundColor: 'transparent',
   },
   saveButtonContainer: {
     marginBottom: 24,
   },
   saveButton: {
-    backgroundColor: '#ff69b4',
     borderRadius: 25,
   },
   saveButtonContent: {
@@ -335,7 +371,6 @@ const styles = StyleSheet.create({
   saveButtonText: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#fff',
   },
   bottomSpacing: {
     height: 32,

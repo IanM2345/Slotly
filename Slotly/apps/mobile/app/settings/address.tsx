@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, ScrollView, StyleSheet } from 'react-native';
 import {
   Text,
@@ -7,46 +7,37 @@ import {
   Surface,
   IconButton,
   Menu,
-  useTheme
+  useTheme,
+  Snackbar
 } from 'react-native-paper';
 import { useRouter } from 'expo-router';
-
-interface AddressData {
-  county: string;
-  city: string;
-  constituency: string;
-  street: string;
-  apartmentNumber: string;
-}
+import { getAddress, updateAddress } from '../../lib/settings/api';
+import type { Address as AddressType } from '../../lib/settings/types';
 
 export default function AddressScreen() {
   const theme = useTheme();
   const router = useRouter();
   
   const [loading, setLoading] = useState(false);
-  const [addressData, setAddressData] = useState<AddressData>({
-    county: '',
-    city: '',
-    constituency: '',
-    street: '',
-    apartmentNumber: ''
-  });
+  const [addressData, setAddressData] = useState<AddressType>({ country: '', city: '', constituency: '', street: '', apartment: '' });
+  const [snack, setSnack] = useState<{ visible: boolean; msg: string }>({ visible: false, msg: '' });
+
+  useEffect(() => {
+    getAddress().then((addr) => setAddressData({
+      country: addr.country ?? 'Kenya',
+      city: addr.city ?? '',
+      constituency: addr.constituency ?? '',
+      street: addr.street ?? '',
+      apartment: addr.apartment ?? ''
+    })).catch(() => {});
+  }, []);
 
   // Menu states
   const [countyMenuVisible, setCountyMenuVisible] = useState(false);
   const [constituencyMenuVisible, setConstituencyMenuVisible] = useState(false);
 
   // Sample data - replace with actual data
-  const counties = [
-    'Nairobi',
-    'Mombasa',
-    'Kisumu',
-    'Nakuru',
-    'Eldoret',
-    'Thika',
-    'Malindi',
-    'Kitale'
-  ];
+  const counties = ['Nairobi','Mombasa','Kisumu','Nakuru','Eldoret','Thika','Malindi','Kitale'];
 
   const constituencies = [
     'Westlands',
@@ -66,13 +57,9 @@ export default function AddressScreen() {
   const handleSave = async () => {
     setLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      console.log('Saving address:', addressData);
-      
-      // Navigate back or show success message
-      router.back();
+      await updateAddress(addressData);
+      setSnack({ visible: true, msg: 'Address saved' });
+      setTimeout(() => router.back(), 800);
     } catch (error) {
       console.error('Error saving address:', error);
     } finally {
@@ -80,7 +67,7 @@ export default function AddressScreen() {
     }
   };
 
-  const updateAddressData = (field: keyof AddressData, value: string) => {
+  const updateAddressData = (field: keyof AddressType, value: string) => {
     setAddressData(prev => ({
       ...prev,
       [field]: value
@@ -88,7 +75,7 @@ export default function AddressScreen() {
   };
 
   const handleCountySelect = (county: string) => {
-    updateAddressData('county', county);
+    updateAddressData('country', county);
     setCountyMenuVisible(false);
   };
 
@@ -98,16 +85,11 @@ export default function AddressScreen() {
   };
 
   return (
-    <Surface style={styles.container}>
+    <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
-        <IconButton
-          icon="arrow-left"
-          size={24}
-          iconColor="#333"
-          onPress={handleBack}
-        />
-        <Text style={styles.headerTitle}>Address</Text>
+        <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={handleBack} />
+        <Text style={[styles.headerTitle, { color: theme.colors.onSurface }]}>Address</Text>
         <View style={styles.headerSpacer} />
       </View>
 
@@ -122,18 +104,14 @@ export default function AddressScreen() {
                 <TextInput
                   mode="outlined"
                   label="County"
-                  value={addressData.county}
+                  value={addressData.country}
                   style={styles.textInput}
-                  outlineColor="#333"
-                  activeOutlineColor="#333"
-                  textColor="#333"
+                  outlineColor={theme.colors.outline}
+                  activeOutlineColor={theme.colors.primary}
+                  textColor={theme.colors.onSurface}
                   editable={false}
                   right={
-                 <TextInput.Icon 
-  icon="chevron-down" 
-  color="#666"
-  onPress={() => setCountyMenuVisible(true)}
-/>
+                 <TextInput.Icon icon="chevron-down" onPress={() => setCountyMenuVisible(true)} />
                   }
                   onPressIn={() => setCountyMenuVisible(true)}
                 />
@@ -155,12 +133,12 @@ export default function AddressScreen() {
           <TextInput
             mode="outlined"
             label="City (Optional)"
-            value={addressData.city}
+            value={addressData.city ?? ''}
             onChangeText={(text) => updateAddressData('city', text)}
             style={styles.textInput}
-            outlineColor="#333"
-            activeOutlineColor="#333"
-            textColor="#333"
+            outlineColor={theme.colors.outline}
+            activeOutlineColor={theme.colors.primary}
+            textColor={theme.colors.onSurface}
             autoCapitalize="words"
           />
 
@@ -173,18 +151,14 @@ export default function AddressScreen() {
                 <TextInput
                   mode="outlined"
                   label="Constituency"
-                  value={addressData.constituency}
+                  value={addressData.constituency ?? ''}
                   style={styles.textInput}
-                  outlineColor="#333"
-                  activeOutlineColor="#333"
-                  textColor="#333"
+                  outlineColor={theme.colors.outline}
+                  activeOutlineColor={theme.colors.primary}
+                  textColor={theme.colors.onSurface}
                   editable={false}
                   right={
-                    <TextInput.Icon 
-  icon="chevron-down" 
-  onPress={() => setConstituencyMenuVisible(true)}
-  color="#666"
-/>
+                    <TextInput.Icon icon="chevron-down" onPress={() => setConstituencyMenuVisible(true)} />
                   }
                   onPressIn={() => setConstituencyMenuVisible(true)}
                 />
@@ -206,12 +180,12 @@ export default function AddressScreen() {
           <TextInput
             mode="outlined"
             label="Street"
-            value={addressData.street}
+            value={addressData.street ?? ''}
             onChangeText={(text) => updateAddressData('street', text)}
             style={styles.textInput}
-            outlineColor="#333"
-            activeOutlineColor="#333"
-            textColor="#333"
+            outlineColor={theme.colors.outline}
+            activeOutlineColor={theme.colors.primary}
+            textColor={theme.colors.onSurface}
             autoCapitalize="words"
           />
 
@@ -219,12 +193,12 @@ export default function AddressScreen() {
           <TextInput
             mode="outlined"
             label="Apartment/House Number (Optional)"
-            value={addressData.apartmentNumber}
-            onChangeText={(text) => updateAddressData('apartmentNumber', text)}
+            value={addressData.apartment ?? ''}
+            onChangeText={(text) => updateAddressData('apartment', text)}
             style={styles.textInput}
-            outlineColor="#333"
-            activeOutlineColor="#333"
-            textColor="#333"
+            outlineColor={theme.colors.outline}
+            activeOutlineColor={theme.colors.primary}
+            textColor={theme.colors.onSurface}
             autoCapitalize="characters"
           />
         </View>
@@ -247,6 +221,7 @@ export default function AddressScreen() {
         {/* Bottom Spacing */}
         <View style={styles.bottomSpacing} />
       </ScrollView>
+      <Snackbar visible={snack.visible} onDismiss={() => setSnack({ visible: false, msg: '' })} duration={2000}>{snack.msg}</Snackbar>
     </Surface>
   );
 }
@@ -254,7 +229,6 @@ export default function AddressScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f4a3c3', // Pink background
   },
   header: {
     flexDirection: 'row',
@@ -267,7 +241,6 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#333',
     textAlign: 'center',
   },
   headerSpacer: {
@@ -286,21 +259,18 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   textInput: {
-    backgroundColor: 'rgba(255, 192, 203, 0.7)',
+    backgroundColor: 'transparent',
   },
   menuContent: {
-    backgroundColor: '#fff',
     maxHeight: 200,
   },
   menuItemText: {
-    color: '#333',
     fontSize: 16,
   },
   saveButtonContainer: {
     marginBottom: 24,
   },
   saveButton: {
-    backgroundColor: '#ff69b4',
     borderRadius: 25,
   },
   saveButtonContent: {
@@ -309,7 +279,6 @@ const styles = StyleSheet.create({
   saveButtonText: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#fff',
   },
   bottomSpacing: {
     height: 32,

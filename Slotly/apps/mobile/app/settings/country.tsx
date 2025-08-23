@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, ScrollView, StyleSheet } from 'react-native';
 import {
   Text,
@@ -9,6 +9,7 @@ import {
   useTheme
 } from 'react-native-paper';
 import { useRouter } from 'expo-router';
+import { getCountry, setCountry } from '../../lib/settings/api';
 
 interface Country {
   id: string;
@@ -20,41 +21,40 @@ export default function CountryScreen() {
   const theme = useTheme();
   const router = useRouter();
   
-  const [selectedCountry, setSelectedCountry] = useState('kenya');
+  const [selectedCountry, setSelectedCountry] = useState('Kenya');
 
   const countries: Country[] = [
-    { id: 'kenya', name: 'Kenya', enabled: true },
-    { id: 'uganda', name: 'Uganda', enabled: false },
-    { id: 'tanzania', name: 'Tanzania', enabled: false },
-    { id: 'rwanda', name: 'Rwanda', enabled: false },
-    { id: 'burundi', name: 'Burundi', enabled: false },
-    { id: 'south-sudan', name: 'South Sudan', enabled: false },
-    { id: 'ethiopia', name: 'Ethiopia', enabled: false },
+    { id: 'Kenya', name: 'Kenya', enabled: true },
+    { id: 'Uganda', name: 'Uganda', enabled: true },
+    { id: 'Tanzania', name: 'Tanzania', enabled: true },
+    { id: 'Rwanda', name: 'Rwanda', enabled: true },
+    { id: 'Burundi', name: 'Burundi', enabled: true },
+    { id: 'South Sudan', name: 'South Sudan', enabled: true },
+    { id: 'Ethiopia', name: 'Ethiopia', enabled: true },
   ];
 
   const handleBack = () => {
     router.back();
   };
 
-  const handleCountrySelect = (countryId: string) => {
+  useEffect(() => {
+    getCountry().then((c) => setSelectedCountry(c || 'Kenya')).catch(() => {});
+  }, []);
+
+  const handleCountrySelect = async (countryId: string) => {
     const country = countries.find(c => c.id === countryId);
     if (country && country.enabled) {
       setSelectedCountry(countryId);
+      try { await setCountry(countryId); } catch {}
     }
   };
 
   return (
-    <Surface style={styles.container}>
+    <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
-        <IconButton
-          icon="arrow-left"
-          size={24}
-          iconColor="#333"
-          onPress={handleBack}
-          style={styles.backButton}
-        />
-        <Text style={styles.headerTitle}>Countries</Text>
+        <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={handleBack} style={styles.backButton} />
+        <Text style={[styles.headerTitle, { color: theme.colors.onSurface }]}>Countries</Text>
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
@@ -102,10 +102,7 @@ export default function CountryScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#ffc0cb', // Slotly pink background
-  },
+  container: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -116,29 +113,12 @@ const styles = StyleSheet.create({
   backButton: {
     marginRight: 8,
   },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#333',
-    flex: 1,
-    textAlign: 'center',
-    marginRight: 48, // Compensate for back button width
-  },
+  headerTitle: { fontSize: 28, fontWeight: 'bold', flex: 1, textAlign: 'center', marginRight: 48 },
   scrollView: {
     flex: 1,
     paddingHorizontal: 16,
   },
-  radioContainer: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderRadius: 12,
-    marginTop: 20,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    overflow: 'hidden',
-  },
+  radioContainer: { borderRadius: 12, marginTop: 20, overflow: 'hidden' },
   radioItem: {
     backgroundColor: 'transparent',
   },
@@ -151,19 +131,9 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     paddingHorizontal: 16,
   },
-  countryText: {
-    fontSize: 18,
-    color: '#666',
-    marginLeft: 12,
-    fontWeight: '500',
-  },
-  selectedText: {
-    color: '#333',
-    fontWeight: 'bold',
-  },
-  disabledText: {
-    color: '#ccc',
-  },
+  countryText: { fontSize: 18, marginLeft: 12, fontWeight: '500' },
+  selectedText: { fontWeight: 'bold' },
+  disabledText: { opacity: 0.5 },
   bottomSpacing: {
     height: 40,
   },

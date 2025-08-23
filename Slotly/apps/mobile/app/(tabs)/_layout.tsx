@@ -3,6 +3,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Link, Tabs } from 'expo-router';
 import { Pressable, Platform } from 'react-native';
 import { PaperProvider } from 'react-native-paper';
+import { slotlyTheme } from "../theme/paper";
 
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
@@ -20,10 +21,10 @@ export default function TabLayoutWrapper() {
   const colorScheme = useColorScheme();
 
   return (
-    <PaperProvider>
+    <PaperProvider theme={slotlyTheme}>
       <Tabs
         screenOptions={{
-          tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
+          tabBarActiveTintColor: slotlyTheme.colors.primary,
           headerShown: shouldShowHeader, // ✅ hook value is now legal
         }}
       >
@@ -57,19 +58,11 @@ export default function TabLayoutWrapper() {
             ),
           }}
         />
-        <Tabs.Screen
-          name="booking"
-          options={{
-            title: 'Booking',
-            tabBarIcon: ({ color }) => (
-              <TabBarIcon name="calendar-plus-o" color={color} />
-            ),
-          }}
-        />
+        {/* Appointments tab as per spec (history route) */}
         <Tabs.Screen
           name="history"
           options={{
-            title: 'History',
+            title: 'Appointments',
             tabBarIcon: ({ color }) => (
               <TabBarIcon name="history" color={color} />
             ),

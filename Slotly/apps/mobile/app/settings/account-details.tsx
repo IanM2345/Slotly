@@ -55,7 +55,6 @@ export default function AccountDetailsScreen() {
   };
 
   const validatePhoneNumber = (phone: string): boolean => {
-    // Basic validation for international phone numbers
     const phoneRegex = /^\+[1-9]\d{1,14}$/;
     return phoneRegex.test(phone);
   };
@@ -74,28 +73,24 @@ export default function AccountDetailsScreen() {
   const validateForm = (): boolean => {
     const newErrors: FormErrors = {};
 
-    // Full name validation
     if (!formData.fullName.trim()) {
       newErrors.fullName = 'Full name is required';
     } else if (formData.fullName.trim().length < 2) {
       newErrors.fullName = 'Full name must be at least 2 characters';
     }
 
-    // Email validation
     if (!formData.email.trim()) {
       newErrors.email = 'Email is required';
     } else if (!validateEmail(formData.email)) {
       newErrors.email = 'Please enter a valid email address';
     }
 
-    // Phone number validation
     if (!formData.phoneNumber.trim()) {
       newErrors.phoneNumber = 'Phone number is required';
     } else if (!validatePhoneNumber(formData.phoneNumber)) {
       newErrors.phoneNumber = 'Please enter a valid phone number (e.g., +254712345678)';
     }
 
-    // Date of birth validation
     if (!formData.dateOfBirth.trim()) {
       newErrors.dateOfBirth = 'Date of birth is required';
     } else if (!validateDate(formData.dateOfBirth)) {
@@ -116,17 +111,13 @@ export default function AccountDetailsScreen() {
 
     setLoading(true);
     try {
-      // Simulate API call
       await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      // Here you would make your actual API call
       console.log('Saving account details:', { ...formData, serviceType });
       
       setSnackbarMessage('Account details saved successfully!');
       setSnackbarType('success');
       setSnackbarVisible(true);
       
-      // Navigate back after a short delay to show success message
       setTimeout(() => {
         router.back();
       }, 1500);
@@ -146,7 +137,6 @@ export default function AccountDetailsScreen() {
       [field]: value
     }));
     
-    // Clear error for this field when user starts typing
     if (errors[field]) {
       setErrors(prev => ({
         ...prev,
@@ -156,10 +146,8 @@ export default function AccountDetailsScreen() {
   };
 
   const formatPhoneNumber = (phone: string): string => {
-    // Remove all non-digit characters except +
     let formatted = phone.replace(/[^\d+]/g, '');
     
-    // Ensure it starts with +
     if (!formatted.startsWith('+')) {
       formatted = '+' + formatted;
     }
@@ -173,10 +161,8 @@ export default function AccountDetailsScreen() {
   };
 
   const formatDateInput = (text: string): string => {
-    // Remove all non-digit characters
     const digits = text.replace(/\D/g, '');
     
-    // Format as YYYY-MM-DD
     if (digits.length >= 8) {
       return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
     } else if (digits.length >= 6) {
@@ -193,23 +179,23 @@ export default function AccountDetailsScreen() {
   };
 
   return (
-    <Surface style={styles.container}>
+    <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
         <IconButton
           icon="arrow-left"
           size={24}
-          iconColor="#333"
+          iconColor={theme.colors.onSurface}
           onPress={handleBack}
         />
-        <Text style={styles.headerTitle}>Account Details</Text>
+        <Text style={[styles.headerTitle, { color: theme.colors.onSurface }]}>Account Details</Text>
         <View style={styles.headerSpacer} />
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {/* Personal Details Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Personal Details</Text>
+          <Text style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>Personal Details</Text>
           
           <View style={styles.formContainer}>
             <View>
@@ -219,9 +205,9 @@ export default function AccountDetailsScreen() {
                 value={formData.fullName}
                 onChangeText={(text) => updateFormData('fullName', text)}
                 style={styles.textInput}
-                outlineColor={errors.fullName ? '#ff6b6b' : '#333'}
-                activeOutlineColor={errors.fullName ? '#ff6b6b' : '#333'}
-                textColor="#333"
+                outlineColor={errors.fullName ? theme.colors.error : theme.colors.outline}
+                activeOutlineColor={errors.fullName ? theme.colors.error : theme.colors.primary}
+                textColor={theme.colors.onSurface}
                 autoCapitalize="words"
                 error={!!errors.fullName}
               />
@@ -237,9 +223,9 @@ export default function AccountDetailsScreen() {
                 value={formData.email}
                 onChangeText={(text) => updateFormData('email', text.toLowerCase())}
                 style={styles.textInput}
-                outlineColor={errors.email ? '#ff6b6b' : '#333'}
-                activeOutlineColor={errors.email ? '#ff6b6b' : '#333'}
-                textColor="#333"
+                outlineColor={errors.email ? theme.colors.error : theme.colors.outline}
+                activeOutlineColor={errors.email ? theme.colors.error : theme.colors.primary}
+                textColor={theme.colors.onSurface}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 error={!!errors.email}
@@ -256,9 +242,9 @@ export default function AccountDetailsScreen() {
                 value={formData.phoneNumber}
                 onChangeText={handlePhoneChange}
                 style={styles.textInput}
-                outlineColor={errors.phoneNumber ? '#ff6b6b' : '#333'}
-                activeOutlineColor={errors.phoneNumber ? '#ff6b6b' : '#333'}
-                textColor="#333"
+                outlineColor={errors.phoneNumber ? theme.colors.error : theme.colors.outline}
+                activeOutlineColor={errors.phoneNumber ? theme.colors.error : theme.colors.primary}
+                textColor={theme.colors.onSurface}
                 keyboardType="phone-pad"
                 placeholder="+254712345678"
                 error={!!errors.phoneNumber}
@@ -275,9 +261,9 @@ export default function AccountDetailsScreen() {
                 value={formData.dateOfBirth}
                 onChangeText={handleDateChange}
                 style={styles.textInput}
-                outlineColor={errors.dateOfBirth ? '#ff6b6b' : '#333'}
-                activeOutlineColor={errors.dateOfBirth ? '#ff6b6b' : '#333'}
-                textColor="#333"
+                outlineColor={errors.dateOfBirth ? theme.colors.error : theme.colors.outline}
+                activeOutlineColor={errors.dateOfBirth ? theme.colors.error : theme.colors.primary}
+                textColor={theme.colors.onSurface}
                 placeholder="YYYY-MM-DD"
                 keyboardType="numeric"
                 maxLength={10}
@@ -292,8 +278,8 @@ export default function AccountDetailsScreen() {
 
         {/* Service Type Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Service Type</Text>
-          <Text style={styles.sectionSubtitle}>Choose who can book your services</Text>
+          <Text style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>Service Type</Text>
+          <Text style={[styles.sectionSubtitle, { color: theme.colors.onSurfaceVariant }]}>Choose who can book your services</Text>
           
           <View style={styles.serviceTypeContainer}>
             <SegmentedButtons
@@ -316,7 +302,7 @@ export default function AccountDetailsScreen() {
                   style: styles.segmentButton
                 }
               ]}
-              style={styles.segmentedButtons}
+              style={[styles.segmentedButtons, { backgroundColor: theme.colors.surfaceVariant }]}
             />
           </View>
         </View>
@@ -328,8 +314,8 @@ export default function AccountDetailsScreen() {
             onPress={handleSaveChanges}
             loading={loading}
             disabled={loading}
-            style={styles.saveButton}
-            labelStyle={styles.saveButtonText}
+            style={[styles.saveButton, { backgroundColor: theme.colors.primary }]}
+            labelStyle={[styles.saveButtonText, { color: theme.colors.onPrimary }]}
             contentStyle={styles.saveButtonContent}
           >
             {loading ? 'Saving...' : 'Save Changes'}
@@ -347,7 +333,7 @@ export default function AccountDetailsScreen() {
         duration={3000}
         style={[
           styles.snackbar,
-          snackbarType === 'error' ? styles.errorSnackbar : styles.successSnackbar
+          snackbarType === 'error' ? { backgroundColor: theme.colors.error } : { backgroundColor: (theme.colors as any).success }
         ]}
       >
         {snackbarMessage}
@@ -359,7 +345,6 @@ export default function AccountDetailsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#ffc0cb', // Light pink background
   },
   header: {
     flexDirection: 'row',
@@ -372,11 +357,10 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#333',
     textAlign: 'center',
   },
   headerSpacer: {
-    width: 48, // Same width as IconButton to center title
+    width: 48,
   },
   scrollView: {
     flex: 1,
@@ -388,38 +372,33 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#333',
     marginBottom: 8,
   },
   sectionSubtitle: {
     fontSize: 14,
-    color: '#666',
     marginBottom: 16,
   },
   formContainer: {
-    gap: 4, // Reduced gap since HelperText adds spacing
+    gap: 4,
   },
   textInput: {
-    backgroundColor: 'rgba(255, 192, 203, 0.7)',
+    backgroundColor: 'transparent',
   },
   serviceTypeContainer: {
     marginTop: 8,
   },
   segmentedButtons: {
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
     borderRadius: 25,
-    borderWidth: 2,
-    borderColor: '#333',
+    borderWidth: 1,
   },
   segmentButton: {
-    borderColor: '#333',
+    borderColor: 'transparent',
   },
   saveButtonContainer: {
     marginTop: 40,
     marginBottom: 24,
   },
   saveButton: {
-    backgroundColor: '#ff69b4',
     borderRadius: 25,
   },
   saveButtonContent: {
@@ -428,18 +407,11 @@ const styles = StyleSheet.create({
   saveButtonText: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#fff',
   },
   bottomSpacing: {
     height: 32,
   },
   snackbar: {
     marginBottom: 20,
-  },
-  successSnackbar: {
-    backgroundColor: '#4caf50',
-  },
-  errorSnackbar: {
-    backgroundColor: '#f44336',
   },
 });

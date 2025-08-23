@@ -94,7 +94,7 @@ export default function ExploreScreen() {
   };
 
   const handleViewAllPress = (section: string) => {
-    router.push(`/institutions/${section}`);
+    router.push(`/institution/${section}` as any);
   };
 
   const handleCategoryPress = (category: ServiceCategory) => {
@@ -164,7 +164,7 @@ export default function ExploreScreen() {
             </Button>
             <Button
               mode={selectedView === 'services' ? 'contained' : 'outlined'}
-              onPress={() => router.push('/explore-services')}
+              onPress={() => router.push('/explore' as any)}
               style={styles.toggleButton}
               labelStyle={styles.toggleButtonText}
             >
