@@ -24,48 +24,65 @@ import { Section } from "../../../../components/Section"
 import { AvatarCircle } from "../../../../components/AvatarCircle"
 import { ServiceChip } from "../../../../components/ServiceChip"
 
-// manager API (real functions from your module)
+// manager API
 import {
   listStaff,                 // { approvedStaff, pendingEnrollments }
   listServices,              // services[]
   listTimeOffRequests,       // time off GET
   decideTimeOff,             // time off PATCH
   reviewStaffEnrollment,     // approve/reject application
-  listStaffByServiceAssignment,
+  listStaffByServiceAssignment, // <-- used to preload assignments
   assignStaffToService,
   unassignStaffFromService,
 } from "../../../../lib/api/modules/manager"
 
 import type { Staff, Service } from "../../../../lib/types"
 
-// convenience: make service assignment 1-shot for this screen
+// ---------- light types ----------
+type PendingEnrollment = {
+  id: string
+  user?: { name?: string; email?: string }
+}
+
+type TimeOffRequestUI = {
+  id: string
+  staff?: { id?: string; name?: string }
+  startDate: string | Date
+  endDate: string | Date
+  status?: "PENDING" | "APPROVED" | "REJECTED"
+}
+
+// One-shot assign/unassign helper (uses existing endpoints)
 async function setStaffServices({ staffId, desiredServiceIds }: { staffId: string; desiredServiceIds: string[] }) {
-  const byService = await listStaffByServiceAssignment(); // { assigned, unassigned }
-  const currentlyAssignedByService = new Map<string, Set<string>>();
+  const byService = await listStaffByServiceAssignment() // { assigned, unassigned }  :contentReference[oaicite:1]{index=1}
+
+  const currentlyAssignedByService = new Map<string, Set<string>>()
   for (const item of byService.assigned ?? []) {
-    currentlyAssignedByService.set(item.serviceId, new Set((item.staff || []).map((s: any) => s.id)));
+    const svcId = item.serviceId ?? item.service?.id ?? item.id
+    const staffSet = new Set<string>((item.staff || []).map((s: any) => s.id))
+    currentlyAssignedByService.set(svcId, staffSet)
   }
 
   const allServiceIds = new Set<string>([
-    ...(byService.assigned?.map((s: any) => s.serviceId) || []),
-    ...(byService.unassigned?.map((s: any) => s.serviceId) || []),
-  ]);
+    ...(byService.assigned?.map((s: any) => s.serviceId ?? s.service?.id ?? s.id) || []),
+    ...(byService.unassigned?.map((s: any) => s.serviceId ?? s.service?.id ?? s.id) || []),
+  ])
 
-  const desired = new Set(desiredServiceIds);
-  const ops: Promise<any>[] = [];
+  const desired = new Set(desiredServiceIds)
+  const ops: Promise<any>[] = []
 
   for (const serviceId of allServiceIds) {
-    const set = currentlyAssignedByService.get(serviceId) || new Set<string>();
-    const isAssigned = set.has(staffId);
-    const shouldBeAssigned = desired.has(serviceId);
+    const set = currentlyAssignedByService.get(serviceId) || new Set<string>()
+    const isAssigned = set.has(staffId)
+    const shouldBeAssigned = desired.has(serviceId)
     if (!isAssigned && shouldBeAssigned) {
-      ops.push(assignStaffToService({ serviceId, staffId }));
+      ops.push(assignStaffToService({ serviceId, staffId }))   // :contentReference[oaicite:2]{index=2}
     } else if (isAssigned && !shouldBeAssigned) {
-      ops.push(unassignStaffFromService({ serviceId, staffId }));
+      ops.push(unassignStaffFromService({ serviceId, staffId })) // :contentReference[oaicite:3]{index=3}
     }
   }
-  if (ops.length) await Promise.all(ops);
-  return { message: "Services updated" };
+  if (ops.length) await Promise.all(ops)
+  return { message: "Services updated" }
 }
 
 export default function StaffIndexScreen() {
@@ -77,16 +94,19 @@ export default function StaffIndexScreen() {
   const [staff, setStaff] = useState<Staff[]>([])
   const [services, setServices] = useState<Service[]>([])
 
+  // Map: staffId -> serviceIds[] (preloaded assignments)
+  const [staffAssignedIds, setStaffAssignedIds] = useState<Record<string, string[]>>({})
+
   // Applications
-  const [pendingApps, setPendingApps] = useState<any[]>([])
+  const [pendingApps, setPendingApps] = useState<PendingEnrollment[]>([])
 
   // Time off
-  const [timeOff, setTimeOff] = useState<any[]>([])
+  const [timeOff, setTimeOff] = useState<TimeOffRequestUI[]>([])
   const [busyId, setBusyId] = useState<string | null>(null)
 
   // Edit services modal
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null)
-  const [selectedServices, setSelectedServices] = useState<string[]>([])
+  const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]) // IDs
   const [serviceSearch, setServiceSearch] = useState("")
   const [toast, setToast] = useState<string | null>(null)
 
@@ -96,23 +116,52 @@ export default function StaffIndexScreen() {
 
   const loadData = async () => {
     try {
-      const staffPayload = await listStaff()
-      const servicesData = await listServices()
+      // 1) fetch staff & services
+      const staffPayload = await listStaff()               // :contentReference[oaicite:4]{index=4}
+      const servicesData = await listServices()            // :contentReference[oaicite:5]{index=5}
 
-      // map approved staff to UI shape (metrics default until you add an endpoint)
-      const mappedStaff: Staff[] = (staffPayload.approvedStaff || []).map((u: any) => ({
-        id: u.id,
-        name: u.name || "Unnamed",
-        role: "STAFF",
-        completionRate: 0,
-        rating: 0,
-        monthBookings: 0,
-        monthRevenue: 0,
-        services: [], // initial: unknown; manager can edit below
-      }))
+      // 2) fetch service assignments grouped by service
+      const assignment = await listStaffByServiceAssignment() // { assigned, unassigned }  :contentReference[oaicite:6]{index=6}
 
+      // Build: serviceId -> serviceName
+      const serviceNameById = new Map<string, string>()
+      ;(servicesData || []).forEach((s: any) => serviceNameById.set(s.id, s.name))
+
+      // Build: staffId -> [serviceId]
+      const mapByStaff: Record<string, string[]> = {}
+      for (const item of assignment.assigned ?? []) {
+        const svcId: string = item.serviceId ?? item.service?.id ?? item.id
+        const staffArr = (item.staff || []) as Array<{ id: string }>
+        for (const st of staffArr) {
+          if (!mapByStaff[st.id]) mapByStaff[st.id] = []
+          mapByStaff[st.id].push(svcId)
+        }
+      }
+      setStaffAssignedIds(mapByStaff)
+
+      // map approved staff to UI shape & attach service NAMES for display
+      const mappedStaff: Staff[] = (staffPayload.approvedStaff || []).map((u: any) => {
+        const svcIds = mapByStaff[u.id] || []
+        const svcNames = svcIds.map((id: string) => serviceNameById.get(id)).filter(Boolean) as string[]
+        return {
+          id: u.id,
+          name: u.name || "Unnamed",
+          role: "STAFF",
+          completionRate: 0,
+          rating: 0,
+          monthBookings: 0,
+          monthRevenue: 0,
+          services: svcNames, // show names in chips
+        }
+      })
       setStaff(mappedStaff)
-      setPendingApps(staffPayload.pendingEnrollments || [])
+
+      const mappedApps: PendingEnrollment[] = (staffPayload.pendingEnrollments || []).map((e: any) => ({
+        id: e.id,
+        user: e.user,
+      }))
+      setPendingApps(mappedApps)
+
       setServices(
         (servicesData || []).map((s: any) => ({
           id: s.id,
@@ -123,8 +172,15 @@ export default function StaffIndexScreen() {
       )
 
       // pending time-off requests
-      const timeOffRequests = await listTimeOffRequests({ status: "PENDING" })
-      setTimeOff(timeOffRequests || [])
+      const timeOffRequests = (await listTimeOffRequests({ status: "PENDING" })) as any[] // :contentReference[oaicite:7]{index=7}
+      const mappedTimeOff: TimeOffRequestUI[] = (timeOffRequests || []).map((r: any) => ({
+        id: r.id,
+        staff: r.staff,
+        startDate: r.startDate,
+        endDate: r.endDate,
+        status: r.status,
+      }))
+      setTimeOff(mappedTimeOff)
     } catch (error) {
       console.error("Error loading staff data:", error)
     } finally {
@@ -135,18 +191,26 @@ export default function StaffIndexScreen() {
   // ===== Edit Services =====
   const handleEditServices = (staffMember: Staff) => {
     setEditingStaff(staffMember)
-    setSelectedServices(staffMember.services ?? [])
+    // Preselect from preloaded map (IDs)
+    setSelectedServiceIds(staffAssignedIds[staffMember.id] || [])
     setServiceSearch("")
   }
 
   const handleSaveServices = async () => {
     if (!editingStaff) return
     try {
-      const serviceIds = services.filter((s) => selectedServices.includes(s.name)).map((s) => s.id)
-      await setStaffServices({ staffId: editingStaff.id, desiredServiceIds: serviceIds })
+      // desired IDs already in state
+      await setStaffServices({ staffId: editingStaff.id, desiredServiceIds: selectedServiceIds })
 
-      // Update local state with the chosen names
-      setStaff((prev) => prev.map((s) => (s.id === editingStaff.id ? { ...s, services: selectedServices } : s)))
+      // Update local state names for display
+      const idSet = new Set(selectedServiceIds)
+      const selectedNames = services.filter((s) => idSet.has(s.id)).map((s) => s.name)
+
+      // 1) Update card chips (names)
+      setStaff((prev) => prev.map((s) => (s.id === editingStaff.id ? { ...s, services: selectedNames } : s)))
+      // 2) Update our preload map (ids)
+      setStaffAssignedIds((prev) => ({ ...prev, [editingStaff.id]: [...selectedServiceIds] }))
+
       setEditingStaff(null)
       setToast("Services updated")
     } catch (error) {
@@ -159,7 +223,7 @@ export default function StaffIndexScreen() {
   const approveApp = async (enrollmentId: string) => {
     try {
       setBusyId(enrollmentId)
-      await reviewStaffEnrollment({ enrollmentId, status: "APPROVED" })
+      await reviewStaffEnrollment({ enrollmentId, status: "APPROVED" }) // :contentReference[oaicite:8]{index=8}
       await loadData()
       setToast("Application approved")
     } catch (e) {
@@ -169,10 +233,11 @@ export default function StaffIndexScreen() {
       setBusyId(null)
     }
   }
+
   const rejectApp = async (enrollmentId: string) => {
     try {
       setBusyId(enrollmentId)
-      await reviewStaffEnrollment({ enrollmentId, status: "REJECTED" })
+      await reviewStaffEnrollment({ enrollmentId, status: "REJECTED" }) // :contentReference[oaicite:9]{index=9}
       await loadData()
       setToast("Application rejected")
     } catch (e) {
@@ -184,12 +249,29 @@ export default function StaffIndexScreen() {
   }
 
   // ===== Time-off =====
-  const decideTimeoff = async ({ id, status, startDate, endDate }: { id: string; status: "APPROVED" | "REJECTED"; startDate: any; endDate: any }) => {
+  const decideTimeoff = async ({
+    id,
+    status,
+    startDate,
+    endDate,
+  }: {
+    id: string
+    status: "APPROVED" | "REJECTED"
+    startDate: string | Date
+    endDate: string | Date
+  }) => {
     try {
       setBusyId(id)
-      await decideTimeOff({ id, status, startDate, endDate })
-      const updated = await listTimeOffRequests({ status: "PENDING" })
-      setTimeOff(updated || [])
+      await decideTimeOff({ id, status, startDate, endDate }) // :contentReference[oaicite:10]{index=10}
+      const updated = (await listTimeOffRequests({ status: "PENDING" })) as any[] // :contentReference[oaicite:11]{index=11}
+      const mappedTimeOff: TimeOffRequestUI[] = (updated || []).map((r: any) => ({
+        id: r.id,
+        staff: r.staff,
+        startDate: r.startDate,
+        endDate: r.endDate,
+        status: r.status,
+      }))
+      setTimeOff(mappedTimeOff)
       setToast(`Time off ${status.toLowerCase()}`)
     } catch (e) {
       console.error(e)
@@ -227,7 +309,7 @@ export default function StaffIndexScreen() {
             <Text style={{ paddingHorizontal: 16, color: "#6B7280" }}>No pending applications</Text>
           ) : (
             <View style={styles.staffContainer}>
-              {pendingApps.map((enr: any) => (
+              {pendingApps.map((enr) => (
                 <Surface key={enr.id} style={styles.staffCard} elevation={2}>
                   <View style={styles.staffHeader}>
                     <AvatarCircle name={enr.user?.name ?? "Applicant"} size={50} />
@@ -300,7 +382,7 @@ export default function StaffIndexScreen() {
                     {(member.services || []).length === 0 ? (
                       <Text style={{ color: "#6B7280" }}>No services assigned</Text>
                     ) : (
-                      member.services.map((service) => <ServiceChip key={service} service={service} />)
+                      member.services.map((serviceName) => <ServiceChip key={serviceName} service={serviceName} />)
                     )}
                   </View>
                 </View>
@@ -329,7 +411,7 @@ export default function StaffIndexScreen() {
             <Text style={{ paddingHorizontal: 16, color: "#6B7280" }}>No pending requests</Text>
           ) : (
             <View style={styles.staffContainer}>
-              {timeOff.map((req: any) => (
+              {timeOff.map((req) => (
                 <Surface key={req.id} style={styles.staffCard} elevation={2}>
                   <View style={styles.staffHeader}>
                     <AvatarCircle name={req.staff?.name ?? "Staff"} size={46} />
@@ -345,7 +427,14 @@ export default function StaffIndexScreen() {
                       mode="contained"
                       compact
                       loading={busyId === req.id}
-                      onPress={() => decideTimeoff({ id: req.id, status: "APPROVED", startDate: req.startDate, endDate: req.endDate })}
+                      onPress={() =>
+                        decideTimeoff({
+                          id: req.id,
+                          status: "APPROVED",
+                          startDate: req.startDate,
+                          endDate: req.endDate,
+                        })
+                      }
                       style={styles.actionButton}
                     >
                       Approve
@@ -354,7 +443,14 @@ export default function StaffIndexScreen() {
                       mode="outlined"
                       compact
                       loading={busyId === req.id}
-                      onPress={() => decideTimeoff({ id: req.id, status: "REJECTED", startDate: req.startDate, endDate: req.endDate })}
+                      onPress={() =>
+                        decideTimeoff({
+                          id: req.id,
+                          status: "REJECTED",
+                          startDate: req.startDate,
+                          endDate: req.endDate,
+                        })
+                      }
                       style={styles.actionButton}
                     >
                       Reject
@@ -382,17 +478,17 @@ export default function StaffIndexScreen() {
                     description={`${service.durationMins}min • KSh ${service.price}`}
                     left={() => (
                       <Checkbox
-                        status={selectedServices.includes(service.name) ? "checked" : "unchecked"}
+                        status={selectedServiceIds.includes(service.id) ? "checked" : "unchecked"}
                         onPress={() => {
-                          setSelectedServices((prev) =>
-                            prev.includes(service.name) ? prev.filter((s) => s !== service.name) : [...prev, service.name],
+                          setSelectedServiceIds((prev) =>
+                            prev.includes(service.id) ? prev.filter((id) => id !== service.id) : [...prev, service.id],
                           )
                         }}
                       />
                     )}
                     onPress={() => {
-                      setSelectedServices((prev) =>
-                        prev.includes(service.name) ? prev.filter((s) => s !== service.name) : [...prev, service.name],
+                      setSelectedServiceIds((prev) =>
+                        prev.includes(service.id) ? prev.filter((id) => id !== service.id) : [...prev, service.id],
                       )
                     }}
                   />
@@ -421,8 +517,6 @@ export default function StaffIndexScreen() {
     </VerificationGate>
   )
 }
-
-
 
 
 const styles = StyleSheet.create({

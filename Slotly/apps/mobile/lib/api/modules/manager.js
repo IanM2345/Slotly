@@ -213,6 +213,18 @@ export async function unassignStaffFromService({ serviceId, staffId }) {
   return data; // { message }
 }
 
+// Back-compat aliases for older screens
+export const getStaff = async () => {
+  const data = await listStaff();
+  // listStaff() currently returns { approvedStaff, pendingEnrollments }
+  return data.approvedStaff ?? data;    // keep old callers happy
+};
+
+export const getBookings = async (/* businessId? */) => {
+  // If your endpoint doesn’t need businessId, just ignore the param
+  return await listBookings({});
+};
+
 
 
 export async function setStaffServices({ staffId, desiredServiceIds }) {

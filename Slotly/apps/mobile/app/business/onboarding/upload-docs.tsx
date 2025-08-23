@@ -1,94 +1,212 @@
 "use client";
 
 import { useState } from "react";
-import { View, ScrollView, StyleSheet } from "react-native";
-import { Text, Button, Surface, useTheme, IconButton, TextInput } from "react-native-paper";
-import { useRouter } from "expo-router";
+import { View, StyleSheet, KeyboardAvoidingView, Platform } from "react-native";
+import {
+  Text,
+  TextInput,
+  Button,
+  useTheme,
+  Surface,
+  IconButton,
+  ProgressBar,
+  SegmentedButtons,
+} from "react-native-paper";
+import * as DocumentPicker from "expo-document-picker";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useRouter } from "expo-router";
+import { useOnboarding, type OnboardingData } from "../../../context/OnboardingContext";
+import { uploadToCloudinaryAdvanced } from "../../../lib/upload/cloudinary";
+
+/**
+ * You can let the user choose *which* doc they're uploading.
+ * Default is BUSINESS_LICENSE to keep your current UX intact.
+ */
+type KraDocType = "BUSINESS_LICENSE" | "KRA_PIN" | "REG_CERT";
 
 export default function UploadDocs() {
-  const router = useRouter();
   const theme = useTheme();
-  const [kraPin, setKraPin] = useState("");
-  const [regCertNo, setRegCertNo] = useState("");
+  const router = useRouter();
+  const { data, setData, addAttachment, completeSection } = useOnboarding();
+
+  const [kraPin, setKraPin] = useState(data.kraPin || "");
+  const [regNumber, setRegNumber] = useState(data.regNumber || "");
+  const [docType, setDocType] = useState<KraDocType>("BUSINESS_LICENSE");
+  const [uploadedUrl, setUploadedUrl] = useState<string | undefined>(
+    // if you previously stored a licenseUrl in data, show it
+    data.licenseUrl
+  );
+
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [err, setErr] = useState<string | null>(null);
+
+  const pickAndUpload = async () => {
+    setErr(null);
+    setProgress(0);
+
+    const res = await DocumentPicker.getDocumentAsync({
+      multiple: false,
+      copyToCacheDirectory: true,
+      type: ["application/pdf", "image/*"],
+    });
+    if (res.canceled || !res.assets?.[0]) return;
+
+    try {
+      setUploading(true);
+      const fileUri = res.assets[0].uri;
+
+      const result = await uploadToCloudinaryAdvanced(fileUri, {
+        folder: "slotly/business-docs",
+        tags: ["business", "license", "kra"],
+        onProgress: (p) => setProgress(p),
+      });
+
+      // 1) keep a local preview
+      setUploadedUrl(result.secure_url);
+
+      // 2) normalize into attachments so later steps can read it
+      addAttachment({
+        type: docType,                  // "BUSINESS_LICENSE" | "KRA_PIN" | "REG_CERT"
+        url: result.secure_url,
+        step: 3,
+        uploadedAt: Date.now(),
+      });
+    } catch (e: any) {
+      setErr(e?.message || "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleSave = () => {
+    // basic validation
+    if (!kraPin.trim() || !regNumber.trim() || !uploadedUrl) {
+      setErr("KRA PIN, Reg. Number, and a file are required.");
+      return;
+    }
+
+    // 1) keep the raw fields in the context for easy display/edit later
+    const updates: Partial<OnboardingData> = {
+      kraPin: kraPin.trim(),
+      regNumber: regNumber.trim(),
+    };
+    
+    if (docType === "BUSINESS_LICENSE") {
+      updates.licenseUrl = uploadedUrl;
+    }
+    
+    setData(updates);
+
+    // 2) mark section 'kra' complete - only include properties that match the expected type
+    completeSection("kra", {
+      done: true,
+    });
+
+    router.back();
+  };
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={{ flex: 1 }}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 0}
+      >
         <View style={styles.header}>
-          <View style={[styles.stepIndicator, { backgroundColor: theme.colors.primary }]}>
-            <Text style={[styles.stepNumber, { color: theme.colors.onPrimary }]}>3</Text>
-          </View>
-          <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onBackground }]}>
-            Upload KRA / Registration Docs
+          <IconButton icon="arrow-left" size={22} onPress={() => router.back()} />
+          <Text variant="headlineSmall" style={{ fontWeight: "700" }}>
+            KRA / Registration Docs
           </Text>
         </View>
 
-        <View style={[styles.phoneBar, { backgroundColor: theme.colors.primary }]}>
-          <Text style={[styles.timeText, { color: theme.colors.onPrimary }]}>9:41 AM</Text>
-        </View>
-
         <Surface style={[styles.card, { backgroundColor: theme.colors.surface }]} elevation={1}>
-          <View style={styles.formHeader}>
-            <IconButton icon="arrow-left" size={20} iconColor={theme.colors.primary} onPress={() => router.back()} />
-            <Text variant="titleLarge" style={[styles.formTitle, { color: theme.colors.primary }]}>
-              KRA & Registration
-            </Text>
-          </View>
-
-          <View style={styles.divider} />
-
+          <Text variant="titleMedium" style={[styles.label, { color: theme.colors.primary }]}>
+            KRA PIN
+          </Text>
           <TextInput
             mode="outlined"
-            label="KRA PIN"
             value={kraPin}
             onChangeText={setKraPin}
+            placeholder="A1B2C3D4E5"
             style={styles.input}
+            autoCapitalize="characters"
           />
 
+          <Text variant="titleMedium" style={[styles.label, { color: theme.colors.primary }]}>
+            Registration / Certificate Number
+          </Text>
           <TextInput
             mode="outlined"
-            label="Business Registration Certificate No."
-            value={regCertNo}
-            onChangeText={setRegCertNo}
+            value={regNumber}
+            onChangeText={setRegNumber}
+            placeholder="BN/123456"
             style={styles.input}
+            autoCapitalize="characters"
           />
 
-          {/* Placeholder upload buttons */}
-          <Button mode="outlined" style={styles.input} onPress={() => {}}>
-            Upload KRA PIN PDF
+          {/* Optional: let the user decide which doc this file represents */}
+          <Text variant="titleMedium" style={[styles.label, { color: theme.colors.primary }]}>
+            Document Type
+          </Text>
+          <SegmentedButtons
+            value={docType}
+            onValueChange={(v) => setDocType(v as KraDocType)}
+            buttons={[
+              { value: "BUSINESS_LICENSE", label: "License" },
+              { value: "KRA_PIN", label: "KRA PIN Doc" },
+              { value: "REG_CERT", label: "Reg. Cert." },
+            ]}
+            style={{ marginBottom: 8 }}
+          />
+
+          <Text variant="titleMedium" style={[styles.label, { color: theme.colors.primary }]}>
+            Upload File (PDF or Image)
+          </Text>
+          <Button
+            mode="outlined"
+            onPress={pickAndUpload}
+            loading={uploading}
+            disabled={uploading}
+            style={{ marginBottom: 8 }}
+          >
+            {uploadedUrl ? "Replace file" : "Pick & upload"}
           </Button>
-          <Button mode="outlined" style={styles.input} onPress={() => {}}>
-            Upload Registration Cert PDF
-          </Button>
+
+          {uploading ? (
+            <View style={{ marginTop: 8, marginBottom: 4 }}>
+              <ProgressBar progress={progress / 100} />
+              <Text variant="bodySmall" style={{ marginTop: 4 }}>{progress}%</Text>
+            </View>
+          ) : null}
+
+          {uploadedUrl ? (
+            <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
+              Uploaded: {uploadedUrl}
+            </Text>
+          ) : null}
+
+          {err ? <Text style={{ color: theme.colors.error, marginTop: 8 }}>{err}</Text> : null}
 
           <Button
             mode="contained"
-            onPress={() => router.push("/business/onboarding/kyc")}
-            style={[styles.primary, { backgroundColor: "#FBC02D" }]}
-            labelStyle={{ color: theme.colors.primary }}
+            onPress={handleSave}
+            style={[styles.saveBtn, { backgroundColor: "#FBC02D" }]}
+            labelStyle={{ color: theme.colors.primary, fontWeight: "700" }}
           >
-            Save & Back to KYC
+            Save
           </Button>
         </Surface>
-      </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  scrollContent: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 20 },
-  header: { alignItems: "center", marginBottom: 20 },
-  stepIndicator: { width: 40, height: 40, borderRadius: 20, justifyContent: "center", alignItems: "center", marginBottom: 12 },
-  stepNumber: { fontSize: 18, fontWeight: "bold" },
-  title: { fontWeight: "bold", textAlign: "center" },
-  phoneBar: { height: 44, borderRadius: 22, justifyContent: "center", alignItems: "center", marginBottom: 20 },
-  timeText: { fontSize: 16, fontWeight: "600" },
-  card: { borderRadius: 20, padding: 24, marginBottom: 20 },
-  formHeader: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
-  formTitle: { fontWeight: "bold" },
-  divider: { height: 2, backgroundColor: "#1559C1", marginBottom: 24 },
-  input: { marginBottom: 12 },
-  primary: { borderRadius: 25 },
+  container: { flex: 1, padding: 20 },
+  header: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12 },
+  card: { borderRadius: 16, padding: 16, gap: 10 },
+  label: { fontWeight: "700", marginTop: 6 },
+  input: { backgroundColor: "transparent" },
+  saveBtn: { borderRadius: 26, marginTop: 8 },
 });

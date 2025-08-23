@@ -1,66 +1,37 @@
-
+// apps/mobile/lib/api/modules/bookings.js
 import api from "../../api/client";
 
-/**
- * Create a booking (CUSTOMER only)
- * Backend: POST /api/bookings
- * Body: { businessId, serviceId, startTime, couponCode? }
- */
+/** CUSTOMER create booking */
 export async function createBooking(payload) {
-  // payload = { businessId, serviceId, startTime, couponCode? }
-  const { data } = await api.post("/bookings", payload);
+  // POST /api/bookings
+  const { data } = await api.post("/api/bookings", payload);
   return data; // { booking, discountApplied }
 }
 
-/**
- * List bookings
- * Backend: GET /api/bookings
- * - CUSTOMER → returns only their own
- * - STAFF/BUSINESS_OWNER → may pass { businessId } to filter
- */
+/** List bookings (manager or customer) */
 export async function listBookings(params = {}) {
-  // params = { businessId? }
-  const { data } = await api.get("/bookings", {
-    params: params.businessId ? { businessId: params.businessId } : undefined,
-  });
-  return data; // Booking[]
+  // If you want manager context, call /api/manager/bookings
+  if (params.businessId) {
+    const { data } = await api.get("/api/manager/bookings", { params: { businessId: params.businessId } });
+    return Array.isArray(data) ? data : (data.bookings ?? []);
+  }
+  const { data } = await api.get("/api/bookings");
+  return Array.isArray(data) ? data : (data.bookings ?? []);
 }
 
-/**
- * Update a booking (STAFF only)
- * Backend: PUT /api/bookings/:id
- * Body: { startTime?, serviceId? }
- */
+/** Update (staff) */
 export async function updateBooking(bookingId, payload) {
-  const { data } = await api.put(`/bookings/${bookingId}`, payload);
-  return data; // Booking
-}
-
-/**
- * Delete a booking (STAFF only)
- * Backend: DELETE /api/bookings/:id
- */
-export async function deleteBooking(bookingId) {
-  const { data } = await api.delete(`/bookings/${bookingId}`);
-  return data; // { message: 'Booking deleted' }
-}
-
-/**
- * Not supported by current backend:
- * There is no GET /api/bookings/:id route implemented.
- * If you add a GET handler on the backend, you can switch this to a real call.
- */
-export async function getBooking(/* id */) {
-  throw new Error("getBooking is not supported: backend lacks GET /api/bookings/:id");
-}
-
-/**
- * Not supported by current backend:
- * There is no POST /users/bookings/:id/cancel route.
- * Use deleteBooking(id) for STAFF deletes, or add a cancel endpoint on the backend.
- */
-export async function cancelBooking(bookingId) {
-  const { data } = await api.post(`/users/bookings/${bookingId}/cancel`);
+  const { data } = await api.put(`/api/bookings/${bookingId}`, payload);
   return data;
 }
 
+/** Delete (staff) */
+export async function deleteBooking(bookingId) {
+  const { data } = await api.delete(`/api/bookings/${bookingId}`);
+  return data;
+}
+
+/** Optional alias used by some screens */
+export async function getBookings(businessId) {
+  return listBookings(businessId ? { businessId } : {});
+}

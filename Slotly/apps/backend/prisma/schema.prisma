@@ -12,8 +12,8 @@ model User {
   id             String       @id @default(auto()) @map("_id") @db.ObjectId
   email          String?      @unique
   phone          String?      @unique
-  password       String
-  name           String
+  password       String? // Made optional for OTP/dev login flows
+  name           String? // Made optional for OTP/dev login flows
   role           Role         @default(CUSTOMER)
   referredById   String?      @db.ObjectId
   referredBy     User?        @relation("UserReferredBy", fields: [referredById], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -29,25 +29,29 @@ model User {
   otpExpiresAt DateTime?
   RecentSearch RecentSearch[]
 
-  serviceStaff ServiceStaff[]
+  serviceStaff    ServiceStaff[]
+  PromoRedemption PromoRedemption[]
+  ownedBusinesses Business[]        @relation("BusinessOwner")
+  RefreshToken    RefreshToken[]
 }
 
 model Business {
-  id             String    @id @default(auto()) @map("_id") @db.ObjectId
-  name           String    @unique
+  id             String        @id @default(auto()) @map("_id") @db.ObjectId
+  name           String        @unique
   description    String?
-  ownerId        String
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  ownerId        String        @db.ObjectId
+  owner          User          @relation("BusinessOwner", fields: [ownerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
   logoUrl        String?
-  suspended      Boolean   @default(false)
+  suspended      Boolean       @default(false)
   suspendedUntil DateTime?
-  type           String?
+  type           BusinessType? // Made it an enum for type safety
   hours          Json?
   address        String
   latitude       Float
   longitude      Float
-  searchCount    Int       @default(0)
+  searchCount    Int           @default(0)
 
   // ✅ IntaSend payouts (clean, unified)
   payoutType       PayoutType?
@@ -59,8 +63,14 @@ model Business {
   bankAccount      String?
   accountName      String?
 
-  addOns AddOn[]          @relation("BusinessAddOns")
-  plan   SubscriptionPlan @default(LEVEL_1)
+  addOns          AddOn[]           @relation("BusinessAddOns")
+  services        Service[]
+  plan            SubscriptionPlan  @default(LEVEL_1)
+  PromoRedemption PromoRedemption[]
+
+  @@index([ownerId])
+  @@index([plan])
+  @@index([type])
 }
 
 // ---------- Payment ----------
@@ -97,10 +107,14 @@ model Service {
   duration   Int
   category   String?
   available  Boolean  @default(true)
-  businessId String
+  businessId String   @db.ObjectId
+  business   Business @relation(fields: [businessId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   createdAt  DateTime @default(now())
 
   serviceStaff ServiceStaff[]
+
+  @@index([businessId])
+  @@index([category])
 }
 
 model Booking {
@@ -170,6 +184,8 @@ model Coupon {
   businessId     String   @db.ObjectId
 
   userCoupons UserCoupon[]
+
+  @@index([businessId])
 }
 
 model UserCoupon {
@@ -179,8 +195,8 @@ model UserCoupon {
   usedAt     DateTime?
   issuedFrom String?
 
-  user   User   @relation(fields: [userId], references: [id])
-  coupon Coupon @relation(fields: [couponId], references: [id])
+  user   User   @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model Referral {
@@ -232,6 +248,8 @@ model AdCampaign {
   startDate  DateTime
   endDate    DateTime
   isActive   Boolean  @default(true)
+
+  @@index([businessId])
 }
 
 model ServiceImage {
@@ -239,6 +257,8 @@ model ServiceImage {
   url       String
   serviceId String   @db.ObjectId
   createdAt DateTime @default(now())
+
+  @@index([serviceId])
 }
 
 model BusinessVerification {
@@ -275,6 +295,8 @@ model ServiceBundle {
   duration    Int
   businessId  String   @db.ObjectId
   createdAt   DateTime @default(now())
+
+  @@index([businessId])
 }
 
 model ServiceInBundle {
@@ -284,6 +306,24 @@ model ServiceInBundle {
   position  Int
 }
 
+model PromoRedemption {
+  id         String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId     String    @db.ObjectId
+  code       String
+  plan       String?
+  redeemedAt DateTime  @default(now())
+  trialEnd   DateTime
+  businessId String?   @db.ObjectId // ✅ Make this NULLABLE
+  consumedAt DateTime? // ✅ Add consumed timestamp
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  business Business? @relation(fields: [businessId], references: [id], onDelete: SetNull) // ✅ Make relation optional
+
+  @@unique([userId, code])
+  @@index([userId, code, businessId]) // ✅ Add composite index
+  @@map("promo_redemptions")
+}
+
 model ServiceStaff {
   id         String   @id @default(auto()) @map("_id") @db.ObjectId
   businessId String   @db.ObjectId
@@ -291,8 +331,8 @@ model ServiceStaff {
   staffId    String   @db.ObjectId
   createdAt  DateTime @default(now())
 
-  service Service @relation(fields: [serviceId], references: [id])
-  staff   User    @relation(fields: [staffId], references: [id])
+  service Service @relation(fields: [serviceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  staff   User    @relation(fields: [staffId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([serviceId, staffId])
   @@index([businessId])
@@ -327,7 +367,7 @@ model AddOn {
   isActive   Boolean   @default(true)
   createdAt  DateTime  @default(now())
 
-  business Business @relation("BusinessAddOns", fields: [businessId], references: [id])
+  business Business @relation("BusinessAddOns", fields: [businessId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model RecentSearch {
@@ -339,7 +379,7 @@ model RecentSearch {
   category  String?
   createdAt DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model WebhookLog {
@@ -392,6 +432,27 @@ model SubscriptionPayment {
   @@index([subscriptionId])
   @@index([businessId])
   @@index([createdAt])
+}
+
+model RefreshToken {
+  id         String    @id @default(auto()) @map("_id") @db.ObjectId
+  jti        String    @unique // token id
+  userId     String    @db.ObjectId
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  revokedAt  DateTime?
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+  replacedBy String? // jti of replacement
+  userAgent  String?
+  ip         String?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+enum BusinessType {
+  FORMAL
+  INFORMAL
 }
 
 enum AddOnType {

@@ -1,145 +1,47 @@
-// app/api/payments/booking/route.js
+import { NextResponse } from "next/server";
+import * as Sentry from "@sentry/nextjs";
+import { verifyToken } from "../../../middleware/auth";
 
-import * as Sentry from '@sentry/nextjs';
-import { NextResponse } from 'next/server';
-import { PrismaClient } from '@/generated/prisma';
-import { verifyToken } from '@/middleware/auth';
-import { createPaymentCheckout } from '@/lib/shared/intasend';
+// Optional: lightweight CORS for mobile
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
 
-const prisma = new PrismaClient();
-
-function mask(s) {
-  return s ? String(s).replace(/.(?=.{4})/g, '•') : s;
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS });
 }
 
-/**
- * POST /api/payments/booking
- * Body: { bookingId: string }
- * Creates a PENDING Payment row and an IntaSend checkout, then returns the checkout URL.
- */
-export async function POST(request) {
+export async function POST(req) {
   try {
-    // authenticate like the rest of your routes
-    const { valid, decoded, error } = await verifyToken(request);
-    if (!valid) return NextResponse.json({ error }, { status: 401 });
+    const { valid, error } = await verifyToken(req);
+    if (!valid) return NextResponse.json({ error }, { status: 401, headers: CORS });
 
-    const { bookingId } = await request.json();
-    if (!bookingId) {
-      return NextResponse.json({ error: 'bookingId required' }, { status: 400 });
-    }
+    const body = await req.json().catch(() => ({}));
+    const { type, msisdn, tillNumber, paybillNumber, accountRef, bankName, accountNumber, accountName } = body || {};
 
-    // Load booking, service, and user (Mongo schema has no explicit relations, so fetch explicitly)
-    const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
-    if (!booking) return NextResponse.json({ error: 'Booking not found' }, { status: 404 });
+    // Generate a stub token reference (no real gateway hit)
+    const tokenRef = `tok_${Math.random().toString(36).slice(2, 10)}`;
 
-    const [service, customer] = await Promise.all([
-      prisma.service.findUnique({ where: { id: booking.serviceId } }),
-      prisma.user.findUnique({ where: { id: booking.userId } }),
-    ]);
+    const brand = String(type || "").startsWith("MPESA") ? "M-PESA" : "Bank";
+    const last4 =
+      (accountNumber && String(accountNumber).slice(-4)) ||
+      (msisdn && String(msisdn).slice(-3)) ||
+      undefined;
 
-    if (!service) return NextResponse.json({ error: 'Service not found' }, { status: 404 });
-    if (!customer) return NextResponse.json({ error: 'Customer not found' }, { status: 404 });
+    const display =
+      brand === "M-PESA"
+        ? (msisdn && `+2547••• ••${String(msisdn).slice(-3)}`) ||
+          (tillNumber && `Till ${tillNumber}`) ||
+          (paybillNumber && accountRef && `Paybill ${paybillNumber} / ${accountRef}`) ||
+          "M-PESA"
+        : (bankName && accountNumber && `${bankName} ••••${String(accountNumber).slice(-4)}`) ||
+          "Bank";
 
-    const amount = Number(service.price ?? 0);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      return NextResponse.json({ error: 'Invalid service price' }, { status: 400 });
-    }
-
-    // Unique reference for matching webhooks later (also stored in Payment.txRef)
-    const txRef = `booking-${booking.id}-${Date.now()}`;
-
-    // Create a pending Payment row
-    const payment = await prisma.payment.create({
-      data: {
-        type: 'BOOKING',
-        bookingId: booking.id,
-        businessId: booking.businessId,
-        amount,                // Int in KES cents? your schema uses Int; keep consistent with service.price
-        method: 'OTHER',       // will finalize from webhook/status check
-        status: 'PENDING',
-        fee: 0,
-        provider: 'INTASEND',
-        txRef,
-      },
-    });
-
-    // Prepare customer details for checkout (fallbacks are fine)
-    const email = customer.email || 'noreply@slotly.local';
-    const name = customer.name || 'Slotly User';
-    const phone = customer.phone || undefined;
-
-    // Create IntaSend checkout (card/M-Pesa)
-    const checkout = await createPaymentCheckout({
-      amount,
-      currency: 'KES',
-      email,
-      name,
-      phone,
-      reference: txRef,
-      redirect_url: `${process.env.PUBLIC_APP_URL}/payments/success`,
-      cancel_url: `${process.env.PUBLIC_APP_URL}/payments/cancel`,
-      metadata: {
-        bookingId: booking.id,
-        businessId: booking.businessId,
-        purpose: 'BOOKING',
-        paymentId: payment.id,
-      },
-    });
-
-    const checkoutUrl = checkout?.checkout_url || checkout?.url || null;
-    const invoiceId = checkout?.invoice_id || checkout?.invoice || null;
-
-    // Persist provider ids / links for traceability
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: {
-        providerPaymentId: invoiceId ?? undefined,
-        checkoutLink: checkoutUrl ?? undefined,
-      },
-    });
-
-    return NextResponse.json(
-      {
-        link: checkoutUrl,
-        paymentId: payment.id,
-        txRef,
-        invoiceId,
-        customer: {
-          name,
-          email: mask(email),
-          phone: phone ? mask(phone) : null,
-        },
-      },
-      { status: 200 }
-    );
-  } catch (error) {
-    Sentry.captureException(error);
-    console.error('Payment init error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
-  }
-}
-
-/**
- * GET /api/payments/booking?bookingId=...
- * Returns the list of Payment rows for a booking (latest first)
- */
-export async function GET(request) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const bookingId = searchParams.get('bookingId');
-    if (!bookingId) {
-      return NextResponse.json({ error: 'bookingId required' }, { status: 400 });
-    }
-
-    const payments = await prisma.payment.findMany({
-      where: { bookingId },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    return NextResponse.json(payments, { status: 200 });
-  } catch (error) {
-    Sentry.captureException?.(error);
-    console.error('Payment list error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json({ tokenRef, brand, last4, display }, { status: 200, headers: CORS });
+  } catch (err) {
+    Sentry.captureException?.(err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500, headers: CORS });
   }
 }

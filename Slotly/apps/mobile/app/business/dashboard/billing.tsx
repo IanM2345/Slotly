@@ -19,7 +19,6 @@ import * as Linking from "expo-linking";
 import { useTier } from "../../../context/TierContext";
 import { VerificationGate } from "../../../components/VerificationGate";
 import { Section } from "../../../components/Section";
-import { TIER_NAMES } from "../../../lib/featureMatrix";
 import type { BusinessTier } from "../../../lib/types";
 
 // API
@@ -28,7 +27,7 @@ import {
   getSubscriptionPayments,
   startOrChangeSubscription,
   payAndWait,
-} from "../../../lib/api/modules/subscription"; // Fixed import path
+} from "../../../lib/api/modules/subscription";
 
 type SubscriptionRow = {
   id: string;
@@ -67,6 +66,16 @@ const tierToPlan: Record<BusinessTier, SubscriptionRow["plan"]> = {
   level6: "LEVEL_6",
 };
 
+// Tier names mapping
+const TIER_NAMES: Record<BusinessTier, string> = {
+  level1: "Starter",
+  level2: "Basic", 
+  level3: "Pro",
+  level4: "Business",
+  level5: "Enterprise",
+  level6: "Premium",
+};
+
 export default function BillingScreen() {
   const router = useRouter();
   const theme = useTheme();
@@ -75,18 +84,18 @@ export default function BillingScreen() {
   const [loading, setLoading] = useState(true);
   const [sub, setSub] = useState<SubscriptionRow | null>(null);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
-  const [autoRenew, setAutoRenew] = useState(true); // placeholder toggle for now
+  const [autoRenew, setAutoRenew] = useState(true);
   const [busyPay, setBusyPay] = useState(false);
 
   async function load() {
     setLoading(true);
     try {
-      const s = await getCurrentSubscription(); // GET /api/manager/subscription
+      const s = await getCurrentSubscription();
       setSub(s);
       if (s?.id) {
-        const list = await getSubscriptionPayments(s.id); // GET list
+        const list = await getSubscriptionPayments(s.id);
         setPayments(Array.isArray(list) ? list : []);
-        // Sync TierContext (optional): map backend plan to UI tier
+        // Sync TierContext: map backend plan to UI tier
         const uiTier = (Object.keys(tierToPlan) as BusinessTier[]).find((k) => tierToPlan[k] === s.plan);
         if (uiTier && uiTier !== tier) setTier(uiTier);
       } else {
@@ -155,7 +164,7 @@ export default function BillingScreen() {
         customer: null,
         metadata: {},
         open: (url: string) => WebBrowser.openBrowserAsync(url),
-      }); // uses /api/payments/subscriptionPayments under the hood
+      });
 
       if (paid) {
         Alert.alert("Payment successful", "Your subscription has been updated.");
@@ -176,7 +185,7 @@ export default function BillingScreen() {
     if (!requestedPlan) return;
 
     try {
-      // Ask server to start plan change; it will compute price & either activate or return a checkoutUrl
+      // Ask server to start plan change
       const res = await startOrChangeSubscription({ plan: requestedPlan });
 
       // For LEVEL_1: activated immediately (active: true)
@@ -189,7 +198,6 @@ export default function BillingScreen() {
       // For paid plans: open returned checkout URL (if present), then refresh
       if (res?.checkoutUrl && res?.subscriptionId) {
         await WebBrowser.openBrowserAsync(res.checkoutUrl);
-        // Optional: also poll via getSubscriptionPayments if you want immediate update
         await load();
         return;
       }
@@ -244,7 +252,6 @@ export default function BillingScreen() {
                   </View>
                   <View style={styles.detailRow}>
                     <Text style={styles.detailLabel}>Auto-renew:</Text>
-                    {/* Placeholder toggle — wire to backend when you add it */}
                     <Switch value={autoRenew} onValueChange={() => setAutoRenew((v) => !v)} />
                   </View>
                 </View>
@@ -273,7 +280,7 @@ export default function BillingScreen() {
           </Surface>
         </Section>
 
-        {/* Available Plans (wired to real plan change) */}
+        {/* Available Plans */}
         <Section title="Available Plans">
           <View style={styles.plansContainer}>
             {(

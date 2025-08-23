@@ -1,140 +1,102 @@
 // apps/backend/src/app/api/payments/subscriptionPayments/route.js
-import * as Sentry from '@sentry/nextjs';
-import { NextResponse } from 'next/server';
-import { PrismaClient } from '@/generated/prisma';
-import { createPaymentCheckout } from '@/lib/shared/intasend';
+import { NextResponse } from "next/server";
+import { PrismaClient } from "@/generated/prisma";
+import { authenticateRequest } from "@/middleware/auth";
+
+export const dynamic = "force-dynamic";
 
 const prisma = new PrismaClient();
+const PROMO = "15208";
 
-const PLAN_PRICES = {
-  BASIC_MONTHLY: 1000,
-  PRO_MONTHLY: 2500,
-  PRO_YEARLY: 25000,
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST,GET,OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
-export async function POST(request) {
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: CORS });
+}
+
+export async function GET() {
+  return NextResponse.json({ ok: true, route: "subscriptionPayments" }, { headers: CORS });
+}
+
+export async function POST(req) {
   try {
-    const {
-      subscriptionId,
-      amount,                 // optional client override (ignored if invalid)
-      currency = 'KES',
-      returnUrl,
-      cancelUrl,
-      customer = {},          // { email?, name?, phone_number? }
-      metadata = {},
-    } = await request.json();
-
-    if (!subscriptionId) {
-      return NextResponse.json({ error: 'subscriptionId is required' }, { status: 400 });
-    }
-    if (!returnUrl || !cancelUrl) {
-      return NextResponse.json({ error: 'returnUrl and cancelUrl are required' }, { status: 400 });
+    // auth
+    const auth = await authenticateRequest(req);
+    if (!auth.valid) {
+      return NextResponse.json({ error: auth.error }, { status: 401, headers: CORS });
     }
 
-    const subscription = await prisma.subscription.findUnique({
-      where: { id: subscriptionId },
-      include: { business: true },
-    });
+    const userId = auth.decoded.sub || auth.decoded.id;
+    const body = await req.json().catch(() => ({}));
 
-    if (!subscription?.business) {
-      return NextResponse.json({ error: 'Invalid subscription' }, { status: 404 });
+    const promoCode = String(body?.promoCode || body?.code || "").trim();
+    const plan = String(body?.plan || "LEVEL1").toUpperCase();
+
+    if (!promoCode) {
+      return NextResponse.json({ ok: false, error: "Missing promoCode" }, { status: 400, headers: CORS });
+    }
+    if (promoCode !== PROMO) {
+      return NextResponse.json({ ok: false, error: "Invalid promo code" }, { status: 400, headers: CORS });
     }
 
-    // Derive amount: prefer valid client amount, else subscription.amount, else plan map
-    const derivedAmount = Number.isFinite(Number(amount)) && Number(amount) > 0
-      ? Number(amount)
-      : Number(subscription.amount ?? PLAN_PRICES[subscription.plan] ?? 0);
-
-    if (!Number.isFinite(derivedAmount) || derivedAmount <= 0) {
-      return NextResponse.json({ error: 'Invalid subscription amount' }, { status: 400 });
-    }
-
-    // Compose customer payload (Business doesn’t have email/phone in your schema → use provided fallback)
-    const customerEmail = customer.email ?? null;
-    const customerName = subscription.business.name || customer.name || 'Slotly Business';
-    const customerPhone = customer.phone_number ?? undefined;
-
-    // 1) Create a PENDING SubscriptionPayment row
-    const subPayment = await prisma.subscriptionPayment.create({
-      data: {
-        subscriptionId,
-        businessId: subscription.businessId,
-        amount: derivedAmount,
-        currency,
-        method: 'OTHER',               // will be finalized by webhook
-        status: 'PENDING',
-        fee: 0,
-        returnUrl,
-        cancelUrl,
-        metadata: { ...metadata, plan: subscription.plan },
-        provider: 'INTASEND',
+    // If a user already redeemed (but not yet consumed/attached to a business),
+    // return the same trial window.
+    const existing = await prisma.promoRedemption.findFirst({
+      where: {
+        userId,
+        code: PROMO,
+        businessId: null,           // <-- use this as the "not yet consumed" marker
       },
     });
 
-    // 2) Build a unique reference for reconciliation (also store to txRef)
-    const txRef = `subscription-${subscription.businessId}-${subPayment.id}-${Date.now()}`;
-    await prisma.subscriptionPayment.update({
-      where: { id: subPayment.id },
-      data: { txRef },
-    });
+    if (existing) {
+      return NextResponse.json(
+        {
+          ok: true,
+          trial: {
+            startDate: existing.redeemedAt.toISOString(), // use redeemedAt as start
+            endDate: existing.trialEnd.toISOString(),
+            plan: existing.plan || plan,
+          },
+        },
+        { headers: CORS }
+      );
+    }
 
-    // 3) Create IntaSend checkout
-    const checkout = await createPaymentCheckout({
-      amount: derivedAmount,
-      currency,
-      email: customerEmail,         // can be null
-      name: customerName,
-      phone: customerPhone,         // optional
-      reference: txRef,             // important: you’ll match this in the webhook
-      redirect_url: returnUrl,
-      cancel_url: cancelUrl,
-      metadata: {
-        subscriptionId,
-        subscriptionPaymentId: subPayment.id,
-        businessId: subscription.businessId,
-        plan: subscription.plan,
-      },
-    });
+    // Create a new user-level redemption (no business attached yet)
+    const now = new Date();
+    const end = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-    const checkoutUrl = checkout?.checkout_url || checkout?.url || null;
-    const invoiceId = checkout?.invoice_id || checkout?.invoice || null;
-
-    // 4) Persist provider ids/links for traceability
-    await prisma.subscriptionPayment.update({
-      where: { id: subPayment.id },
+    const redemption = await prisma.promoRedemption.create({
       data: {
-        checkoutLink: checkoutUrl ?? undefined,
-        providerPaymentId: invoiceId ?? undefined, // IntaSend invoice_id
+        userId,
+        code: PROMO,
+        plan,
+        redeemedAt: now,
+        trialEnd: end,
+        businessId: null,           // <-- not consumed yet
       },
     });
 
     return NextResponse.json(
-      { link: checkoutUrl, subscriptionPaymentId: subPayment.id, reference: txRef, invoiceId },
-      { status: 200 }
+      {
+        ok: true,
+        trial: {
+          startDate: redemption.redeemedAt.toISOString(),
+          endDate: redemption.trialEnd.toISOString(),
+          plan: redemption.plan,
+        },
+      },
+      { headers: CORS }
     );
   } catch (error) {
-    Sentry.captureException?.(error);
-    console.error('SubscriptionPayment init error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
-  }
-}
-
-export async function GET(request) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const subscriptionId = searchParams.get('subscriptionId');
-    if (!subscriptionId) {
-      return NextResponse.json({ error: 'subscriptionId is required' }, { status: 400 });
-    }
-
-    const payments = await prisma.subscriptionPayment.findMany({
-      where: { subscriptionId },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    return NextResponse.json(payments, { status: 200 });
-  } catch (error) {
-    Sentry.captureException?.(error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    console.error("Promo redemption error:", error);
+    return NextResponse.json({ ok: false, error: "Failed to redeem promo code" }, { status: 500, headers: CORS });
+  } finally {
+    await prisma.$disconnect().catch(() => {});
   }
 }

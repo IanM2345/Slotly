@@ -1,201 +1,410 @@
 "use client";
 
-import { useState } from "react";
-import { View, ScrollView, StyleSheet } from "react-native";
-import { Text, Button, Surface, useTheme, IconButton, Card, TextInput } from "react-native-paper";
+import React, { useMemo, useState, useEffect } from "react";
+import {
+  View,
+  ScrollView,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  useWindowDimensions,
+} from "react-native";
+import {
+  Text,
+  Button,
+  Surface,
+  useTheme,
+  IconButton,
+  Card,
+  TextInput,
+  RadioButton,
+} from "react-native-paper";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import api from "../../../lib/api/client";
+import { attachPayoutMethod, prewarmPaymentsAttach } from "../../../lib/api/modules/payment";
+import { useOnboarding } from "../../../context/OnboardingContext";
 
-type PaymentMethod = "mpesa" | "bank";
+type PayoutType = "MPESA_PHONE" | "MPESA_TILL" | "MPESA_PAYBILL" | "BANK";
+
+type OptionDef = {
+  type: PayoutType;
+  title: string;
+  subtitle: string;
+};
+
+const OPTIONS: OptionDef[] = [
+  { type: "MPESA_PHONE",   title: "M-PESA (Phone)",   subtitle: "Pay owner's phone" },
+  { type: "MPESA_TILL",    title: "M-PESA (Till)",    subtitle: "Pay to Till" },
+  { type: "MPESA_PAYBILL", title: "M-PESA (Paybill)", subtitle: "Paybill + Account Ref" },
+  { type: "BANK",          title: "Bank Transfer",     subtitle: "Pay to bank account" },
+];
 
 export default function PaymentSetup() {
   const router = useRouter();
   const theme = useTheme();
+  const { width } = useWindowDimensions();
+  const { data, setData, updateKycSection } = useOnboarding();
+
+  const [payoutType, setPayoutType] = useState<PayoutType>(
+    (data.payoutType as PayoutType) || "MPESA_PHONE"
+  );
+
+  // fields
+  const [mpesaPhoneNumber, setMpesaPhoneNumber] = useState(data.mpesaPhoneNumber || "");
+  const [tillNumber, setTillNumber] = useState(data.tillNumber || "");
+  const [paybillNumber, setPaybillNumber] = useState(data.paybillNumber || "");
+  const [accountRef, setAccountRef] = useState(data.accountRef || "");
+  const [bankName, setBankName] = useState(data.bankName || "");
+  const [bankAccount, setBankAccount] = useState(data.bankAccount || "");
+  const [accountName, setAccountName] = useState(data.accountName || "");
+
   const [loading, setLoading] = useState(false);
-  const [selectedMethod, setSelectedMethod] = useState<PaymentMethod>("mpesa");
-  const [tillNumber, setTillNumber] = useState("");
+  const [err, setErr] = useState<string | null>(null);
 
-  const handleMethodSelect = (method: PaymentMethod) => setSelectedMethod(method);
+  // Pre-warm the API route to avoid first-compile timeout
+  useEffect(() => {
+    prewarmPaymentsAttach();
+  }, []);
 
+  // --- Layout: responsive grid (no vertical text collapse) ---
+  const pagePad = 20;
+  const gap = 10;
+  const numCols = width >= 700 ? 3 : 2;
+  const cardWidth = (width - pagePad * 2 - (numCols - 1) * gap) / numCols;
+
+  // --- Validation ---
+  const isValid = useMemo(() => {
+    switch (payoutType) {
+      case "MPESA_PHONE":
+        return !!mpesaPhoneNumber.trim();
+      case "MPESA_TILL":
+        return !!tillNumber.trim();
+      case "MPESA_PAYBILL":
+        return !!paybillNumber.trim() && !!accountRef.trim();
+      case "BANK":
+        return !!bankName.trim() && !!bankAccount.trim() && !!accountName.trim();
+    }
+  }, [
+    payoutType,
+    mpesaPhoneNumber,
+    tillNumber,
+    paybillNumber,
+    accountRef,
+    bankName,
+    bankAccount,
+    accountName,
+  ]);
+
+  // Helper to format display text for the payout method
+  const formatPayoutDisplay = () => {
+    switch (payoutType) {
+      case "MPESA_PHONE":
+        return `M-PESA Phone: ${maskPhone(mpesaPhoneNumber)}`;
+      case "MPESA_TILL":
+        return `M-PESA Till: ${tillNumber}`;
+      case "MPESA_PAYBILL":
+        return `M-PESA Paybill: ${paybillNumber} (${accountRef})`;
+      case "BANK":
+        return `${bankName}: ${maskAccount(bankAccount)}${accountName ? ` (${accountName})` : ""}`;
+      default:
+        return "";
+    }
+  };
+
+  // --- Actions ---
   const handleContinue = async () => {
+    if (!isValid) {
+      setErr("Please fill the required fields for your chosen payout method.");
+      return;
+    }
+    setErr(null);
     setLoading(true);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    setLoading(false);
-    router.push("/business/onboarding/review");
+
+    try {
+      // 1) persist local fields
+      setData({
+        payoutType,
+        mpesaPhoneNumber: payoutType === "MPESA_PHONE" ? mpesaPhoneNumber.trim() : undefined,
+        tillNumber: payoutType === "MPESA_TILL" ? tillNumber.trim() : undefined,
+        paybillNumber: payoutType === "MPESA_PAYBILL" ? paybillNumber.trim() : undefined,
+        accountRef: payoutType === "MPESA_PAYBILL" ? accountRef.trim() : undefined,
+        bankName: payoutType === "BANK" ? bankName.trim() : undefined,
+        bankAccount: payoutType === "BANK" ? bankAccount.trim() : undefined,
+        accountName: payoutType === "BANK" ? accountName.trim() : undefined,
+      });
+
+      // 2) call backend stub to get a tokenRef (very fast after first compile)
+      const payload =
+        payoutType === "MPESA_PHONE"
+          ? { type: "MPESA_PHONE", msisdn: mpesaPhoneNumber }
+          : payoutType === "MPESA_TILL"
+          ? { type: "MPESA_TILL", tillNumber: tillNumber }
+          : payoutType === "MPESA_PAYBILL"
+          ? { type: "MPESA_PAYBILL", paybillNumber, accountRef }
+          : { type: "BANK", bankName, accountNumber: bankAccount, accountName };
+
+      const token = await attachPayoutMethod(payload, { timeout: 25000 });
+
+      // store token/display in onboarding context for review step
+      setData({
+        payoutToken: token?.tokenRef || token?.token || token?.id,
+        payoutDisplay: token?.display || formatPayoutDisplay(),
+      });
+
+      updateKycSection("payment", true);
+      router.push("/business/onboarding/review");
+    } catch (e: any) {
+      setErr(e?.message || "Network error. Check your connection and try again.");
+      if (__DEV__) {
+        console.log("attachPayoutMethod error:", e);
+        console.log("API baseURL:", api?.defaults?.baseURL);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleBack = () => router.back();
 
-  const isFormValid = () => (selectedMethod === "mpesa" ? tillNumber.trim() !== "" : true);
+  // --- UI helpers ---
+  const methodCard = (opt: OptionDef) => {
+    const selected = payoutType === opt.type;
+    return (
+      <Card
+        key={opt.type}
+        mode={selected ? "elevated" : "outlined"}
+        onPress={() => setPayoutType(opt.type)}
+        style={[
+          styles.methodCard,
+          {
+            width: cardWidth,
+            borderColor: selected ? theme.colors.primary : theme.colors.outline,
+            backgroundColor: selected ? "#F5F9FF" : theme.colors.surface,
+          },
+        ]}
+      >
+        <Card.Content style={styles.methodContent}>
+          <RadioButton
+            value={opt.type}
+            status={selected ? "checked" : "unchecked"}
+            onPress={() => setPayoutType(opt.type)}
+          />
+          <View style={styles.methodTextCol}>
+            <Text
+              variant="titleMedium"
+              style={styles.methodTitle}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+            >
+              {opt.title}
+            </Text>
+            <Text
+              variant="bodySmall"
+              style={styles.methodSubtitle}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+            >
+              {opt.subtitle}
+            </Text>
+          </View>
+        </Card.Content>
+      </Card>
+    );
+  };
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={styles.header}>
-          <View style={[styles.stepIndicator, { backgroundColor: theme.colors.primary }]}>
-            <Text style={[styles.stepNumber, { color: theme.colors.onPrimary }]}>5</Text>
-          </View>
-          <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onBackground }]}>
-            Step 5: Payment Setup
-          </Text>
-        </View>
-
-        {/* Phone Status Bar Mockup */}
-        <View style={[styles.phoneBar, { backgroundColor: theme.colors.primary }]}>
-          <Text style={[styles.timeText, { color: theme.colors.onPrimary }]}>9:41 AM</Text>
-        </View>
-
-        {/* Main Content */}
-        <Surface style={[styles.formContainer, { backgroundColor: theme.colors.surface }]} elevation={1}>
-          <View style={styles.formHeader}>
-            <IconButton
-              icon="arrow-left"
-              size={20}
-              iconColor={theme.colors.primary}
-              onPress={handleBack}
-              style={styles.backIcon}
-            />
-            <View style={styles.menuIcon}>
-              <View style={[styles.menuLine, { backgroundColor: theme.colors.primary }]} />
-              <View style={[styles.menuLine, { backgroundColor: theme.colors.primary }]} />
-              <View style={[styles.menuLine, { backgroundColor: theme.colors.primary }]} />
-            </View>
-            <Text variant="titleLarge" style={[styles.formTitle, { color: theme.colors.primary }]}>
-              Payment Setup
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={{ flex: 1 }}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 0}
+      >
+        <ScrollView
+          contentContainerStyle={[styles.scrollContent, { paddingHorizontal: pagePad }]}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Header */}
+          <View style={styles.header}>
+            <IconButton icon="arrow-left" size={22} iconColor={theme.colors.primary} onPress={handleBack} />
+            <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onBackground }]}>
+              Step 5: Payment Setup
             </Text>
           </View>
 
-          <View style={styles.divider} />
+          <Surface style={[styles.card, { backgroundColor: theme.colors.surface }]} elevation={1}>
+            <Text variant="titleLarge" style={{ fontWeight: "700", color: theme.colors.primary, marginBottom: 8 }}>
+              Choose payout method
+            </Text>
 
-          {/* Instructions */}
-          <Text variant="bodyMedium" style={[styles.instructions, { color: theme.colors.onSurfaceVariant }]}>
-            Choose how customers will pay you:
-          </Text>
-
-          {/* Payment Method Cards */}
-          <View style={styles.methodsContainer}>
-            <Card
-              style={[
-                styles.methodCard,
-                selectedMethod === "mpesa" && styles.selectedCard,
-                { backgroundColor: selectedMethod === "mpesa" ? "#FBC02D" : "#FFFFFF" },
-              ]}
-              onPress={() => handleMethodSelect("mpesa")}
-            >
-              <Card.Content style={styles.methodContent}>
-                <Text variant="titleMedium" style={[styles.methodTitle, { color: theme.colors.primary }]}>
-                  M-Pesa
-                </Text>
-                <Text variant="bodySmall" style={[styles.methodSubtitle, { color: "#F57C00" }]}>
-                  Till/Paybill
-                </Text>
-              </Card.Content>
-            </Card>
-
-            <Card
-              style={[
-                styles.methodCard,
-                selectedMethod === "bank" && styles.selectedCard,
-                { backgroundColor: selectedMethod === "bank" ? "#1559C1" : "#FFFFFF" },
-              ]}
-              onPress={() => handleMethodSelect("bank")}
-            >
-              <Card.Content style={styles.methodContent}>
-                <Text
-                  variant="titleMedium"
-                  style={[
-                    styles.methodTitle,
-                    { color: selectedMethod === "bank" ? theme.colors.onPrimary : theme.colors.primary },
-                  ]}
-                >
-                  Bank/Card
-                </Text>
-                <Text
-                  variant="bodySmall"
-                  style={[styles.methodSubtitle, { color: selectedMethod === "bank" ? "#FBC02D" : "#F57C00" }]}
-                >
-                  Flutterwave
-                </Text>
-              </Card.Content>
-            </Card>
-          </View>
-
-          {/* M-Pesa Till Number Input */}
-          {selectedMethod === "mpesa" && (
-            <View style={styles.inputSection}>
-              <Text variant="titleMedium" style={[styles.inputLabel, { color: theme.colors.primary }]}>
-                M-Pesa Till Number
-              </Text>
-              <TextInput
-                mode="outlined"
-                placeholder="123456"
-                value={tillNumber}
-                onChangeText={setTillNumber}
-                style={styles.input}
-                keyboardType="numeric"
-                outlineColor={theme.colors.outline}
-                activeOutlineColor={theme.colors.primary}
-              />
+            {/* Responsive grid of options */}
+            <View style={[styles.grid, { gap }]}>
+              {OPTIONS.map(methodCard)}
             </View>
-          )}
 
-          {/* Warning Note */}
-          <Card style={[styles.warningCard, { backgroundColor: "#FBC02D" }]}>
-            <Card.Content>
-              <Text variant="bodyMedium" style={[styles.warningText, { color: theme.colors.primary }]}>
-                ⚠️ Even with M-Pesa, you need a Flutterwave subaccount for system integration
+            <View style={styles.separator} />
+
+            {/* Dynamic fields */}
+            {payoutType === "MPESA_PHONE" && (
+              <View style={styles.inputSection}>
+                <Text variant="titleSmall" style={styles.inputLabel}>M-PESA Phone</Text>
+                <TextInput
+                  mode="outlined"
+                  keyboardType="phone-pad"
+                  value={mpesaPhoneNumber}
+                  onChangeText={setMpesaPhoneNumber}
+                  placeholder="e.g. 0712 345 678"
+                  style={styles.input}
+                />
+              </View>
+            )}
+
+            {payoutType === "MPESA_TILL" && (
+              <View style={styles.inputSection}>
+                <Text variant="titleSmall" style={styles.inputLabel}>Till Number</Text>
+                <TextInput
+                  mode="outlined"
+                  keyboardType="number-pad"
+                  value={tillNumber}
+                  onChangeText={setTillNumber}
+                  placeholder="e.g. 123456"
+                  style={styles.input}
+                />
+              </View>
+            )}
+
+            {payoutType === "MPESA_PAYBILL" && (
+              <>
+                <View style={styles.inputSection}>
+                  <Text variant="titleSmall" style={styles.inputLabel}>Paybill Number</Text>
+                  <TextInput
+                    mode="outlined"
+                    keyboardType="number-pad"
+                    value={paybillNumber}
+                    onChangeText={setPaybillNumber}
+                    placeholder="e.g. 654321"
+                    style={styles.input}
+                  />
+                </View>
+                <View style={styles.inputSection}>
+                  <Text variant="titleSmall" style={styles.inputLabel}>Account Reference</Text>
+                  <TextInput
+                    mode="outlined"
+                    value={accountRef}
+                    onChangeText={setAccountRef}
+                    placeholder="e.g. SLOTLY-123"
+                    style={styles.input}
+                  />
+                </View>
+              </>
+            )}
+
+            {payoutType === "BANK" && (
+              <>
+                <View style={styles.inputSection}>
+                  <Text variant="titleSmall" style={styles.inputLabel}>Bank Name</Text>
+                  <TextInput
+                    mode="outlined"
+                    value={bankName}
+                    onChangeText={setBankName}
+                    placeholder="e.g. KCB"
+                    style={styles.input}
+                  />
+                </View>
+                <View style={styles.inputSection}>
+                  <Text variant="titleSmall" style={styles.inputLabel}>Account Number</Text>
+                  <TextInput
+                    mode="outlined"
+                    keyboardType="number-pad"
+                    value={bankAccount}
+                    onChangeText={setBankAccount}
+                    placeholder="e.g. 0123456789"
+                    style={styles.input}
+                  />
+                </View>
+                <View style={styles.inputSection}>
+                  <Text variant="titleSmall" style={styles.inputLabel}>Account Name</Text>
+                  <TextInput
+                    mode="outlined"
+                    value={accountName}
+                    onChangeText={setAccountName}
+                    placeholder="Business LTD"
+                    style={styles.input}
+                  />
+                </View>
+              </>
+            )}
+
+            {err ? (
+              <Text style={[styles.errText, { color: theme.colors.error }]}>
+                {err}
               </Text>
-            </Card.Content>
-          </Card>
+            ) : null}
 
-          {/* Continue Button */}
-          <Button
-            mode="contained"
-            onPress={handleContinue}
-            loading={loading}
-            disabled={loading || !isFormValid()}
-            style={[styles.continueButton, { backgroundColor: isFormValid() ? "#FBC02D" : theme.colors.surfaceDisabled }]}
-            contentStyle={styles.buttonContent}
-            labelStyle={[styles.buttonLabel, { color: theme.colors.primary }]}
-          >
-            Continue
-          </Button>
-        </Surface>
-      </ScrollView>
+            <Button
+              mode="contained"
+              onPress={handleContinue}
+              loading={loading}
+              disabled={loading || !isValid}
+              style={[styles.continueButton, { backgroundColor: theme.colors.primary }]}
+              contentStyle={styles.buttonContent}
+              labelStyle={[styles.buttonLabel, { color: theme.colors.onPrimary }]}
+            >
+              Continue
+            </Button>
+          </Surface>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
+/* ---------- helpers ---------- */
+
+function maskPhone(p: string) {
+  const s = (p || "").replace(/\s+/g, "");
+  if (!s) return "";
+  // show last 3 digits only
+  return `+2547••• ••${s.slice(-3)}`;
+}
+
+function maskAccount(a: string) {
+  const s = (a || "").replace(/\s+/g, "");
+  if (!s) return "";
+  return `•••• ${s.slice(-4)}`;
+}
+
+/* ---------- styles ---------- */
+
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  scrollContent: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 20 },
-  header: { alignItems: "center", marginBottom: 20 },
-  stepIndicator: { width: 40, height: 40, borderRadius: 20, justifyContent: "center", alignItems: "center", marginBottom: 12 },
-  stepNumber: { fontSize: 18, fontWeight: "bold" },
-  title: { fontWeight: "bold", textAlign: "center" },
-  phoneBar: { height: 44, borderRadius: 22, justifyContent: "center", alignItems: "center", marginBottom: 20 },
-  timeText: { fontSize: 16, fontWeight: "600" },
-  formContainer: { borderRadius: 20, padding: 24, marginBottom: 20 },
-  formHeader: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
-  backIcon: { marginLeft: -8, marginRight: 4 },
-  menuIcon: { marginRight: 12 },
-  menuLine: { width: 20, height: 3, marginBottom: 3, borderRadius: 1.5 },
-  formTitle: { fontWeight: "bold" },
-  divider: { height: 2, backgroundColor: "#1559C1", marginBottom: 24 },
-  instructions: { marginBottom: 20, lineHeight: 20 },
-  methodsContainer: { flexDirection: "row", gap: 16, marginBottom: 24 },
-  methodCard: { flex: 1, borderWidth: 2, borderColor: "transparent" },
-  selectedCard: { borderColor: "#1559C1" },
-  methodContent: { alignItems: "center", paddingVertical: 20 },
-  methodTitle: { fontWeight: "bold", marginBottom: 4 },
-  methodSubtitle: { fontWeight: "600" },
-  inputSection: { marginBottom: 24 },
-  inputLabel: { fontWeight: "600", marginBottom: 8 },
+  scrollContent: { flexGrow: 1, paddingVertical: 20 },
+  header: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
+  title: { fontWeight: "700" },
+
+  card: { borderRadius: 16, padding: 16, gap: 10 },
+
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "stretch",
+    justifyContent: "space-between",
+  },
+  methodCard: { borderWidth: 2, marginBottom: 10, borderRadius: 12 },
+  methodContent: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 12 },
+  methodTextCol: { flex: 1, minWidth: 0 }, // minWidth=0 so ellipsis works
+  methodTitle: { fontWeight: "700" },
+  methodSubtitle: { fontWeight: "500", opacity: 0.8 },
+
+  separator: { height: 1, backgroundColor: "#eee", marginVertical: 8 },
+
+  inputSection: { marginBottom: 12 },
+  inputLabel: { fontWeight: "600", marginBottom: 6 },
   input: { backgroundColor: "transparent" },
-  warningCard: { marginBottom: 24 },
-  warningText: { fontWeight: "600", textAlign: "center", lineHeight: 20 },
-  continueButton: { borderRadius: 25 },
+
+  errText: { marginTop: 6 },
+
+  continueButton: { borderRadius: 25, marginTop: 6 },
   buttonContent: { paddingVertical: 8 },
   buttonLabel: { fontSize: 16, fontWeight: "600" },
 });

@@ -1,78 +1,109 @@
-"use client"
+"use client";
 
-import { useState } from "react"
-import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform } from "react-native"
-import { Text, TextInput, Button, useTheme, Surface, IconButton } from "react-native-paper"
-import { useRouter } from "expo-router"
-import { SafeAreaView } from "react-native-safe-area-context"
-// NEW: import your API call (adjust path as needed)
-import { login } from '../../lib/api/modules/auth' // <-- adjust path to where you exported it
+import { useState } from "react";
+import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
+import { Text, TextInput, Button, useTheme, Surface, IconButton } from "react-native-paper";
+import { useRouter } from "expo-router";
+import { SafeAreaView } from "react-native-safe-area-context";
+
+// API + Session
+import { login, meHeartbeat } from "../../lib/api/modules/auth";
+import { useSession } from "../../context/SessionContext";
+
+// Flip this to true in prod if you want password strictly required
+const REQUIRE_PASSWORD = process.env.EXPO_PUBLIC_REQUIRE_PASSWORD === "true";
 
 export default function LoginScreen() {
-  const theme = useTheme()
-  const router = useRouter()
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [showPassword, setShowPassword] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [errors, setErrors] = useState<{ email?: string; password?: string }>({})
-  // NEW: server-side error message
-  const [serverError, setServerError] = useState<string | null>(null)
+  const theme = useTheme();
+  const router = useRouter();
+  const { setAuth } = useSession();
+
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState<{ email?: string; phone?: string; password?: string }>({});
+  const [serverError, setServerError] = useState<string | null>(null);
 
   const validateForm = () => {
-    const newErrors: { email?: string; password?: string } = {}
+    const newErrors: { email?: string; phone?: string; password?: string } = {};
 
-    if (!email.trim()) newErrors.email = "Email is required"
-    else if (!/\S+@\S+\.\S+/.test(email)) newErrors.email = "Please enter a valid email"
+    // Require at least one identifier: email OR phone
+    if (!email.trim() && !phone.trim()) {
+      newErrors.email = "Email or phone is required";
+      newErrors.phone = "Email or phone is required";
+    }
 
-    if (!password.trim()) newErrors.password = "Password is required"
-    else if (password.length < 6) newErrors.password = "Password must be at least 6 characters"
+    if (email.trim() && !/\S+@\S+\.\S+/.test(email.trim())) {
+      newErrors.email = "Please enter a valid email";
+    }
 
-    setErrors(newErrors)
-    return Object.keys(newErrors).length === 0
-  }
+    if (phone.trim() && !/^\+?[\d\s\-\(\)]{7,}$/.test(phone.trim())) {
+      newErrors.phone = "Please enter a valid phone number";
+    }
+
+    if (REQUIRE_PASSWORD) {
+      if (!password.trim()) newErrors.password = "Password is required";
+      else if (password.length < 6) newErrors.password = "Password must be at least 6 characters";
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
 
   const handleSignIn = async () => {
-    if (!validateForm()) return
+    if (!validateForm()) return;
 
-    setLoading(true)
-    setServerError(null)
+    setLoading(true);
+    setServerError(null);
+
     try {
-      // NEW: real API call; your client fn already persists tokens
-      const res = await login({ email: email.trim(), password })
+      const payload = {
+        email: email.trim() || undefined,
+        phone: phone.trim() || undefined,
+        password: password || "", // Always include password, even if empty
+      };
+
+      const res = await login(payload);
+
       if (res?.error) {
-        setServerError(res.error || "Invalid credentials. Please try again.")
-        return
+        setServerError(res.error || "Invalid credentials. Please try again.");
+        return;
       }
 
-      // Optional: route by role (if API returns user.role)
-      const role = res?.user?.role
+      // Ensure SessionContext is updated (even though the module saved tokens)
+      const user = res?.user ?? (await meHeartbeat());
+      if (res?.token) {
+        setAuth(res.token, {
+          id: user?.id,
+          email: user?.email,
+          role: user?.role,
+        });
+      }
+
+      const role = String(user?.role || "").toUpperCase();
       if (role === "BUSINESS_OWNER") {
-        router.replace("/business/dashboard")
+        router.replace("/business/dashboard");
       } else {
-        router.replace("/(tabs)") // or wherever your customer home is
+        router.replace("/(tabs)");
       }
     } catch (e: any) {
-      console.error("Login error:", e)
-      setServerError(
-        e?.response?.data?.error ||
-        e?.message ||
-        "Unable to sign in. Please try again."
-      )
+      console.error("Login error:", e);
+      setServerError(e?.response?.data?.error || e?.message || "Unable to sign in. Please try again.");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
-  const handleForgotPassword = () => router.push("../auth/forgot-password")
-  const handleCreateAccount = () => router.push("../auth/signup")
-  const handleBack = () => router.back()
+  const handleForgotPassword = () => router.push("../auth/forgot-password");
+  const handleCreateAccount = () => router.push("../auth/signup");
+  const handleBack = () => router.back();
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <KeyboardAvoidingView style={styles.keyboardView} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          {/* Header */}
           <View style={styles.header}>
             <IconButton
               icon="arrow-left"
@@ -86,7 +117,6 @@ export default function LoginScreen() {
             </Text>
           </View>
 
-          {/* Form */}
           <Surface style={[styles.formContainer, { backgroundColor: theme.colors.surface }]} elevation={2}>
             <View style={styles.form}>
               <TextInput
@@ -94,9 +124,9 @@ export default function LoginScreen() {
                 label="Email Address"
                 value={email}
                 onChangeText={(text) => {
-                  setEmail(text)
-                  if (errors.email) setErrors((prev) => ({ ...prev, email: undefined }))
-                  if (serverError) setServerError(null) // NEW
+                  setEmail(text);
+                  if (errors.email) setErrors((p) => ({ ...p, email: undefined }));
+                  if (serverError) setServerError(null);
                 }}
                 keyboardType="email-address"
                 autoCapitalize="none"
@@ -113,24 +143,40 @@ export default function LoginScreen() {
 
               <TextInput
                 mode="outlined"
+                label="Phone Number"
+                value={phone}
+                onChangeText={(text) => {
+                  setPhone(text);
+                  if (errors.phone) setErrors((p) => ({ ...p, phone: undefined }));
+                  if (serverError) setServerError(null);
+                }}
+                keyboardType="phone-pad"
+                autoComplete="tel"
+                error={!!errors.phone}
+                style={styles.input}
+                left={<TextInput.Icon icon="phone" />}
+              />
+              {errors.phone && (
+                <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
+                  {errors.phone}
+                </Text>
+              )}
+
+              <TextInput
+                mode="outlined"
                 label="Password"
                 value={password}
                 onChangeText={(text) => {
-                  setPassword(text)
-                  if (errors.password) setErrors((prev) => ({ ...prev, password: undefined }))
-                  if (serverError) setServerError(null) // NEW
+                  setPassword(text);
+                  if (errors.password) setErrors((p) => ({ ...p, password: undefined }));
+                  if (serverError) setServerError(null);
                 }}
                 secureTextEntry={!showPassword}
                 autoComplete="password"
                 error={!!errors.password}
                 style={styles.input}
                 left={<TextInput.Icon icon="lock" />}
-                right={
-                  <TextInput.Icon
-                    icon={showPassword ? "eye-off" : "eye"}
-                    onPress={() => setShowPassword(!showPassword)}
-                  />
-                }
+                right={<TextInput.Icon icon={showPassword ? "eye-off" : "eye"} onPress={() => setShowPassword(!showPassword)} />}
               />
               {errors.password && (
                 <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
@@ -138,19 +184,11 @@ export default function LoginScreen() {
                 </Text>
               )}
 
-              {/* NEW: server error */}
               {serverError ? (
-                <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
-                  {serverError}
-                </Text>
+                <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>{serverError}</Text>
               ) : null}
 
-              <Button
-                mode="text"
-                onPress={handleForgotPassword}
-                style={styles.forgotButton}
-                labelStyle={[styles.forgotButtonText, { color: theme.colors.primary }]}
-              >
+              <Button mode="text" onPress={handleForgotPassword} style={styles.forgotButton} labelStyle={[styles.forgotButtonText, { color: theme.colors.primary }]}>
                 Forgot Password?
               </Button>
 
@@ -168,7 +206,6 @@ export default function LoginScreen() {
             </View>
           </Surface>
 
-          {/* Footer */}
           <View style={styles.footer}>
             <Text variant="bodyMedium" style={[styles.footerText, { color: theme.colors.onSurfaceVariant }]}>
               Don't have an account?{" "}
@@ -180,8 +217,9 @@ export default function LoginScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
-  )
+  );
 }
+
 
 
 
@@ -252,4 +290,4 @@ const styles = StyleSheet.create({
   linkText: {
     fontWeight: "600",
   },
-})
+});

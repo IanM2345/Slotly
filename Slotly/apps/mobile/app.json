@@ -16,7 +16,9 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "We use the camera to capture your selfie and ID for business verification."
+        "NSCameraUsageDescription": "We use the camera to capture your ID and selfie for verification.",
+        "NSPhotoLibraryUsageDescription": "We access your photo library to let you pick verification images.",
+        "NSPhotoLibraryAddUsageDescription": "We may save captured images to your library."
       }
     },
     "android": {
@@ -24,8 +26,11 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
+       "softwareKeyboardLayoutMode": "resize",
       "edgeToEdgeEnabled": true,
-      "permissions": ["CAMERA"]
+      "permissions": ["READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO","CAMERA"]
+        
     },
     "web": {
       "bundler": "metro",

@@ -5,13 +5,13 @@ import { View, ScrollView, StyleSheet } from "react-native";
 import { Text, Surface, TouchableRipple, ActivityIndicator } from "react-native-paper";
 import { useRouter } from "expo-router";
 import { useTier } from "../../../context/TierContext";
-import { LockedFeature } from "../../../components/LockedFeature"; // keep your original path
-import { getStaff, getBookings } from "../../../lib/api/manager";
+import { LockedFeature } from "../../../components/LockedFeature";
+import { listStaff, listBookings } from "../../../lib/api/modules/manager";
 
 interface DashboardCard {
   title: string;
   subtitle: string;
-  route: string;        // absolute path to avoid relative resolution issues on web
+  route: string;
   locked?: boolean;
 }
 
@@ -31,20 +31,38 @@ export default function DashboardIndex() {
 
   const loadDashboardStats = async () => {
     try {
-      const [staffData, bookingsData] = await Promise.all([
-        getStaff("business-1"),
-        getBookings("business-1"),
+      const [staffResp, bookingsData] = await Promise.all([
+        listStaff(),            // returns { approvedStaff, pendingEnrollments }
+        listBookings({}),       // returns bookings array
       ]);
 
-      const todayISO = new Date().toISOString().split("T")[0];
-      const todayBookings = bookingsData.filter((b) => b.date === todayISO).length;
+      const staffCount = Array.isArray(staffResp?.approvedStaff)
+        ? staffResp.approvedStaff.length
+        : 0;
 
-      const monthlyRevenue = bookingsData
-        .filter((b) => b.status === "COMPLETED")
-        .reduce((sum, b) => sum + b.price, 0);
+      const todayISO = new Date().toISOString().split("T")[0];
+      interface Booking {
+        date: string;
+        status: string;
+        price: number;
+        // add other fields if needed
+      }
+
+      const todayBookings: number = (bookingsData as Booking[]).filter((b: Booking) => b.date === todayISO).length;
+
+      interface Booking {
+        date: string;
+        status: string;
+        price: number;
+        // add other fields if needed
+      }
+
+      const monthlyRevenue = (bookingsData as Booking[])
+        .filter((b: Booking) => b.status === "COMPLETED")
+        .reduce((sum: number, b: Booking) => sum + b.price, 0);
 
       setStats({
-        staffCount: staffData.length,
+        staffCount,
         todayBookings,
         monthlyRevenue: `KES ${monthlyRevenue.toLocaleString()}`,
       });
@@ -55,17 +73,16 @@ export default function DashboardIndex() {
     }
   };
 
-  // Use ABSOLUTE routes that match your folder: /business/dashboard/*
   const cards: DashboardCard[] = [
     {
       title: "Staff",
       subtitle: loading ? "Loading..." : `${stats.staffCount} team members`,
-      route: "/business/dashboard/staff",
+      route: "/business/dashboard/staff", // ✅ exists (staff/index.tsx)
     },
     {
       title: "Bookings",
       subtitle: loading ? "Loading..." : `${stats.todayBookings} today`,
-      route: "/business/dashboard/bookings",
+      route: "/business/dashboard/bookings/manage", // ✅ matches bookings/manage.tsx
     },
     {
       title: "Analytics",
@@ -77,7 +94,7 @@ export default function DashboardIndex() {
 
   const handleCardPress = (card: DashboardCard) => {
     if (card.locked) return; // handled by overlay
-    router.push(card.route as any); // absolute path avoids "/staff" issue on web
+    router.push(card.route as any);
   };
 
   const handleUpgrade = () => {
@@ -106,7 +123,7 @@ export default function DashboardIndex() {
           <View key={card.title} style={styles.cardWrapper}>
             {card.locked ? (
               <LockedFeature
-                title={card.title} // avoid "Analytics Analytics"
+                title={card.title}
                 description="Analytics are available on Pro and above"
                 onPressUpgrade={handleUpgrade}
               >

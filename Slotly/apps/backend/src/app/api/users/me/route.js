@@ -1,46 +1,81 @@
-import { NextResponse } from 'next/server';
-import { PrismaClient } from '@/generated/prisma';
-import { verifyToken } from '@/middleware/auth';
-import bcrypt from 'bcrypt';
+import { NextResponse } from "next/server";
+import { PrismaClient } from "@/generated/prisma";
+import { requireAuth, verifyToken } from "../../../../lib/token";
 import * as Sentry from '@sentry/nextjs';
+import bcrypt from 'bcryptjs';
 
-const prisma = new PrismaClient();
+const prisma = globalThis._prisma ?? new PrismaClient();
+if (process.env.NODE_ENV !== "production") globalThis._prisma = prisma;
 
-export async function GET(request) {
+export const dynamic = "force-dynamic";
+
+export async function GET(req) {
   try {
-    const authHeader = request.headers.get('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    // Try cookie/session first
+    let user = null;
+    try { 
+      user = await requireAuth(req); 
+    } catch {
+      // Ignore cookie auth failures, try Bearer token
     }
 
-    const token = authHeader.split(' ')[1];
-    const { valid, decoded } = await verifyToken(token);
-
-    if (!valid || !decoded || decoded.role !== 'CUSTOMER') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    // Fallback: Bearer token header (mobile clients)
+    if (!user) {
+      const authHeader = req.headers.get("authorization");
+      if (authHeader?.startsWith("Bearer ")) {
+        const token = authHeader.split(" ")[1];
+        const { valid, decoded } = await verifyToken(token);
+        if (valid && decoded?.id) {
+          user = await prisma.user.findUnique({
+            where: { id: decoded.id },
+            select: { id: true, email: true, phone: true, role: true },
+          });
+        }
+      }
     }
+    
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.id },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        phone: true,
-        role: true,
-        createdAt: true,
-      },
+    // One-business-per-owner assumption
+    const business = await prisma.business.findFirst({
+      where: { ownerId: user.id },
+      select: { id: true, name: true, plan: true, createdAt: true },
     });
 
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    let verificationStatus = null;
+    let latestVerification = null;
+    if (business?.id) {
+      const latest = await prisma.businessVerification.findFirst({
+        where: { businessId: business.id },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, status: true, createdAt: true },
+      });
+      verificationStatus = latest?.status ?? "PENDING"; // default
+      latestVerification = latest
+        ? { id: latest.id, status: latest.status, createdAt: latest.createdAt }
+        : null;
     }
 
-    return NextResponse.json(user, { status: 200 });
-  } catch (error) {
-    console.error('Error fetching user:', error);
-    Sentry.captureException(error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json(
+      {
+        id: user.id,
+        email: user.email || null,
+        phone: user.phone || null,
+        role: user.role,
+        business: business
+          ? {
+              ...business,
+              verificationStatus: String(verificationStatus || "PENDING").toLowerCase(),
+              hasVerification: !!latestVerification,
+              latestVerification, // { id, status, createdAt } | null
+            }
+          : null,
+      },
+      { status: 200 }
+    );
+  } catch (err) {
+    console.error("GET /api/users/me error:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
 

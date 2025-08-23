@@ -1,34 +1,210 @@
+"use client";
+
 import { useState } from "react";
-import { View, ScrollView, StyleSheet } from "react-native";
-import { Text, Button, Surface, useTheme, IconButton } from "react-native-paper";
-import { useRouter } from "expo-router";
+import { View, StyleSheet, ScrollView, Image, Alert } from "react-native";
+import {
+  Text,
+  Button,
+  Surface,
+  useTheme,
+  IconButton,
+  ProgressBar,
+  Card,
+} from "react-native-paper";
+import * as ImagePicker from "expo-image-picker";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useRouter } from "expo-router";
+import { useOnboarding } from "../../../context/OnboardingContext";
+import { uploadToCloudinaryAdvanced } from "../../../lib/upload/cloudinary";
 
 type Step = "selfie" | "idFront" | "idBack";
 
+interface CapturedPhoto {
+  uri: string;
+  uploaded: boolean;
+  uploadProgress: number;
+}
+
 export default function LiveCapture() {
-  const router = useRouter();
   const theme = useTheme();
+  const router = useRouter();
+  const { data, addAttachment } = useOnboarding();
 
-  const [loading, setLoading] = useState(false);
+  // Selfie required only for FORMAL verification (tier >= 3 in your flow)
+  const mustSelfie = (data.businessVerificationType || "INFORMAL") === "FORMAL";
+
   const [currentStep, setCurrentStep] = useState<Step>("selfie");
-  const [capturedPhotos, setCapturedPhotos] = useState<Record<Step, boolean>>({
-    selfie: false,
-    idFront: false,
-    idBack: false,
-  });
+  const [loading, setLoading] = useState<Step | null>(null);
+  const [finalLoading, setFinalLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleCapture = () => {
-    setCapturedPhotos((prev) => ({
-      ...prev,
-      [currentStep]: true,
-    }));
+  // Initialize from existing attachments in context
+  const getInitialPhoto = (step: Step): CapturedPhoto | null => {
+    const attachments = data.attachments || [];
+    let attachmentType: string;
+    
+    switch (step) {
+      case "selfie":
+        attachmentType = "SELFIE";
+        break;
+      case "idFront":
+        attachmentType = "ID_FRONT";
+        break;
+      case "idBack":
+        attachmentType = "ID_BACK";
+        break;
+    }
+    
+    const attachment = attachments.find(a => a.type === attachmentType);
+    return attachment 
+      ? { uri: attachment.url, uploaded: true, uploadProgress: 100 }
+      : null;
   };
 
-  const handleRetake = () => {
+  const [capturedPhotos, setCapturedPhotos] = useState<Record<Step, CapturedPhoto | null>>({
+    selfie: getInitialPhoto("selfie"),
+    idFront: getInitialPhoto("idFront"), 
+    idBack: getInitialPhoto("idBack"),
+  });
+
+  const stepConfig: Record<
+    Step,
+    { title: string; instructions: string; icon: string; bgColor: string }
+  > = {
+    selfie: {
+      title: "Capture Selfie",
+      instructions: "Position your face in the frame and look directly at the camera.",
+      icon: "🤳",
+      bgColor: "#E3F2FD",
+    },
+    idFront: {
+      title: "Capture ID Front",
+      instructions: "Position your ID front clearly in the frame.",
+      icon: "🆔",
+      bgColor: "#F3E5F5",
+    },
+    idBack: {
+      title: "Capture ID Back",
+      instructions: "Position your ID back clearly in the frame.",
+      icon: "🔄",
+      bgColor: "#E8F5E9",
+    },
+  };
+
+  // Helper to add attachment to context after successful upload
+  const afterUpload = (step: Step, url: string) => {
+    if (step === "selfie") {
+      addAttachment({ type: "SELFIE", url, step: 4, uploadedAt: Date.now() });
+    }
+    if (step === "idFront") {
+      addAttachment({ type: "ID_FRONT", url, step: 4, uploadedAt: Date.now() });
+    }
+    if (step === "idBack") {
+      addAttachment({ type: "ID_BACK", url, step: 4, uploadedAt: Date.now() });
+    }
+  };
+
+  const requestCameraPermission = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert(
+        "Permission Required",
+        "Camera permission is needed to capture photos for verification.",
+        [{ text: "OK" }]
+      );
+      return false;
+    }
+    return true;
+  };
+
+  const requestLibraryPermission = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert(
+        "Permission Required",
+        "Photo library permission is needed to pick photos for verification.",
+        [{ text: "OK" }]
+      );
+      return false;
+    }
+    return true;
+  };
+
+  // source: "camera" | "library"
+  const capturePhoto = async (step: Step, source: "camera" | "library" = "camera") => {
+    setError(null);
+
+    const allowed =
+      source === "camera" ? await requestCameraPermission() : await requestLibraryPermission();
+    if (!allowed) return;
+
+    try {
+      const pickerResult =
+        source === "camera"
+          ? await ImagePicker.launchCameraAsync({
+              allowsEditing: true,
+              quality: 0.85,
+              aspect: step === "selfie" ? [1, 1] : [4, 3],
+            })
+          : await ImagePicker.launchImageLibraryAsync({
+              allowsEditing: true,
+              quality: 0.85,
+              aspect: step === "selfie" ? [1, 1] : [4, 3],
+            });
+
+      if (pickerResult.canceled || !pickerResult.assets?.[0]?.uri) return;
+
+      const uri = pickerResult.assets[0].uri;
+
+      // Set initial captured photo
+      setCapturedPhotos((prev) => ({
+        ...prev,
+        [step]: { uri, uploaded: false, uploadProgress: 0 },
+      }));
+
+      // Start upload
+      setLoading(step);
+
+      const uploadResult = await uploadToCloudinaryAdvanced(uri, {
+        folder: "slotly/kyc",
+        tags: ["kyc", step],
+        onProgress: (progress) => {
+          setCapturedPhotos((prev) => ({
+            ...prev,
+            [step]: prev[step]
+              ? { ...prev[step]!, uploadProgress: progress }
+              : { uri, uploaded: false, uploadProgress: progress },
+          }));
+        },
+      });
+
+      const url = uploadResult.secure_url;
+
+      // Update with uploaded URL
+      setCapturedPhotos((prev) => ({
+        ...prev,
+        [step]: { uri: url, uploaded: true, uploadProgress: 100 },
+      }));
+
+      // Add to context attachments
+      afterUpload(step, url);
+
+    } catch (err: any) {
+      setError(err?.message || "Failed to capture or upload photo");
+      // Remove failed photo
+      setCapturedPhotos((prev) => ({
+        ...prev,
+        [step]: null,
+      }));
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const retakePhoto = (step: Step) => {
     setCapturedPhotos((prev) => ({
       ...prev,
-      [currentStep]: false,
+      [step]: null,
     }));
   };
 
@@ -38,153 +214,268 @@ export default function LiveCapture() {
     else handleContinue();
   };
 
-  const handleContinue = async () => {
-    setLoading(true);
-    await new Promise((r) => setTimeout(r, 1000)); // stub
-    setLoading(false);
-    // This is a sibling route inside /business/onboarding
-    router.push("../payment-setup");
-  };
-
   const handleBack = () => {
     if (currentStep === "idFront") setCurrentStep("selfie");
     else if (currentStep === "idBack") setCurrentStep("idFront");
     else router.back();
   };
 
-  const getStepTitle = () => {
-    switch (currentStep) {
-      case "selfie":
-        return "Capture Selfie";
-      case "idFront":
-        return "Capture ID Front";
-      case "idBack":
-        return "Capture ID Back";
+  const handleContinue = async () => {
+    const { selfie, idFront } = capturedPhotos;
+
+    if (!idFront?.uploaded) {
+      setError("Please capture the front of your ID before continuing");
+      return;
+    }
+    if (mustSelfie && !selfie?.uploaded) {
+      setError("Selfie with ID is required for your plan");
+      return;
+    }
+
+    setFinalLoading(true);
+    try {
+      // Navigation only - attachments are already stored in context via addAttachment
+      router.push("/business/onboarding/payment-setup");
+    } catch (err: any) {
+      setError(err?.message || "Failed to proceed");
+    } finally {
+      setFinalLoading(false);
     }
   };
 
-  const getInstructions = () => {
+  const canProceedToNext = () => {
+    const currentPhoto = capturedPhotos[currentStep];
+    if (currentStep === "selfie" && !mustSelfie) return true; // selfie optional
+    return !!currentPhoto?.uploaded;
+  };
+
+  const canFinish = () => {
+    const hasId = !!capturedPhotos.idFront?.uploaded;
+    const hasSelfie = !!capturedPhotos.selfie?.uploaded;
+    return mustSelfie ? hasId && hasSelfie : hasId;
+  };
+
+  const getNextButtonText = () => {
     switch (currentStep) {
       case "selfie":
-        return "Position your face in the circle";
+        return "Next: Capture ID Front";
       case "idFront":
-        return "Position your ID front in the frame";
+        return "Next: Capture ID Back";
       case "idBack":
-        return "Position your ID back in the frame";
+        return "Continue to Payment Setup";
     }
   };
 
-  const getNextText = () =>
-    currentStep === "idBack"
-      ? "Continue to Payment"
-      : `Next: ${currentStep === "selfie" ? "Capture ID front & back" : "Capture ID back"}`;
+  const getProgressText = () => {
+    const requiredTotal = mustSelfie ? 2 : 1; // ID front always required; selfie only for FORMAL
+    const requiredCompleted =
+      (capturedPhotos.idFront?.uploaded ? 1 : 0) +
+      (mustSelfie && capturedPhotos.selfie?.uploaded ? 1 : 0);
+    const optionalCompleted =
+      (capturedPhotos.idBack?.uploaded ? 1 : 0) +
+      (!mustSelfie && capturedPhotos.selfie?.uploaded ? 1 : 0);
+    const optionalTotal = mustSelfie ? 1 : 2; // only ID back optional for FORMAL; selfie+back optional for INFORMAL
+    return `Required ${requiredCompleted}/${requiredTotal} • Optional ${optionalCompleted}/${optionalTotal}`;
+  };
 
-  const isCurrentStepCaptured = capturedPhotos[currentStep];
+  const currentConfig = stepConfig[currentStep];
+  const currentPhoto = capturedPhotos[currentStep];
+  const isCapturing = loading === currentStep;
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <View style={styles.header}>
-          <View style={[styles.stepIndicator, { backgroundColor: theme.colors.primary }]}>
-            <Text style={[styles.stepNumber, { color: theme.colors.onPrimary }]}>4</Text>
+          <IconButton
+            icon="arrow-left"
+            size={22}
+            iconColor={theme.colors.primary}
+            onPress={handleBack}
+          />
+          <View style={styles.headerContent}>
+            <View style={[styles.stepIndicator, { backgroundColor: theme.colors.primary }]}>
+              <Text style={[styles.stepNumber, { color: theme.colors.onPrimary }]}>4</Text>
+            </View>
+            <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onBackground }]}>
+              Step 4: Live Document Capture
+            </Text>
           </View>
-          <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onBackground }]}>
-            Step 4: Live Document Capture
-          </Text>
         </View>
 
-        {/* Phone Status Bar Mockup */}
-        <View style={[styles.phoneBar, { backgroundColor: theme.colors.primary }]}>
-          <Text style={[styles.timeText, { color: theme.colors.onPrimary }]}>9:41 AM</Text>
+        {/* Progress Indicator */}
+        <View style={styles.progressContainer}>
+          <View style={styles.stepDots}>
+            {(Object.keys(stepConfig) as Step[]).map((step, index) => {
+              const cfg = stepConfig[step];
+              const done = !!capturedPhotos[step]?.uploaded;
+              const active = currentStep === step;
+              return (
+                <View key={step} style={styles.stepDotContainer}>
+                  <View
+                    style={[
+                      styles.stepDot,
+                      { backgroundColor: done ? "#4CAF50" : active ? theme.colors.primary : theme.colors.outline },
+                    ]}
+                  >
+                    <Text style={styles.stepDotIcon}>{done ? "✓" : cfg.icon}</Text>
+                  </View>
+                  <Text
+                    variant="bodySmall"
+                    style={[
+                      styles.stepLabel,
+                      { color: active ? theme.colors.primary : theme.colors.onSurfaceVariant },
+                    ]}
+                  >
+                    {cfg.title.split(" ")[1]}
+                  </Text>
+                  {index < (Object.keys(stepConfig).length - 1) && (
+                    <View style={[styles.stepConnector, { backgroundColor: theme.colors.outline }]} />
+                  )}
+                </View>
+              );
+            })}
+          </View>
+          <Text variant="bodySmall" style={[styles.progressText, { color: theme.colors.onSurfaceVariant }]}>
+            {getProgressText()}
+          </Text>
         </View>
 
         {/* Main Content */}
-        <Surface style={[styles.formContainer, { backgroundColor: theme.colors.surface }]} elevation={1}>
-          <View style={styles.formHeader}>
-            <IconButton
-              icon="arrow-left"
-              size={20}
-              iconColor={theme.colors.primary}
-              onPress={handleBack}
-              style={styles.backIcon}
-            />
-            <View style={styles.menuIcon}>
-              <View style={[styles.menuLine, { backgroundColor: theme.colors.primary }]} />
-              <View style={[styles.menuLine, { backgroundColor: theme.colors.primary }]} />
-              <View style={[styles.menuLine, { backgroundColor: theme.colors.primary }]} />
-            </View>
-            <Text variant="titleLarge" style={[styles.formTitle, { color: theme.colors.primary }]}>
-              {getStepTitle()}
-            </Text>
-          </View>
-
-          <View style={styles.divider} />
-
-          {/* Camera View */}
-          <View style={styles.cameraContainer}>
-            <View
-              style={[
-                styles.cameraView,
-                { backgroundColor: isCurrentStepCaptured ? "#2E7D32" : "#F57C00" },
-              ]}
-            >
-              <Text style={styles.cameraIcon}>📷</Text>
-              <Text style={[styles.cameraText, { color: theme.colors.onPrimary }]}>
-                {isCurrentStepCaptured ? "PHOTO CAPTURED" : "CAMERA VIEW"}
-              </Text>
-              <Text style={[styles.instructionText, { color: theme.colors.onPrimary }]}>{getInstructions()}</Text>
-            </View>
-          </View>
-
-          {/* Instructions */}
-          <Text variant="bodyMedium" style={[styles.instructions, { color: theme.colors.primary }]}>
-            Please look directly at the camera and ensure good lighting
+        <Surface style={[styles.formContainer, { backgroundColor: theme.colors.surface }]} elevation={2}>
+          <Text variant="titleLarge" style={[styles.formTitle, { color: theme.colors.primary }]}>
+            {currentConfig.title}
           </Text>
+
+          <Text variant="bodyMedium" style={[styles.instructions, { color: theme.colors.onSurfaceVariant }]}>
+            {currentConfig.instructions}
+          </Text>
+
+          {/* Camera/Preview Area (tap to capture if not uploaded) */}
+          <Card
+            style={[styles.cameraContainer, { backgroundColor: currentConfig.bgColor }]}
+            onPress={() => !currentPhoto?.uploaded && !isCapturing && capturePhoto(currentStep, "camera")}
+          >
+            <Card.Content style={styles.cameraContent}>
+              {currentPhoto?.uri ? (
+                <View style={styles.previewContainer}>
+                  <Image source={{ uri: currentPhoto.uri }} style={styles.previewImage} />
+                  {currentPhoto.uploaded && (
+                    <View style={styles.uploadedBadge}>
+                      <Text style={styles.uploadedText}>✓ Uploaded</Text>
+                    </View>
+                  )}
+                </View>
+              ) : (
+                <View style={styles.placeholderContainer}>
+                  <Text style={styles.placeholderIcon}>📷</Text>
+                  <Text style={[styles.placeholderText, { color: theme.colors.onSurfaceVariant }]}>
+                    {isCapturing ? "Capturing..." : "Tap to capture"}
+                  </Text>
+                </View>
+              )}
+            </Card.Content>
+          </Card>
+
+          {/* Upload Progress */}
+          {isCapturing && (
+            <View style={styles.uploadProgress}>
+              <ProgressBar
+                progress={currentPhoto?.uploadProgress ? currentPhoto.uploadProgress / 100 : 0}
+                color={theme.colors.primary}
+              />
+              <Text variant="bodySmall" style={[styles.uploadText, { color: theme.colors.onSurfaceVariant }]}>
+                Uploading... {currentPhoto?.uploadProgress || 0}%
+              </Text>
+            </View>
+          )}
+
+          {/* Error Message */}
+          {error && <Text style={[styles.errorText, { color: theme.colors.error }]}>{error}</Text>}
 
           {/* Action Buttons */}
           <View style={styles.actionButtons}>
-            {!isCurrentStepCaptured ? (
+            {!currentPhoto?.uploaded ? (
+              <View style={{ gap: 8 }}>
+                <Button
+                  mode="contained"
+                  onPress={() => capturePhoto(currentStep, "camera")}
+                  loading={isCapturing}
+                  disabled={isCapturing}
+                  style={[styles.captureButton, { backgroundColor: "#FBC02D" }]}
+                  contentStyle={styles.buttonContent}
+                  labelStyle={[styles.buttonLabel, { color: theme.colors.primary }]}
+                >
+                  {isCapturing ? "Capturing..." : `Capture ${currentConfig.title.split(" ")[1]}`}
+                </Button>
+
+                <Button
+                  mode="outlined"
+                  onPress={() => capturePhoto(currentStep, "library")}
+                  disabled={isCapturing}
+                  style={styles.retakeButton}
+                  contentStyle={styles.buttonContent}
+                  labelStyle={[styles.buttonLabel, { color: theme.colors.primary }]}
+                >
+                  Pick from gallery
+                </Button>
+
+                {currentStep === "selfie" && !mustSelfie && (
+                  <Button
+                    mode="text"
+                    onPress={handleNext}
+                    style={{ marginTop: 4 }}
+                    labelStyle={[styles.buttonLabel, { color: theme.colors.primary }]}
+                  >
+                    Skip selfie (optional)
+                  </Button>
+                )}
+              </View>
+            ) : (
               <Button
-                mode="contained"
-                onPress={handleCapture}
-                style={[styles.captureButton, { backgroundColor: "#FBC02D" }]}
+                mode="outlined"
+                onPress={() => retakePhoto(currentStep)}
+                style={styles.retakeButton}
                 contentStyle={styles.buttonContent}
                 labelStyle={[styles.buttonLabel, { color: theme.colors.primary }]}
               >
-                Capture Photo
-              </Button>
-            ) : (
-              <Button
-                mode="contained"
-                onPress={handleRetake}
-                style={[styles.retakeButton, { backgroundColor: "#F57C00" }]}
-                contentStyle={styles.buttonContent}
-                labelStyle={[styles.buttonLabel, { color: theme.colors.onPrimary }]}
-              >
-                Retake
+                Retake Photo
               </Button>
             )}
           </View>
 
-          {/* Next Button */}
-          {isCurrentStepCaptured && (
-            <Button
-              mode="contained"
-              onPress={handleNext}
-              loading={loading}
-              disabled={loading}
-              style={[styles.nextButton, { backgroundColor: "#FBC02D" }]}
-              contentStyle={styles.buttonContent}
-              labelStyle={[styles.buttonLabel, { color: theme.colors.primary }]}
-            >
-              {getNextText()}
-            </Button>
-          )}
+          {/* Navigation Buttons */}
+          <View style={styles.navigationButtons}>
+            {currentStep !== "idBack" && canProceedToNext() && (
+              <Button
+                mode="contained"
+                onPress={handleNext}
+                style={[styles.nextButton, { backgroundColor: theme.colors.primary }]}
+                contentStyle={styles.buttonContent}
+                labelStyle={[styles.buttonLabel, { color: theme.colors.onPrimary }]}
+              >
+                {getNextButtonText()}
+              </Button>
+            )}
 
-          {/* Progress Text */}
-          <Text variant="bodySmall" style={[styles.progressText, { color: theme.colors.primary }]}>
-            {getNextText()}
+            {currentStep === "idBack" && canFinish() && (
+              <Button
+                mode="contained"
+                onPress={handleContinue}
+                loading={finalLoading}
+                disabled={finalLoading}
+                style={[styles.continueButton, { backgroundColor: "#4CAF50" }]}
+                contentStyle={styles.buttonContent}
+                labelStyle={[styles.buttonLabel, { color: "#FFFFFF" }]}
+              >
+                Continue to Payment Setup
+              </Button>
+            )}
+          </View>
+
+          {/* Helper Text */}
+          <Text variant="bodySmall" style={[styles.helperText, { color: theme.colors.onSurfaceVariant }]}>
+            Ensure good lighting and hold your device steady for best results.
           </Text>
         </Surface>
       </ScrollView>
@@ -194,31 +485,64 @@ export default function LiveCapture() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  scrollContent: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 20 },
-  header: { alignItems: "center", marginBottom: 20 },
-  stepIndicator: { width: 40, height: 40, borderRadius: 20, justifyContent: "center", alignItems: "center", marginBottom: 12 },
+  scrollContent: { flexGrow: 1, padding: 20 },
+  header: { flexDirection: "row", alignItems: "center", marginBottom: 20 },
+  headerContent: { flex: 1, alignItems: "center", marginLeft: -40 },
+  stepIndicator: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 8,
+  },
   stepNumber: { fontSize: 18, fontWeight: "bold" },
-  title: { fontWeight: "bold", textAlign: "center" },
-  phoneBar: { height: 44, borderRadius: 22, justifyContent: "center", alignItems: "center", marginBottom: 20 },
-  timeText: { fontSize: 16, fontWeight: "600" },
-  formContainer: { borderRadius: 20, padding: 24, marginBottom: 20 },
-  formHeader: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
-  backIcon: { marginLeft: -8, marginRight: 4 },
-  menuIcon: { marginRight: 12 },
-  menuLine: { width: 20, height: 3, marginBottom: 3, borderRadius: 1.5 },
-  formTitle: { fontWeight: "bold" },
-  divider: { height: 2, backgroundColor: "#1559C1", marginBottom: 24 },
-  cameraContainer: { alignItems: "center", marginBottom: 20 },
-  cameraView: { width: 280, height: 200, borderRadius: 12, justifyContent: "center", alignItems: "center", padding: 20 },
-  cameraIcon: { fontSize: 32, marginBottom: 8 },
-  cameraText: { fontSize: 16, fontWeight: "bold", marginBottom: 8 },
-  instructionText: { fontSize: 14, textAlign: "center", lineHeight: 18 },
+  title: { fontWeight: "700", textAlign: "center" },
+  progressContainer: { alignItems: "center", marginBottom: 24 },
+  stepDots: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
+  stepDotContainer: { alignItems: "center", position: "relative" },
+  stepDot: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: "center",
+    alignItems: "center",
+    marginHorizontal: 8,
+  },
+  stepDotIcon: { fontSize: 18 },
+  stepLabel: { marginTop: 4, fontSize: 10, textAlign: "center" },
+  stepConnector: { position: "absolute", top: 24, left: 56, width: 32, height: 2 },
+  progressText: { fontSize: 12 },
+  formContainer: { borderRadius: 20, padding: 24 },
+  formTitle: { fontWeight: "700", textAlign: "center", marginBottom: 8 },
   instructions: { textAlign: "center", marginBottom: 24, lineHeight: 20 },
-  actionButtons: { marginBottom: 20 },
+  cameraContainer: { marginBottom: 16, borderRadius: 16, overflow: "hidden" },
+  cameraContent: { padding: 0 },
+  previewContainer: { position: "relative" },
+  previewImage: { width: "100%", height: 200, borderRadius: 12 },
+  uploadedBadge: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    backgroundColor: "#4CAF50",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  uploadedText: { color: "#FFFFFF", fontSize: 12, fontWeight: "600" },
+  placeholderContainer: { height: 200, justifyContent: "center", alignItems: "center" },
+  placeholderIcon: { fontSize: 48, marginBottom: 12 },
+  placeholderText: { fontSize: 16, fontWeight: "500" },
+  uploadProgress: { marginBottom: 16 },
+  uploadText: { textAlign: "center", marginTop: 8, fontSize: 12 },
+  errorText: { textAlign: "center", marginBottom: 16, fontSize: 14 },
+  actionButtons: { marginBottom: 16 },
   captureButton: { borderRadius: 25 },
   retakeButton: { borderRadius: 25 },
-  nextButton: { borderRadius: 25, marginBottom: 16 },
+  navigationButtons: { marginBottom: 16 },
+  nextButton: { borderRadius: 25 },
+  continueButton: { borderRadius: 25 },
   buttonContent: { paddingVertical: 8 },
   buttonLabel: { fontSize: 16, fontWeight: "600" },
-  progressText: { textAlign: "center", fontWeight: "600" },
+  helperText: { textAlign: "center", fontStyle: "italic", lineHeight: 18 },
 });

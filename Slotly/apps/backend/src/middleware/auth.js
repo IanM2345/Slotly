@@ -1,60 +1,73 @@
-import jwt from 'jsonwebtoken';
-import * as Sentry from '@sentry/nextjs';
+// apps/backend/src/middleware/auth.js
+import * as Sentry from "@sentry/nextjs";
+import { verifyAccess } from "../lib/token"; // from your token helper
 
-const JWT_SECRET = process.env.JWT_SECRET;
-
-if (!JWT_SECRET) {
-  const error = new Error('JWT_SECRET is not set in environment variables');
-  Sentry.captureException(error);
-  throw error;
+function getBearer(req) {
+  const h = req.headers.get("authorization") || req.headers.get("Authorization");
+  if (!h) return null;
+  const [scheme, token] = h.split(" ");
+  if (scheme?.toLowerCase() !== "bearer" || !token) return null;
+  return token.trim();
 }
 
 /**
- * Verifies a JWT token
- * @param {string} token - The JWT token to verify
- * @returns {{ valid: boolean, decoded?: object, error?: string }}
+ * Authenticates a Next.js Request using an ACCESS token.
+ * Returns { valid, decoded?, error? }
  */
-export function verifyToken(token) {
+export async function authenticateRequest(req) {
+  const token = getBearer(req);
+  if (!token) {
+    Sentry.addBreadcrumb({
+      message: "Authorization header missing or malformed",
+      category: "auth",
+      level: "warning",
+    });
+    return { valid: false, error: "Authorization header missing or malformed" };
+  }
+
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = verifyAccess(token); // enforces alg/iss/aud/type === "access"
     return { valid: true, decoded };
   } catch (err) {
-    const isExpected =
-      err.name === 'TokenExpiredError' ||
-      err.name === 'JsonWebTokenError' ||
-      err.name === 'NotBeforeError';
+    const expected =
+      err.name === "TokenExpiredError" ||
+      err.name === "JsonWebTokenError" ||
+      err.name === "NotBeforeError" ||
+      /Invalid token type/i.test(err.message);
 
-    // Unexpected verification errors
-    if (!isExpected) {
+    if (!expected) {
       Sentry.captureException(err, {
-        tags: { module: 'auth', level: 'critical' },
-        extra: { reason: err.message, tokenSnippet: token?.slice(0, 12) + '...' },
+        tags: { module: "auth", where: "authenticateRequest" },
+      });
+    } else {
+      Sentry.addBreadcrumb({
+        message: "Access token rejected",
+        category: "auth",
+        level: "info",
+        data: { reason: err.name || err.message },
       });
     }
 
-    console.error('JWT verification failed:', err);
-    return { valid: false, error: 'Invalid or expired token' };
+    return { valid: false, error: "Invalid or expired token" };
   }
 }
 
-/**
- * Authenticates a Next.js Request by checking its Authorization header
- * @param {Request} request - The incoming request object
- * @returns {Promise<{ valid: boolean, decoded?: object, error?: string }>}
- */
-export async function authenticateRequest(request) {
-  const authHeader = request.headers.get('authorization');
-
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    const warning = 'Authorization header missing or malformed';
-    Sentry.captureMessage(warning, {
-      level: 'warning',
-      tags: { module: 'auth' },
-    });
-
-    return { valid: false, error: warning };
-  }
-
-  const token = authHeader.split(' ')[1];
-  return verifyToken(token);
-}
+ // ✅ Shim so routes can `import { verifyToken } from '@/middleware/auth'`
+ export async function verifyToken(input) {
+   // Request object
+   if (input && typeof input === "object" && "headers" in input) {
+     return authenticateRequest(input);
+   }
+   // Raw token string
+   if (typeof input === "string" && input.trim()) {
+     try {
+       const decoded = verifyAccess(input.trim());
+       return { valid: true, decoded };
+     } catch (err) {
+       return { valid: false, error: "Invalid or expired token" };
+     }
+   }
+   return { valid: false, error: "Authorization header missing or malformed" };
+ }
+ 
+ export { getBearer }; // optional, if other code needs it
