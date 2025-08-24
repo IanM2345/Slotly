@@ -10,3 +10,6 @@ declare module "react-native-paper" {
 }
 
 export {};
+
+
+

@@ -4,38 +4,17 @@
   "main": "App.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
+    
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@expo-google-fonts/inter": "^0.4.1",
-    "@expo/metro-runtime": "^5.0.4",
-    "@react-native-async-storage/async-storage": "^2.2.0",
-    "@react-native-community/datetimepicker": "8.4.1",
-    "expo-constants": "~17.1.7",
-    "expo-font": "~13.3.2",
-    "expo-linking": "~7.1.7",
-    "expo-router": "~5.1.4",
-    "expo-splash-screen": "~0.30.10",
-    "expo-status-bar": "~2.2.3",
-    "expo-web-browser": "~14.2.0",
-    "react-dom": "^19.1.1",
     "react-hook-form": "^7.62.0",
-    "react-native": "0.79.4",
-    "react-native-gesture-handler": "~2.24.0",
     "react-native-paper": "^5.14.5",
-    "react-native-safe-area-context": "5.4.0",
-    "react-native-screens": "~4.11.1",
     "react-native-vector-icons": "^10.2.0",
-    "react-native-web": "0.20.0",
-    "react-native-web-internals": "^1.112.1",
     "zod": "^4.0.17"
-  },
-  "devDependencies": {
-    "metro": "^0.80.12",
-    "metro-config": "^0.80.12",
-    "metro-resolver": "^0.80.12"
   }
+  
 }

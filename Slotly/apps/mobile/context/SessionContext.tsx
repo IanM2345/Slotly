@@ -47,7 +47,7 @@ export function SessionProvider({ children }: SessionProviderProps) {
   const [user, setUser] = useState<SessionUser | null>({
     id: "dev-1",
     userId: "u1001",
-    accountType: "business",
+    accountType: "consumer",
     email: "test@example.com",
     business: {
       tier: 2,
