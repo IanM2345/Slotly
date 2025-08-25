@@ -2,15 +2,14 @@
   "name": "backend",
   "version": "0.1.0",
   "private": true,
+  "engines": { "node": "20.x" },
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0 --port 3000",
-    "build": "next build",
-    "start": "next start",
+    "build": "npx prisma generate && next build",
+    "start": "next start -p $PORT -H 0.0.0.0",
     "lint": "next lint"
   },
-  "prisma": {
-    "seed": "node scripts/seed-admin.js"
-  },
+  "prisma": { "seed": "node scripts/seed-admin.js" },
   "dependencies": {
     "@prisma/client": "^6.11.0",
     "@sentry/nextjs": "^9.40.0",
