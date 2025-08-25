@@ -1,5 +1,5 @@
 import React from 'react';
-import FontAwesome from '@expo/vector-icons/FontAwesome';
+import { FontAwesome } from '@expo/vector-icons';
 import { Link, Tabs } from 'expo-router';
 import { Pressable, Platform } from 'react-native';
 import { PaperProvider } from 'react-native-paper';

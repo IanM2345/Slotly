@@ -1,92 +1,87 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { View, ScrollView, StyleSheet } from 'react-native';
 import {
-  Text,
-  TextInput,
-  Button,
-  Surface,
-  IconButton,
-  Menu,
-  useTheme,
-  Snackbar
+  Text, TextInput, Button, Surface, IconButton, Menu, useTheme, Snackbar
 } from 'react-native-paper';
 import { useRouter } from 'expo-router';
-import { getAddress, updateAddress } from '../../lib/settings/api';
-import type { Address as AddressType } from '../../lib/settings/types';
+import { useSession } from '../../context/SessionContext';
+import { getMyAddress, updateMyAddress } from '../../lib/api/modules/users';
+
+type AddressType = {
+  county?: string;
+  city?: string;
+  constituency?: string;
+  street?: string;
+  apartment?: string;
+};
 
 export default function AddressScreen() {
   const theme = useTheme();
   const router = useRouter();
-  
+  const { token } = useSession();
+
   const [loading, setLoading] = useState(false);
-  const [addressData, setAddressData] = useState<AddressType>({ country: '', city: '', constituency: '', street: '', apartment: '' });
+  const [addressData, setAddressData] = useState<AddressType>({
+    county: 'Kenya', city: '', constituency: '', street: '', apartment: ''
+  });
   const [snack, setSnack] = useState<{ visible: boolean; msg: string }>({ visible: false, msg: '' });
 
-  useEffect(() => {
-    getAddress().then((addr) => setAddressData({
-      country: addr.country ?? 'Kenya',
-      city: addr.city ?? '',
-      constituency: addr.constituency ?? '',
-      street: addr.street ?? '',
-      apartment: addr.apartment ?? ''
-    })).catch(() => {});
-  }, []);
-
-  // Menu states
   const [countyMenuVisible, setCountyMenuVisible] = useState(false);
   const [constituencyMenuVisible, setConstituencyMenuVisible] = useState(false);
 
-  // Sample data - replace with actual data
   const counties = ['Nairobi','Mombasa','Kisumu','Nakuru','Eldoret','Thika','Malindi','Kitale'];
+  const constituencies = ['Westlands','Langata','Kasarani','Embakasi','Dagoretti','Kibra','Mathare','Starehe'];
 
-  const constituencies = [
-    'Westlands',
-    'Langata',
-    'Kasarani',
-    'Embakasi',
-    'Dagoretti',
-    'Kibra',
-    'Mathare',
-    'Starehe'
-  ];
+  const load = useCallback(async () => {
+    if (!token) return;
+    try {
+      const addr = await getMyAddress(token);
+      setAddressData({
+        county: addr.county ?? 'Kenya',
+        city: addr.city ?? '',
+        constituency: addr.constituency ?? '',
+        street: addr.street ?? '',
+        apartment: addr.apartment ?? ''
+      });
+    } catch (_) {
+      // keep defaults
+    }
+  }, [token]);
 
-  const handleBack = () => {
-    router.back();
-  };
+  useEffect(() => { load(); }, [load]);
+
+  const handleBack = () => router.back();
 
   const handleSave = async () => {
+    if (!token) return;
     setLoading(true);
     try {
-      await updateAddress(addressData);
+      await updateMyAddress(addressData, token);
       setSnack({ visible: true, msg: 'Address saved' });
       setTimeout(() => router.back(), 800);
     } catch (error) {
       console.error('Error saving address:', error);
+      setSnack({ visible: true, msg: 'Failed to save address' });
     } finally {
       setLoading(false);
     }
   };
 
   const updateAddressData = (field: keyof AddressType, value: string) => {
-    setAddressData(prev => ({
-      ...prev,
-      [field]: value
-    }));
+    setAddressData(prev => ({ ...prev, [field]: value }));
   };
 
   const handleCountySelect = (county: string) => {
-    updateAddressData('country', county);
+    updateAddressData('county', county);
     setCountyMenuVisible(false);
   };
-
-  const handleConstituencySelect = (constituency: string) => {
-    updateAddressData('constituency', constituency);
+  const handleConstituencySelect = (c: string) => {
+    updateAddressData('constituency', c);
     setConstituencyMenuVisible(false);
   };
 
   return (
     <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      {/* Header */}
       <View style={styles.header}>
         <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={handleBack} />
         <Text style={[styles.headerTitle, { color: theme.colors.onSurface }]}>Address</Text>
@@ -95,7 +90,6 @@ export default function AddressScreen() {
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <View style={styles.formContainer}>
-          {/* County Dropdown */}
           <View style={styles.inputContainer}>
             <Menu
               visible={countyMenuVisible}
@@ -104,32 +98,24 @@ export default function AddressScreen() {
                 <TextInput
                   mode="outlined"
                   label="County"
-                  value={addressData.country}
+                  value={addressData.county ?? ''}
                   style={styles.textInput}
                   outlineColor={theme.colors.outline}
                   activeOutlineColor={theme.colors.primary}
                   textColor={theme.colors.onSurface}
                   editable={false}
-                  right={
-                 <TextInput.Icon icon="chevron-down" onPress={() => setCountyMenuVisible(true)} />
-                  }
+                  right={<TextInput.Icon icon="chevron-down" onPress={() => setCountyMenuVisible(true)} />}
                   onPressIn={() => setCountyMenuVisible(true)}
                 />
               }
               contentStyle={styles.menuContent}
             >
               {counties.map((county) => (
-                <Menu.Item
-                  key={county}
-                  onPress={() => handleCountySelect(county)}
-                  title={county}
-                  titleStyle={styles.menuItemText}
-                />
+                <Menu.Item key={county} onPress={() => handleCountySelect(county)} title={county} titleStyle={styles.menuItemText} />
               ))}
             </Menu>
           </View>
 
-          {/* City Input */}
           <TextInput
             mode="outlined"
             label="City (Optional)"
@@ -142,7 +128,6 @@ export default function AddressScreen() {
             autoCapitalize="words"
           />
 
-          {/* Constituency Dropdown */}
           <View style={styles.inputContainer}>
             <Menu
               visible={constituencyMenuVisible}
@@ -157,26 +142,18 @@ export default function AddressScreen() {
                   activeOutlineColor={theme.colors.primary}
                   textColor={theme.colors.onSurface}
                   editable={false}
-                  right={
-                    <TextInput.Icon icon="chevron-down" onPress={() => setConstituencyMenuVisible(true)} />
-                  }
+                  right={<TextInput.Icon icon="chevron-down" onPress={() => setConstituencyMenuVisible(true)} />}
                   onPressIn={() => setConstituencyMenuVisible(true)}
                 />
               }
               contentStyle={styles.menuContent}
             >
-              {constituencies.map((constituency) => (
-                <Menu.Item
-                  key={constituency}
-                  onPress={() => handleConstituencySelect(constituency)}
-                  title={constituency}
-                  titleStyle={styles.menuItemText}
-                />
+              {constituencies.map((c) => (
+                <Menu.Item key={c} onPress={() => handleConstituencySelect(c)} title={c} titleStyle={styles.menuItemText} />
               ))}
             </Menu>
           </View>
 
-          {/* Street Input */}
           <TextInput
             mode="outlined"
             label="Street"
@@ -189,7 +166,6 @@ export default function AddressScreen() {
             autoCapitalize="words"
           />
 
-          {/* Apartment/House Number Input */}
           <TextInput
             mode="outlined"
             label="Apartment/House Number (Optional)"
@@ -203,84 +179,36 @@ export default function AddressScreen() {
           />
         </View>
 
-        {/* Save Button */}
         <View style={styles.saveButtonContainer}>
-          <Button
-            mode="contained"
-            onPress={handleSave}
-            loading={loading}
-            disabled={loading}
-            style={styles.saveButton}
-            labelStyle={styles.saveButtonText}
-            contentStyle={styles.saveButtonContent}
-          >
+          <Button mode="contained" onPress={handleSave} loading={loading} disabled={loading} style={styles.saveButton} labelStyle={styles.saveButtonText} contentStyle={styles.saveButtonContent}>
             Save
           </Button>
         </View>
 
-        {/* Bottom Spacing */}
         <View style={styles.bottomSpacing} />
       </ScrollView>
-      <Snackbar visible={snack.visible} onDismiss={() => setSnack({ visible: false, msg: '' })} duration={2000}>{snack.msg}</Snackbar>
+
+      <Snackbar visible={snack.visible} onDismiss={() => setSnack({ visible: false, msg: '' })} duration={2000}>
+        {snack.msg}
+      </Snackbar>
     </Surface>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingTop: 16,
-    paddingBottom: 8,
-  },
-  headerTitle: {
-    flex: 1,
-    fontSize: 24,
-    fontWeight: 'bold',
-    textAlign: 'center',
-  },
-  headerSpacer: {
-    width: 48,
-  },
-  scrollView: {
-    flex: 1,
-    paddingHorizontal: 16,
-  },
-  formContainer: {
-    paddingTop: 24,
-    gap: 20,
-    marginBottom: 40,
-  },
-  inputContainer: {
-    position: 'relative',
-  },
-  textInput: {
-    backgroundColor: 'transparent',
-  },
-  menuContent: {
-    maxHeight: 200,
-  },
-  menuItemText: {
-    fontSize: 16,
-  },
-  saveButtonContainer: {
-    marginBottom: 24,
-  },
-  saveButton: {
-    borderRadius: 25,
-  },
-  saveButtonContent: {
-    paddingVertical: 12,
-  },
-  saveButtonText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  bottomSpacing: {
-    height: 32,
-  },
+  container:{ flex:1 },
+  header:{ flexDirection:'row', alignItems:'center', paddingHorizontal:8, paddingTop:16, paddingBottom:8 },
+  headerTitle:{ flex:1, fontSize:24, fontWeight:'bold', textAlign:'center' },
+  headerSpacer:{ width:48 },
+  scrollView:{ flex:1, paddingHorizontal:16 },
+  formContainer:{ paddingTop:24, gap:20, marginBottom:40 },
+  inputContainer:{ position:'relative' },
+  textInput:{ backgroundColor:'transparent' },
+  menuContent:{ maxHeight:200 },
+  menuItemText:{ fontSize:16 },
+  saveButtonContainer:{ marginBottom:24 },
+  saveButton:{ borderRadius:25 },
+  saveButtonContent:{ paddingVertical:12 },
+  saveButtonText:{ fontSize:18, fontWeight:'bold' },
+  bottomSpacing:{ height:32 },
 });

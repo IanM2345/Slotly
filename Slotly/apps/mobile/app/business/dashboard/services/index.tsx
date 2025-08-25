@@ -20,6 +20,7 @@ import { useRouter } from "expo-router";
 import { VerificationGate } from "../../../../components/VerificationGate";
 import { Section } from "../../../../components/Section";
 import { FilterChipsRow } from "../../../../components/FilterChipsRow";
+import * as Sentry from "sentry-expo";
 
 // API (new module)
 import {
@@ -31,7 +32,7 @@ import {
   listStaff,
   assignStaffToService,
   unassignStaffFromService,
-} from "../../../../lib/api/modules/manager"; // wired module :contentReference[oaicite:8]{index=8}
+} from "../../../../lib/api/modules/manager";
 
 type Category = "hair" | "spa" | "nails";
 type StaffLite = { id: string; name: string };
@@ -92,15 +93,19 @@ export default function ServicesIndexScreen() {
           ? undefined
           : (selectedCategory[0].toLowerCase() as Category);
 
-      const [svc, bun] = await Promise.all([
+      // Fetch independently to avoid all-or-nothing failures
+      const [svcRes, bunRes] = await Promise.allSettled([
         listServices(category ? { category } : undefined),
         listBundles(),
       ]);
-      setServices(Array.isArray(svc) ? svc : []);
-      setBundles(Array.isArray(bun) ? bun : []);
+
+      setServices(svcRes.status === "fulfilled" && Array.isArray(svcRes.value) ? svcRes.value : []);
+      setBundles(bunRes.status === "fulfilled" && Array.isArray(bunRes.value) ? bunRes.value : []);
     } catch (err: any) {
+      // Should rarely hit due to allSettled, but keep resilient
+      setServices([]); setBundles([]);
       console.error("Error loading services:", err?.message || err);
-      Alert.alert("Failed to load", err?.message || "Please try again.");
+      Sentry.Native.captureException(err);
     } finally {
       setLoading(false);
     }
@@ -129,10 +134,11 @@ export default function ServicesIndexScreen() {
     try {
       setCreateOpen(true);
       // load approved staff list for selection
-      const staffResp = await listStaff(); // { approvedStaff, pendingEnrollments } :contentReference[oaicite:9]{index=9}
+      const staffResp = await listStaff();
       setAllStaff(staffResp?.approvedStaff || []);
     } catch (e: any) {
       console.error(e);
+      Sentry.Native.captureException(e);
     }
   }
 
@@ -154,11 +160,11 @@ export default function ServicesIndexScreen() {
         category: cCategory,
         available: true,
       };
-      const created = await createService(payload); // POST /manager/services :contentReference[oaicite:10]{index=10}
+      const created = await createService(payload);
 
       // pre-assign selected staff
       for (const staffId of createSelected) {
-        await assignStaffToService({ serviceId: created.id, staffId }); // :contentReference[oaicite:11]{index=11}
+        await assignStaffToService({ serviceId: created.id, staffId });
       }
 
       setCreateOpen(false);
@@ -166,6 +172,7 @@ export default function ServicesIndexScreen() {
       await loadData();
     } catch (e: any) {
       Alert.alert("Create failed", e?.message || "Could not create service");
+      Sentry.Native.captureException(e);
     }
   }
 
@@ -179,6 +186,7 @@ export default function ServicesIndexScreen() {
       setManageSelected((svc.staff || []).map((s) => s.id));
     } catch (e: any) {
       console.error(e);
+      Sentry.Native.captureException(e);
     }
   }
 
@@ -211,6 +219,7 @@ export default function ServicesIndexScreen() {
       await loadData();
     } catch (e: any) {
       Alert.alert("Update failed", e?.message || "Could not update assignments");
+      Sentry.Native.captureException(e);
     }
   }
 
@@ -233,12 +242,13 @@ export default function ServicesIndexScreen() {
         price: Number(cPrice),
         duration: Number(cDuration),
         category: cCategory,
-      }); // PUT /manager/services :contentReference[oaicite:12]{index=12}
+      });
       setEditOpen(null);
       setCName(""); setCPrice(""); setCDuration("");
       await loadData();
     } catch (e: any) {
       Alert.alert("Save failed", e?.message || "Could not update service");
+      Sentry.Native.captureException(e);
     }
   }
 
@@ -284,7 +294,7 @@ export default function ServicesIndexScreen() {
           </Button>
           <Button
             mode="contained"
-            onPress={() => router.push({ pathname: "/business/dashboard/services" })}
+            onPress={() => router.push("/business/dashboard/services/bundle/new-bundle")}
             style={[styles.actionButton, { backgroundColor: theme.colors.secondary }]}
             icon="package-variant"
           >
@@ -293,7 +303,7 @@ export default function ServicesIndexScreen() {
         </View>
 
         {/* Services */}
-        {filteredServices.length > 0 && (
+        {filteredServices.length > 0 ? (
           <Section title="Services">
             <View style={styles.servicesContainer}>
               {filteredServices.map((service) => (
@@ -329,10 +339,14 @@ export default function ServicesIndexScreen() {
               ))}
             </View>
           </Section>
+        ) : (
+          <Section title="Services">
+            <Text style={{ color: "#6B7280", paddingHorizontal: 16 }}>No services yet.</Text>
+          </Section>
         )}
 
         {/* Bundles */}
-        {showBundles && bundles.length > 0 && (
+        {showBundles && (bundles.length > 0 ? (
           <Section title="Service Bundles">
             <View style={styles.bundlesContainer}>
               {bundles.map((bundle) => (
@@ -361,7 +375,7 @@ export default function ServicesIndexScreen() {
                       style={styles.bundleActionBtn}
                       onPress={() =>
                         router.push({
-                          pathname: "/business/dashboard/services",
+                          pathname: "/business/dashboard/services/bundle/new-bundle",
                           params: { id: bundle.id },
                         })
                       }
@@ -376,7 +390,11 @@ export default function ServicesIndexScreen() {
               ))}
             </View>
           </Section>
-        )}
+        ) : (
+          <Section title="Service Bundles">
+            <Text style={{ color: "#6B7280", paddingHorizontal: 16 }}>No bundled services yet.</Text>
+          </Section>
+        ))}
 
         <View style={styles.bottomSpacing} />
       </ScrollView>
@@ -475,8 +493,6 @@ export default function ServicesIndexScreen() {
     </VerificationGate>
   );
 }
-
-
 
 const styles = StyleSheet.create({
   container: {

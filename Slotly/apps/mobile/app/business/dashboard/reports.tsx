@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { View, ScrollView, StyleSheet, Platform, Alert } from "react-native";
+import { useEffect, useState } from "react";
+import { View, ScrollView, StyleSheet, Alert } from "react-native";
 import {
   Text,
   Surface,
@@ -13,6 +13,7 @@ import {
 import { useRouter } from "expo-router";
 import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
+import * as WebBrowser from "expo-web-browser";
 
 import { useTier } from "../../../context/TierContext";
 import { VerificationGate } from "../../../components/VerificationGate";
@@ -56,6 +57,8 @@ export default function ReportsScreen() {
   useEffect(() => {
     if (features.reports) {
       loadReports();
+    } else {
+      setLoading(false);
     }
   }, [features.reports]);
 
@@ -91,29 +94,107 @@ export default function ReportsScreen() {
       setReports(enriched);
     } catch (err: any) {
       console.error("Error loading reports:", err);
-      Alert.alert("Error", err?.message || "Failed to load reports");
+      // Don't show alert for 403 - user just doesn't have access
+      if (err?.response?.status !== 403) {
+        Alert.alert("Error", err?.message || "Failed to load reports");
+      }
     } finally {
       setLoading(false);
     }
   }
 
-  const handleUpgrade = () => {
-    router.push("/business/dashboard/billing" as any)
+  function periodToRange(period?: string) {
+    if (!period) return null;
+    // supports "YYYY-MM"
+    const [y, m] = period.split("-").map((v) => parseInt(v, 10));
+    if (!y || !m) return null;
+    const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
+    const end = new Date(Date.UTC(y, m, 0, 23, 59, 59));
+    const text = start.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    return { start, end, text };
   }
 
-  const handlePreviewReport = (report: Report) => {
-    console.log("Preview report:", report.id)
-    // TODO: Implement report preview
+  function extractKpis(analytics: any) {
+    // Shape your analytics response into 4 headline figures
+    // Fallbacks ensure safe rendering even if metrics are missing.
+    const a = analytics || {};
+    return {
+      totalBookings: a?.kpis?.totalBookings ?? a?.analytics?.bookingsTotal ?? "—",
+      totalRevenue:  a?.kpis?.totalRevenue  ?? a?.analytics?.revenueTotal  ?? "—",
+      uniqueClients: a?.kpis?.uniqueClients ?? a?.analytics?.clients       ?? "—",
+      showRate:      a?.kpis?.showRate      ?? "—",
+    };
   }
 
-  const handleDownloadReport = (report: Report) => {
-    console.log("Download report:", report.id)
-    // TODO: Implement PDF download
+  async function handlePreviewPDF(report: ReportCard) {
+    try {
+      // Preferred path: if the backend stored a fileUrl, open it directly
+      if (report.fileUrl) {
+        await WebBrowser.openBrowserAsync(report.fileUrl);
+        return;
+      }
+
+      // Fallback: download PDF bytes and share them
+      const dest = FileSystem.documentDirectory + `Business-Report-${report.period}.pdf`;
+      const pdfBytes = await previewReport({ reportId: report.id });
+      
+      // Convert ArrayBuffer to base64 string
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(pdfBytes)));
+      await FileSystem.writeAsStringAsync(dest, base64, {
+        encoding: FileSystem.EncodingType.Base64
+      });
+      
+      await Sharing.shareAsync(dest, { dialogTitle: "Preview Report PDF" });
+    } catch (e: any) {
+      console.error("Preview error:", e);
+      Alert.alert("Preview failed", e?.message || "Could not preview PDF");
+    }
   }
 
-  const handleGenerateNewReport = () => {
-    console.log("Generate new report")
-    // TODO: Implement report generation
+  async function handleDownloadPDF(report: ReportCard) {
+    try {
+      const dest = FileSystem.documentDirectory + `Business-Report-${report.period}.pdf`;
+      
+      if (report.fileUrl) {
+        // Download from URL
+        const downloadResult = await FileSystem.downloadAsync(report.fileUrl, dest);
+        await Sharing.shareAsync(downloadResult.uri, { dialogTitle: "Share Report PDF" });
+      } else {
+        // Get PDF bytes from API
+        const pdfBytes = await previewReport({ reportId: report.id });
+        const base64 = btoa(String.fromCharCode(...new Uint8Array(pdfBytes)));
+        await FileSystem.writeAsStringAsync(dest, base64, {
+          encoding: FileSystem.EncodingType.Base64
+        });
+        await Sharing.shareAsync(dest, { dialogTitle: "Share Report PDF" });
+      }
+    } catch (e: any) {
+      console.error("Download error:", e);
+      Alert.alert("Download failed", e?.message || "Could not download PDF");
+    }
+  }
+
+  async function handleDownloadCSV(report: ReportCard) {
+    try {
+      const range = periodToRange(report.period);
+      if (!range) return Alert.alert("Invalid period");
+      
+      const csv = await getAnalyticsCsv({
+        view: "daily",
+        startDate: range.start.toISOString(),
+        endDate: range.end.toISOString(),
+        metrics: "bookings,revenue,clients,noShows",
+      });
+      
+      const dest = FileSystem.documentDirectory + `Business-Report-${report.period}.csv`;
+      await FileSystem.writeAsStringAsync(dest, csv, { 
+        encoding: FileSystem.EncodingType.UTF8 
+      });
+      await Sharing.shareAsync(dest, { dialogTitle: "Share CSV" });
+    } catch (e: any) {
+      console.error("CSV export error:", e);
+      Alert.alert("Export failed", e?.message || "Could not export CSV");
+    }
   }
 
   const formatDate = (dateString: string) => {
@@ -121,15 +202,20 @@ export default function ReportsScreen() {
       month: "long",
       day: "numeric",
       year: "numeric",
-    })
-  }
+    });
+  };
 
   if (!features.reports) {
     return (
       <VerificationGate>
         <View style={styles.container}>
           <View style={styles.header}>
-            <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={() => router.back()} />
+            <IconButton 
+              icon="arrow-left" 
+              size={24} 
+              iconColor={theme.colors.onSurface} 
+              onPress={() => router.back()} 
+            />
             <Text style={styles.title}>Reports</Text>
           </View>
 
@@ -158,26 +244,35 @@ export default function ReportsScreen() {
     <VerificationGate>
       <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={() => router.back()} />
+          <IconButton 
+            icon="arrow-left" 
+            size={24} 
+            iconColor={theme.colors.onSurface} 
+            onPress={() => router.back()} 
+          />
           <Text style={styles.title}>Business Reports</Text>
         </View>
 
         <Section title="Available Reports">
           <View style={styles.reportsContainer}>
-            {cards.length === 0 ? (
+            {reports.length === 0 ? (
               <Surface style={styles.emptyState} elevation={1}>
                 <Text style={styles.emptyText}>No reports available</Text>
-                <Text style={styles.emptySubtext}>Generate your first business report to get started</Text>
+                <Text style={styles.emptySubtext}>
+                  Generate your first business report to get started
+                </Text>
               </Surface>
             ) : (
-              cards.map((r) => (
+              reports.map((r) => (
                 <Surface key={r.id} style={styles.reportCard} elevation={2}>
                   <View style={styles.reportHeader}>
                     <View style={styles.reportInfo}>
                       <Text style={styles.reportTitle}>
                         {periodToRange(r.period)?.text ?? r.period} Business Report
                       </Text>
-                      <Text style={styles.reportDate}>Generated: {formatDate(r.createdAt)}</Text>
+                      <Text style={styles.reportDate}>
+                        Generated: {formatDate(r.createdAt)}
+                      </Text>
                     </View>
                     <View style={styles.reportIcon}>
                       <Text style={styles.reportEmoji}>📊</Text>
@@ -186,19 +281,27 @@ export default function ReportsScreen() {
 
                   <View style={styles.kpisGrid}>
                     <View style={styles.kpiItem}>
-                      <Text style={styles.kpiValue}>{r.kpis?.totalBookings ?? "—"}</Text>
+                      <Text style={styles.kpiValue}>
+                        {r.kpis?.totalBookings ?? "—"}
+                      </Text>
                       <Text style={styles.kpiLabel}>Total Bookings</Text>
                     </View>
                     <View style={styles.kpiItem}>
-                      <Text style={styles.kpiValue}>{r.kpis?.totalRevenue ?? "—"}</Text>
+                      <Text style={styles.kpiValue}>
+                        {r.kpis?.totalRevenue ?? "—"}
+                      </Text>
                       <Text style={styles.kpiLabel}>Revenue</Text>
                     </View>
                     <View style={styles.kpiItem}>
-                      <Text style={styles.kpiValue}>{r.kpis?.uniqueClients ?? "—"}</Text>
+                      <Text style={styles.kpiValue}>
+                        {r.kpis?.uniqueClients ?? "—"}
+                      </Text>
                       <Text style={styles.kpiLabel}>Unique Clients</Text>
                     </View>
                     <View style={styles.kpiItem}>
-                      <Text style={styles.kpiValue}>{r.kpis?.showRate ?? "—"}</Text>
+                      <Text style={styles.kpiValue}>
+                        {r.kpis?.showRate ?? "—"}
+                      </Text>
                       <Text style={styles.kpiLabel}>Show Rate</Text>
                     </View>
                   </View>
@@ -243,9 +346,6 @@ export default function ReportsScreen() {
     </VerificationGate>
   );
 }
-
-
-
 
 const styles = StyleSheet.create({
   container: {
@@ -356,6 +456,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 12,
+    marginBottom: 20,
   },
   kpiItem: {
     backgroundColor: "#F8FAFC",
@@ -385,4 +486,4 @@ const styles = StyleSheet.create({
   bottomSpacing: {
     height: 40,
   },
-})
+});

@@ -1,7 +1,4 @@
-"use client";
-"use client";
-
-import { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
 import { Text, TextInput, Button, useTheme, Surface, IconButton } from "react-native-paper";
 import { useRouter } from "expo-router";
@@ -9,15 +6,37 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 // API + Session
 import { login, meHeartbeat } from "../../lib/api/modules/auth";
-import { useSession } from "../../context/SessionContext";
+import { useSession, SessionUser } from "../../context/SessionContext";
 
-// Flip this to true in prod if you want password strictly required
 const REQUIRE_PASSWORD = process.env.EXPO_PUBLIC_REQUIRE_PASSWORD === "true";
+
+// Add this helper near the top of the file
+function getPostLoginRoute(u?: Pick<SessionUser, "role" | "business">) {
+  const role = String(u?.role || "").toUpperCase();
+
+  if (role === "STAFF") {
+    // staff land on the staff dashboard page
+    return "/business/dashboard/staff";
+  }
+
+  if (["ADMIN", "SUPER_ADMIN", "CREATOR"].includes(role)) {
+    return "/admin";
+  }
+
+  if (role === "BUSINESS_OWNER") {
+    const verificationStatus = String(u?.business?.verificationStatus || "").toLowerCase();
+    return ["approved", "active", "verified"].includes(verificationStatus)
+      ? "/business/dashboard"
+      : "/business/onboarding/pending";
+  }
+
+  return "/(tabs)"; // customers / general users
+}
 
 export default function LoginScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { setAuth } = useSession();
+  const { setAuth, token, user, ready } = useSession();
 
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -26,6 +45,16 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; phone?: string; password?: string }>({});
   const [serverError, setServerError] = useState<string | null>(null);
+
+  // ✅ If user lands on login while already authenticated, redirect them
+  useEffect(() => {
+    if (!ready) return; // Wait for hydration
+    
+    if (token && user) {
+      console.log("🔄 Already authenticated, redirecting from login...");
+      router.replace(getPostLoginRoute(user));   // <— use helper
+    }
+  }, [ready, token, user, router]);
 
   const validateForm = () => {
     const newErrors: { email?: string; phone?: string; password?: string } = {};
@@ -52,9 +81,6 @@ export default function LoginScreen() {
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
 
   const handleSignIn = async () => {
     if (!validateForm()) return;
@@ -69,6 +95,7 @@ export default function LoginScreen() {
         password: password || "", // Always include password, even if empty
       };
 
+      console.log("🔐 Attempting login...");
       const res = await login(payload);
 
       if (res?.error) {
@@ -77,34 +104,41 @@ export default function LoginScreen() {
       }
 
       // Ensure SessionContext is updated (even though the module saved tokens)
-      const user = res?.user ?? (await meHeartbeat());
-      if (res?.token) {
-        setAuth(res.token, {
-          id: user?.id,
-          email: user?.email,
-          role: user?.role,
-        });
-      }
+      const userData = res?.user ?? (await meHeartbeat());
+      
+      // Normalize user data
+      const normalizedUser = {
+        id: userData?.id,
+        email: userData?.email,
+        role: userData?.role,
+        business: userData?.business, // Include business data if available
+      };
 
-      const role = String(user?.role || "").toUpperCase();
-      if (role === "BUSINESS_OWNER") {
-        router.replace("/business/dashboard");
-      } else {
-        router.replace("/(tabs)");
+      console.log("✅ Login successful:", { role: normalizedUser.role });
+
+      if (res?.token) {
+        // This sets axios auth header automatically via SessionContext
+        await setAuth(res.token, normalizedUser);
+
+        // Role-based routing — go straight to the correct destination
+        router.replace(getPostLoginRoute(normalizedUser));
       }
     } catch (e: any) {
-      console.error("Login error:", e);
+      console.error("❌ Login error:", e);
       setServerError(e?.response?.data?.error || e?.message || "Unable to sign in. Please try again.");
     } finally {
       setLoading(false);
-      setLoading(false);
     }
   };
-  };
 
-  const handleForgotPassword = () => router.push("../auth/forgot-password");
-  const handleCreateAccount = () => router.push("../auth/signup");
-  const handleBack = () => router.back();
+   const handleForgotPassword = () => router.push("../forgot-password");
+   const handleCreateAccount = () => router.push("../signup");
+   const handleBack = () => router.back();
+
+  // Don't render the form if we're redirecting
+  if (ready && token && user) {
+    return null;
+  }
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -144,11 +178,11 @@ export default function LoginScreen() {
                 style={styles.input}
                 left={<TextInput.Icon icon="email" />}
               />
-              {errors.email && (
+              {errors.email ? (
                 <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
                   {errors.email}
                 </Text>
-              )}
+              ) : null}
 
               <TextInput
                 mode="outlined"
@@ -165,11 +199,11 @@ export default function LoginScreen() {
                 style={styles.input}
                 left={<TextInput.Icon icon="phone" />}
               />
-              {errors.phone && (
+              {errors.phone ? (
                 <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
                   {errors.phone}
                 </Text>
-              )}
+              ) : null}
 
               <TextInput
                 mode="outlined"
@@ -185,19 +219,31 @@ export default function LoginScreen() {
                 error={!!errors.password}
                 style={styles.input}
                 left={<TextInput.Icon icon="lock" />}
-                right={<TextInput.Icon icon={showPassword ? "eye-off" : "eye"} onPress={() => setShowPassword(!showPassword)} />}
+                right={
+                  <TextInput.Icon
+                    icon={showPassword ? "eye-off" : "eye"}
+                    onPress={() => setShowPassword(!showPassword)}
+                  />
+                }
               />
-              {errors.password && (
+              {errors.password ? (
                 <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
                   {errors.password}
                 </Text>
-              )}
-
-              {serverError ? (
-                <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>{serverError}</Text>
               ) : null}
 
-              <Button mode="text" onPress={handleForgotPassword} style={styles.forgotButton} labelStyle={[styles.forgotButtonText, { color: theme.colors.primary }]}>
+              {serverError ? (
+                <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
+                  {serverError}
+                </Text>
+              ) : null}
+
+              <Button
+                mode="text"
+                onPress={handleForgotPassword}
+                style={styles.forgotButton}
+                labelStyle={[styles.forgotButtonText, { color: theme.colors.primary }]}
+              >
                 Forgot Password?
               </Button>
 
@@ -227,77 +273,25 @@ export default function LoginScreen() {
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
-  );
 }
 
-
-
-
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  keyboardView: {
-    flex: 1,
-  },
-  scrollContent: {
-    flexGrow: 1,
-    paddingHorizontal: 24,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingTop: 16,
-    paddingBottom: 32,
-  },
-  backButton: {
-    marginLeft: -8,
-    marginRight: 8,
-  },
-  title: {
-    fontWeight: "bold",
-  },
-  formContainer: {
-    borderRadius: 16,
-    marginBottom: 32,
-  },
-  form: {
-    padding: 24,
-  },
-  input: {
-    marginBottom: 8,
-  },
-  errorText: {
-    marginBottom: 16,
-    marginLeft: 12,
-  },
-  forgotButton: {
-    alignSelf: "flex-end",
-    marginBottom: 24,
-  },
-  forgotButtonText: {
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  signInButton: {
-    borderRadius: 28,
-  },
-  buttonContent: {
-    paddingVertical: 8,
-  },
-  buttonLabel: {
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  footer: {
-    alignItems: "center",
-    paddingBottom: 32,
-  },
-  footerText: {
-    textAlign: "center",
-  },
-  linkText: {
-    fontWeight: "600",
-  },
+  container: { flex: 1 },
+  keyboardView: { flex: 1 },
+  scrollContent: { flexGrow: 1, paddingHorizontal: 24 },
+  header: { flexDirection: "row", alignItems: "center", paddingTop: 16, paddingBottom: 32 },
+  backButton: { marginLeft: -8, marginRight: 8 },
+  title: { fontWeight: "bold" },
+  formContainer: { borderRadius: 16, marginBottom: 32 },
+  form: { padding: 24 },
+  input: { marginBottom: 8 },
+  errorText: { marginBottom: 16, marginLeft: 12 },
+  forgotButton: { alignSelf: "flex-end", marginBottom: 24 },
+  forgotButtonText: { fontSize: 14, fontWeight: "600" },
+  signInButton: { borderRadius: 28 },
+  buttonContent: { paddingVertical: 8 },
+  buttonLabel: { fontSize: 16, fontWeight: "600" },
+  footer: { alignItems: "center", paddingBottom: 32 },
+  footerText: { textAlign: "center" },
+  linkText: { fontWeight: "600" },
 });

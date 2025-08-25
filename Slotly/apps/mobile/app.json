@@ -26,11 +26,13 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-       "softwareKeyboardLayoutMode": "resize",
+      "softwareKeyboardLayoutMode": "resize",
       "edgeToEdgeEnabled": true,
-      "permissions": ["READ_MEDIA_IMAGES",
-        "READ_MEDIA_VIDEO","CAMERA"]
-        
+      "permissions": [
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO",
+        "CAMERA"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -41,10 +43,14 @@
       "expo-router",
       "expo-font",
       "expo-web-browser",
-      "expo-secure-store"
+      "expo-secure-store",
+      ["sentry-expo", { "organization": "slotlyltd", "project": "javascript-nextjs" }]
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "sentryDsn": "USE_EXPO_PUBLIC_SENTRY_DSN_ENV"
     }
   }
 }

@@ -64,16 +64,38 @@ export async function GET(request) {
       return NextResponse.json(
         {
           error: 'Your subscription does not support analytics access.',
-          suggestion: 'Upgrade your plan to unlock analytics.',
+          details: {
+            error: 'Your subscription does not support analytics access.',
+            suggestion: 'Upgrade your plan to unlock analytics.',
+          },
         },
         { status: 403 }
       );
     }
 
     const { searchParams } = new URL(request.url);
-    const view = searchParams.get('view') || 'monthly';
-    const startDate = new Date(searchParams.get('startDate') || new Date(new Date().getFullYear(), 0, 1));
-    const endDate = new Date(searchParams.get('endDate') || new Date());
+    // Support both legacy (view/startDate/endDate) and new (period/tz)
+    const period = searchParams.get('period'); // "7d" | "30d" | "90d"
+    const tz = searchParams.get('tz') || 'Africa/Nairobi';
+
+    let view = searchParams.get('view') || 'monthly';
+    let startDateParam = searchParams.get('startDate');
+    let endDateParam = searchParams.get('endDate');
+
+    const now = new Date();
+    let startDate = startDateParam ? new Date(startDateParam) : new Date(new Date().getFullYear(), 0, 1);
+    let endDate = endDateParam ? new Date(endDateParam) : now;
+
+    if (period) {
+      // Map period → view + rolling window
+      const map = { '7d': { days: 7, view: 'daily' }, '30d': { days: 30, view: 'weekly' }, '90d': { days: 90, view: 'monthly' } };
+      const cfg = map[period] || map['30d'];
+      view = cfg.view;
+      endDate = now;
+      startDate = new Date(endDate);
+      startDate.setDate(endDate.getDate() - (cfg.days - 1));
+    }
+
     if (isNaN(startDate) || isNaN(endDate)) {
       return NextResponse.json({ error: 'Invalid date format' }, { status: 400 });
     }
@@ -84,7 +106,7 @@ export async function GET(request) {
     const staffLimit = parseInt(searchParams.get('staffLimit')) || 5;
     const exportCsv = searchParams.get('export') === 'csv';
 
-    const cacheKey = `${business.id}:${view}:${startDate.toISOString()}:${endDate.toISOString()}:${metrics.sort().join(',')}:${smoothing}:${abTestGroup}:${staffLimit}`;
+    const cacheKey = `${business.id}:${view}:${startDate.toISOString()}:${endDate.toISOString()}:${metrics.sort().join(',')}:${smoothing}:${abTestGroup}:${staffLimit}:${period || ''}:${tz}`;
     const cached = inMemoryCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < cacheTTL) {
       if (exportCsv) {
@@ -99,13 +121,13 @@ export async function GET(request) {
     }
 
     const analytics = {};
-    const now = new Date();
+    const nowNow = new Date(); // avoid shadowing "now" if used above
 
     if (metrics.includes('bookings')) {
       const bookings = await prisma.booking.findMany({
         where: {
           businessId: business.id,
-          startTime: { gte: startDate, lte: endDate },
+          startTime: { gte: startDate, lte: endDate < nowNow ? endDate : nowNow },
         },
         select: { startTime: true },
       });
@@ -184,10 +206,7 @@ export async function GET(request) {
         where: {
           businessId: business.id,
           status: 'CONFIRMED',
-          startTime: {
-            gte: startDate,
-            lte: endDate < now ? endDate : now,
-          },
+          startTime: { gte: startDate, lte: endDate < nowNow ? endDate : nowNow },
         },
         select: { startTime: true },
       });
@@ -231,10 +250,7 @@ export async function GET(request) {
             businessId: business.id,
             staffId: { not: null },
             status: 'CONFIRMED',
-            startTime: {
-              gte: startDate,
-              lte: endDate < now ? endDate : now,
-            },
+            startTime: { gte: startDate, lte: endDate < nowNow ? endDate : nowNow },
           },
           _count: true,
         }),
@@ -284,11 +300,9 @@ export async function GET(request) {
           i < cutoffGood ? 'good' : i >= cutoffPoor ? 'poor' : 'average',
       }));
 
-      
       analytics.staffPerformance = colorCoded.slice(0, staffLimit);
     }
 
-   
     if (metrics.includes('dropOff')) {
       const dropOffs = await prisma.booking.findMany({
         where: {
@@ -309,7 +323,6 @@ export async function GET(request) {
       }
     }
 
-    
     if (metrics.includes('abTest') && abTestGroup) {
       const bookings = await prisma.booking.findMany({
         where: {
@@ -329,17 +342,60 @@ export async function GET(request) {
 
     const responseData = {
       analytics,
-      meta: {
-        startDate,
-        endDate,
-        view,
-        cached: false,
-      },
+      meta: { startDate, endDate, view, cached: false },
     };
 
     inMemoryCache.set(cacheKey, { data: responseData, timestamp: Date.now() });
 
-   
+    // ---- Build forward‑compat "kpis" + "series" from analytics ----
+    // bookings/revenue keyed buckets → totals
+    const sumDict = (d) => Object.values(d || {}).reduce((s, v) => s + (Number.isFinite(+v) ? +v : 0), 0);
+
+    // Compute totals for KPIs (use what we already queried)
+    const kBookings = sumDict(analytics.bookings);
+    const kRevenue = sumDict(analytics.revenue);
+
+    // Cancellations total in window
+    let kCancellations = 0;
+    try {
+      kCancellations = await prisma.booking.count({
+        where: { businessId: business.id, status: 'CANCELLED', startTime: { gte: startDate, lte: endDate } },
+      });
+    } catch {}
+
+    // No-shows total (derived if present)
+    const kNoShows = sumDict(analytics.noShows);
+    const kAvgTicket = kBookings > 0 ? Math.round(kRevenue / kBookings) : 0;
+
+    // byDay series (normalize date key as returned by groupByUnit)
+    const byDay = [];
+    const allKeys = new Set([
+      ...Object.keys(analytics.bookings || {}),
+      ...Object.keys(analytics.revenue || {}),
+    ]);
+    Array.from(allKeys).sort().forEach((key) => {
+      byDay.push({
+        date: key,
+        bookings: Number.isFinite(+analytics.bookings?.[key]) ? +analytics.bookings[key] : 0,
+        revenue: Number.isFinite(+analytics.revenue?.[key]) ? +analytics.revenue[key] : 0,
+      });
+    });
+
+    // byService series from popularServices (revenue not computed here, default 0)
+    const byService = (analytics.popularServices || []).map((s) => ({
+      serviceId: s.serviceId || null,
+      name: s.name || 'Unknown',
+      count: Number.isFinite(+s.count) ? +s.count : 0,
+      revenue: 0,
+    }));
+
+    const compatPayload = {
+      ...responseData,
+      kpis: { bookings: kBookings, revenue: kRevenue, cancellations: kCancellations, noShows: kNoShows, avgTicket: kAvgTicket },
+      series: { byDay, byService },
+      tz, period: period || null, // echo back for clients
+    };
+
     if (exportCsv) {
       const parser = new Parser();
       const csv = parser.parse(analytics);
@@ -349,7 +405,7 @@ export async function GET(request) {
       });
     }
 
-    return NextResponse.json(responseData, { status: 200 });
+    return NextResponse.json(compatPayload, { status: 200 });
   } catch (err) {
     Sentry.captureException(err);
     console.error('❌ Analytics error:', err);

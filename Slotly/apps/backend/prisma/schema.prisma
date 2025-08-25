@@ -25,14 +25,30 @@ model User {
   updatedAt      DateTime     @updatedAt
 
   otp          String?
-  otpVerified  Boolean?       @default(false)
+  otpVerified  Boolean?  @default(false)
   otpExpiresAt DateTime?
-  RecentSearch RecentSearch[]
 
-  serviceStaff    ServiceStaff[]
-  PromoRedemption PromoRedemption[]
-  ownedBusinesses Business[]        @relation("BusinessOwner")
-  RefreshToken    RefreshToken[]
+  // Relations
+  recentSearches   RecentSearch[]
+  serviceStaff     ServiceStaff[]
+  promoRedemptions PromoRedemption[]
+  ownedBusinesses  Business[]        @relation("BusinessOwner")
+  refreshTokens    RefreshToken[]
+  bookings         Booking[]         @relation("UserBookings")
+  staffBookings    Booking[]         @relation("StaffBookings")
+  markedBookings   Booking[]         @relation("BookingMarker")
+  reviews          Review[]          @relation("UserReviews")
+  notifications    Notification[]    @relation("UserNotifications")
+  staffEnrollments StaffEnrollment[] @relation("StaffUser")
+  availability     Availability[]    @relation("StaffAvailability")
+  timeOffRequests  TimeOffRequest[]  @relation("StaffTimeOff")
+  suspensionLogs   SuspensionLog[]   @relation("UserSuspensions")
+  adminActions     SuspensionLog[]   @relation("AdminActions")
+  previewLogs      PreviewLog[]      @relation("UserPreviews")
+  downloadLogs     DownloadLog[]     @relation("UserDownloads")
+
+  address        UserAddress?
+  passwordResets PasswordReset[]
 }
 
 model Business {
@@ -63,10 +79,27 @@ model Business {
   bankAccount      String?
   accountName      String?
 
-  addOns          AddOn[]           @relation("BusinessAddOns")
-  services        Service[]
-  plan            SubscriptionPlan  @default(LEVEL_1)
-  PromoRedemption PromoRedemption[]
+  plan SubscriptionPlan @default(LEVEL_1)
+
+  // Relations
+  addOns               AddOn[]               @relation("BusinessAddOns")
+  services             Service[]             @relation("BusinessServices")
+  promoRedemptions     PromoRedemption[]     @relation("BusinessPromos")
+  verification         BusinessVerification?
+  subscription         Subscription?
+  adCampaigns          AdCampaign[]          @relation("BusinessCampaigns")
+  serviceBundles       ServiceBundle[]       @relation("BusinessBundles")
+  monthlyReports       MonthlyReport[]       @relation("BusinessReports")
+  suspensionLogs       SuspensionLog[]       @relation("BusinessSuspensions")
+  coupons              Coupon[]              @relation("BusinessCoupons")
+  reviews              Review[]              @relation("BusinessReviews")
+  bookings             Booking[]             @relation("BusinessBookings")
+  payments             Payment[]             @relation("BusinessPayments")
+  subscriptionPayments SubscriptionPayment[] @relation("BusinessSubscriptionPayments")
+  staffEnrollments     StaffEnrollment[]     @relation("BusinessStaff")
+  previewLogs          PreviewLog[]          @relation("BusinessPreviews")
+  availability         Availability[]
+  timeOffRequests      TimeOffRequest[]
 
   @@index([ownerId])
   @@index([plan])
@@ -89,6 +122,10 @@ model Payment {
   txRef             String?        @unique
   createdAt         DateTime       @default(now())
 
+  // Relations
+  booking  Booking?  @relation("BookingPayments", fields: [bookingId], references: [id])
+  business Business? @relation("BusinessPayments", fields: [businessId], references: [id])
+
   @@index([bookingId])
   @@index([businessId])
   @@index([createdAt])
@@ -108,10 +145,14 @@ model Service {
   category   String?
   available  Boolean  @default(true)
   businessId String   @db.ObjectId
-  business   Business @relation(fields: [businessId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  business   Business @relation("BusinessServices", fields: [businessId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   createdAt  DateTime @default(now())
 
-  serviceStaff ServiceStaff[]
+  // Relations
+  serviceStaff   ServiceStaff[]    @relation("ServiceStaff")
+  bookings       Booking[]         @relation("ServiceBookings")
+  serviceImages  ServiceImage[]    @relation("ServiceImages")
+  bundleServices ServiceInBundle[] @relation("BundledServices")
 
   @@index([businessId])
   @@index([category])
@@ -134,6 +175,18 @@ model Booking {
   cancellationDeadlineMinutes Int           @default(120)
   lateCancellationFee         Int           @default(5000)
 
+  couponId String? @db.ObjectId
+  coupon   Coupon? @relation(fields: [couponId], references: [id])
+
+  // Relations
+  user     User      @relation("UserBookings", fields: [userId], references: [id])
+  staff    User?     @relation(name: "StaffBookings", fields: [staffId], references: [id])
+  service  Service   @relation("ServiceBookings", fields: [serviceId], references: [id])
+  business Business  @relation("BusinessBookings", fields: [businessId], references: [id])
+  markedBy User?     @relation(name: "BookingMarker", fields: [markedById], references: [id])
+  payments Payment[] @relation("BookingPayments")
+  reminder Reminder?
+
   @@index([businessId, status])
   @@index([staffId, startTime])
   @@index([businessId])
@@ -144,15 +197,20 @@ model Booking {
 model Subscription {
   id         String           @id @default(auto()) @map("_id") @db.ObjectId
   businessId String           @unique @db.ObjectId
+  business   Business         @relation(fields: [businessId], references: [id])
   plan       SubscriptionPlan
   startDate  DateTime
   endDate    DateTime
   isActive   Boolean          @default(true)
+
+  // Relations
+  payments SubscriptionPayment[] @relation("SubscriptionPayments")
 }
 
 model Reminder {
   id        String         @id @default(auto()) @map("_id") @db.ObjectId
   bookingId String         @unique @db.ObjectId
+  booking   Booking        @relation(fields: [bookingId], references: [id])
   sendAt    DateTime
   sent      Boolean        @default(false)
   method    ReminderMethod
@@ -167,6 +225,13 @@ model Review {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   flagged    Boolean  @default(false)
+
+  // Relations
+  user     User     @relation("UserReviews", fields: [userId], references: [id])
+  business Business @relation("BusinessReviews", fields: [businessId], references: [id])
+
+  @@index([businessId])
+  @@index([userId])
 }
 
 model Coupon {
@@ -182,8 +247,11 @@ model Coupon {
   timesUsed      Int      @default(0)
   minimumSpend   Int?
   businessId     String   @db.ObjectId
+  business       Business @relation("BusinessCoupons", fields: [businessId], references: [id])
 
-  userCoupons UserCoupon[]
+  // Relations
+  userCoupons UserCoupon[] @relation("CouponUsage")
+  Booking     Booking[]
 
   @@index([businessId])
 }
@@ -195,8 +263,12 @@ model UserCoupon {
   usedAt     DateTime?
   issuedFrom String?
 
+  // Relations
   user   User   @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  coupon Coupon @relation("CouponUsage", fields: [couponId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([couponId])
 }
 
 model Referral {
@@ -207,42 +279,65 @@ model Referral {
   rewardIssued      Boolean  @default(false)
   createdAt         DateTime @default(now())
 
+  // Relations
   referrer     User @relation("ReferrerUser", fields: [referrerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   referredUser User @relation("ReferredUser", fields: [referredUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([referrerId])
+  @@index([referredUserId])
 }
 
 model Notification {
   id        String           @id @default(auto()) @map("_id") @db.ObjectId
   userId    String           @db.ObjectId
+  user      User             @relation("UserNotifications", fields: [userId], references: [id])
   type      NotificationType
   title     String
   message   String
   read      Boolean          @default(false)
   createdAt DateTime         @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
 }
 
 model Availability {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  staffId   String   @db.ObjectId
-  startTime DateTime
-  endTime   DateTime
-  createdAt DateTime @default(now())
+  id         String    @id @default(auto()) @map("_id") @db.ObjectId
+  staffId    String    @db.ObjectId
+  staff      User      @relation(name: "StaffAvailability", fields: [staffId], references: [id])
+  businessId String?   @db.ObjectId
+  business   Business? @relation(fields: [businessId], references: [id])
+  startTime  DateTime
+  endTime    DateTime
+  createdAt  DateTime  @default(now())
+
+  @@index([staffId])
+  @@index([businessId])
+  @@index([staffId, businessId, startTime])
 }
 
 model TimeOffRequest {
   id         String        @id @default(auto()) @map("_id") @db.ObjectId
   staffId    String        @db.ObjectId
+  staff      User          @relation(name: "StaffTimeOff", fields: [staffId], references: [id])
+  businessId String?       @db.ObjectId
+  business   Business?     @relation(fields: [businessId], references: [id])
   reason     String?
   startDate  DateTime
   endDate    DateTime
   status     TimeOffStatus @default(PENDING)
   createdAt  DateTime      @default(now())
   reviewedAt DateTime?
+
+  @@index([staffId])
+  @@index([businessId])
+  @@index([staffId, businessId, startDate])
 }
 
 model AdCampaign {
   id         String   @id @default(auto()) @map("_id") @db.ObjectId
   businessId String   @db.ObjectId
+  business   Business @relation("BusinessCampaigns", fields: [businessId], references: [id])
   title      String
   budget     Int
   startDate  DateTime
@@ -256,6 +351,7 @@ model ServiceImage {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   url       String
   serviceId String   @db.ObjectId
+  service   Service  @relation("ServiceImages", fields: [serviceId], references: [id])
   createdAt DateTime @default(now())
 
   @@index([serviceId])
@@ -264,6 +360,7 @@ model ServiceImage {
 model BusinessVerification {
   id              String             @id @default(auto()) @map("_id") @db.ObjectId
   businessId      String             @unique @db.ObjectId
+  business        Business           @relation(fields: [businessId], references: [id])
   type            String
   idNumber        String
   licenseUrl      String?
@@ -273,18 +370,27 @@ model BusinessVerification {
   status          VerificationStatus @default(PENDING)
   reviewedAt      DateTime?
   createdAt       DateTime           @default(now())
+
+  @@index([status])
 }
 
 model StaffEnrollment {
   id              String           @id @default(auto()) @map("_id") @db.ObjectId
   userId          String           @db.ObjectId
+  user            User             @relation("StaffUser", fields: [userId], references: [id])
   businessId      String           @db.ObjectId
+  business        Business         @relation("BusinessStaff", fields: [businessId], references: [id])
   idNumber        String
   idPhotoUrl      String
   selfieWithIdUrl String
   status          EnrollmentStatus @default(PENDING)
   submittedAt     DateTime         @default(now())
   reviewedAt      DateTime?
+
+  @@unique([userId, businessId])
+  @@index([userId])
+  @@index([businessId])
+  @@index([status])
 }
 
 model ServiceBundle {
@@ -294,30 +400,38 @@ model ServiceBundle {
   price       Int
   duration    Int
   businessId  String   @db.ObjectId
+  business    Business @relation("BusinessBundles", fields: [businessId], references: [id])
   createdAt   DateTime @default(now())
+
+  // Relations
+  bundleServices ServiceInBundle[] @relation("BundleContents")
 
   @@index([businessId])
 }
 
 model ServiceInBundle {
-  id        String @id @default(auto()) @map("_id") @db.ObjectId
-  bundleId  String @db.ObjectId
-  serviceId String @db.ObjectId
+  id        String        @id @default(auto()) @map("_id") @db.ObjectId
+  bundleId  String        @db.ObjectId
+  bundle    ServiceBundle @relation("BundleContents", fields: [bundleId], references: [id])
+  serviceId String        @db.ObjectId
+  service   Service       @relation("BundledServices", fields: [serviceId], references: [id])
   position  Int
+
+  @@index([bundleId])
+  @@index([serviceId])
 }
 
 model PromoRedemption {
   id         String    @id @default(auto()) @map("_id") @db.ObjectId
   userId     String    @db.ObjectId
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   code       String
   plan       String?
   redeemedAt DateTime  @default(now())
   trialEnd   DateTime
   businessId String?   @db.ObjectId // ✅ Make this NULLABLE
+  business   Business? @relation("BusinessPromos", fields: [businessId], references: [id], onDelete: SetNull) // ✅ Make relation optional
   consumedAt DateTime? // ✅ Add consumed timestamp
-
-  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  business Business? @relation(fields: [businessId], references: [id], onDelete: SetNull) // ✅ Make relation optional
 
   @@unique([userId, code])
   @@index([userId, code, businessId]) // ✅ Add composite index
@@ -328,58 +442,74 @@ model ServiceStaff {
   id         String   @id @default(auto()) @map("_id") @db.ObjectId
   businessId String   @db.ObjectId
   serviceId  String   @db.ObjectId
+  service    Service  @relation("ServiceStaff", fields: [serviceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   staffId    String   @db.ObjectId
+  staff      User     @relation(fields: [staffId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   createdAt  DateTime @default(now())
-
-  service Service @relation(fields: [serviceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  staff   User    @relation(fields: [staffId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([serviceId, staffId])
   @@index([businessId])
+  @@index([serviceId])
+  @@index([staffId])
 }
 
 model MonthlyReport {
   id         String   @id @default(auto()) @map("_id") @db.ObjectId
   businessId String   @db.ObjectId
+  business   Business @relation("BusinessReports", fields: [businessId], references: [id])
   period     String
   fileUrl    String
   createdAt  DateTime @default(now())
+
+  // Relations
+  downloads DownloadLog[] @relation("ReportDownloads")
 
   @@index([businessId])
   @@index([period])
 }
 
 model SuspensionLog {
-  id         String   @id @default(auto()) @map("_id") @db.ObjectId
-  userId     String?  @db.ObjectId
-  businessId String?  @db.ObjectId
-  adminId    String   @db.ObjectId
-  reason     String?
-  action     String
-  timestamp  DateTime @default(now())
+  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId        String?   @db.ObjectId
+  suspendedUser User?     @relation(name: "UserSuspensions", fields: [userId], references: [id])
+  businessId    String?   @db.ObjectId
+  business      Business? @relation("BusinessSuspensions", fields: [businessId], references: [id])
+  adminId       String    @db.ObjectId
+  admin         User      @relation(name: "AdminActions", fields: [adminId], references: [id])
+  reason        String?
+  action        String
+  timestamp     DateTime  @default(now())
+
+  @@index([userId])
+  @@index([businessId])
+  @@index([adminId])
+  @@index([timestamp])
 }
 
 model AddOn {
   id         String    @id @default(auto()) @map("_id") @db.ObjectId
   businessId String    @db.ObjectId
+  business   Business  @relation("BusinessAddOns", fields: [businessId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   type       AddOnType
   value      Int?
   isActive   Boolean   @default(true)
   createdAt  DateTime  @default(now())
 
-  business Business @relation("BusinessAddOns", fields: [businessId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  @@index([businessId])
 }
 
 model RecentSearch {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   userId    String   @db.ObjectId
+  user      User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   service   String
   latitude  Float
   longitude Float
   category  String?
   createdAt DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  @@index([userId])
+  @@index([createdAt])
 }
 
 model WebhookLog {
@@ -387,27 +517,41 @@ model WebhookLog {
   txRef      String   @unique
   type       String
   receivedAt DateTime @default(now())
+
+  @@index([receivedAt])
 }
 
 model PreviewLog {
   id         String   @id @default(auto()) @map("_id") @db.ObjectId
   userId     String   @db.ObjectId
+  user       User     @relation(name: "UserPreviews", fields: [userId], references: [id])
   businessId String   @db.ObjectId
+  business   Business @relation("BusinessPreviews", fields: [businessId], references: [id])
   period     String
   createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([businessId])
 }
 
 model DownloadLog {
-  id           String   @id @default(auto()) @map("_id") @db.ObjectId
-  reportId     String   @db.ObjectId
-  userId       String   @db.ObjectId
-  downloadedAt DateTime @default(now())
+  id           String        @id @default(auto()) @map("_id") @db.ObjectId
+  reportId     String        @db.ObjectId
+  report       MonthlyReport @relation("ReportDownloads", fields: [reportId], references: [id])
+  userId       String        @db.ObjectId
+  user         User          @relation(name: "UserDownloads", fields: [userId], references: [id])
+  downloadedAt DateTime      @default(now())
+
+  @@index([reportId])
+  @@index([userId])
 }
 
 model SubscriptionPayment {
-  id             String  @id @default(auto()) @map("_id") @db.ObjectId
-  subscriptionId String  @db.ObjectId
-  businessId     String? @db.ObjectId
+  id             String       @id @default(auto()) @map("_id") @db.ObjectId
+  subscriptionId String       @db.ObjectId
+  subscription   Subscription @relation("SubscriptionPayments", fields: [subscriptionId], references: [id])
+  businessId     String?      @db.ObjectId
+  business       Business?    @relation("BusinessSubscriptionPayments", fields: [businessId], references: [id])
 
   amount   Int
   currency String        @default("KES")
@@ -445,9 +589,37 @@ model RefreshToken {
   replacedBy String? // jti of replacement
   userAgent  String?
   ip         String?
+  lastSeenAt DateTime?
+  lastPath   String?
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+model UserAddress {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId       String   @unique @db.ObjectId
+  county       String?
+  city         String?
+  constituency String?
+  street       String?
+  apartment    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PasswordReset {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String    @db.ObjectId
+  user      User      @relation(fields: [userId], references: [id]) // no onDelete for Mongo
+  token     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
 }
 
 enum BusinessType {
@@ -502,6 +674,7 @@ enum PaymentMethod {
   AIRTEL_MONEY
   CARD
   OTHER
+  IN_PERSON
 }
 
 enum PaymentStatus {

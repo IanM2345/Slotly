@@ -11,13 +11,15 @@ import {
   Card,
   Chip,
   Divider,
+  IconButton,
   List,
   Surface,
   Text,
   useTheme,
 } from "react-native-paper";
 
-import { staffApi } from "../../../../lib/staff/api";
+// ✅ Fixed import path - removed extra "mobile/" segment
+import { staffApi } from "../../../../lib/api/modules/staff"
 import type {
   StaffProfile,
   PerformanceMetrics,
@@ -30,26 +32,53 @@ export default function StaffHubScreen() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
+  const [businessId, setBusinessId] = useState<string | null>(null);
+  const [businesses, setBusinesses] = useState<Array<{ id: string; name: string }>>([]);
+
   const [profile, setProfile] = useState<StaffProfile | null>(null);
   const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
   const [schedule, setSchedule] = useState<Appointment[]>([]);
   const [notes, setNotes] = useState<Notification[]>([]);
 
+  // ✅ Fixed useEffect with Promise.allSettled and proper error handling
   useEffect(() => {
     let mounted = true;
     (async () => {
+      setLoading(true);
       try {
-        const [p, m, s, n] = await Promise.all([
-          staffApi.getProfile(),
-          staffApi.getPerformanceMetrics(),
-          staffApi.getSchedule(),
-          staffApi.getNotifications(),
-        ]);
+        // 1) resolve business scope first
+        const ctx = await staffApi.getStaffMe().catch(() => null);
+        const initialBizId =
+          ctx?.activeBusiness?.id || ctx?.businesses?.[0]?.id || null;
+
         if (!mounted) return;
-        setProfile(p);
-        setMetrics(m);
-        setSchedule(s);
-        setNotes(n);
+        setBusinesses(ctx?.businesses || []);
+        setBusinessId(initialBizId);
+
+        // 2) load scoped data (never hang even if one call fails)
+        const results = await Promise.allSettled([
+          staffApi.getProfile({ businessId: initialBizId }),
+          staffApi.getPerformanceMetrics({ businessId: initialBizId }),
+          staffApi.getSchedule({ businessId: initialBizId }),
+          staffApi.getNotifications({ businessId: initialBizId }),
+        ]);
+
+        if (!mounted) return;
+
+        const [p, m, s, n] = results.map((r) =>
+          r.status === "fulfilled" ? r.value : undefined
+        );
+
+        setProfile(p ?? null);
+        setMetrics(m ?? { 
+          completedBookings: 0, 
+          cancellations: 0, 
+          averageRating: null, 
+          commissionEarned: 0, 
+          totalRevenue: 0 
+        });
+        setSchedule(Array.isArray(s) ? s : []);
+        setNotes(Array.isArray(n) ? n : []);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -78,18 +107,79 @@ export default function StaffHubScreen() {
     }
   };
 
+  // ✅ Business switching with Promise.allSettled
+  const handleBusinessSwitch = async (businessId: string) => {
+    setBusinessId(businessId);
+    setLoading(true);
+    try {
+      const results = await Promise.allSettled([
+        staffApi.getProfile({ businessId }),
+        staffApi.getPerformanceMetrics({ businessId }),
+        staffApi.getSchedule({ businessId }),
+        staffApi.getNotifications({ businessId }),
+      ]);
+
+      const [p, m, s, n] = results.map((r) =>
+        r.status === "fulfilled" ? r.value : undefined
+      );
+
+      setProfile(p ?? null);
+      setMetrics(m ?? { 
+        completedBookings: 0, 
+        cancellations: 0, 
+        averageRating: null, 
+        commissionEarned: 0, 
+        totalRevenue: 0 
+      });
+      setSchedule(Array.isArray(s) ? s : []);
+      setNotes(Array.isArray(n) ? n : []);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Navigation to settings
+  const navigateToSettings = () => {
+    router.push("/settings" as any);
+  };
+
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: theme.colors.background }}
       contentContainerStyle={styles.container}
       showsVerticalScrollIndicator={false}
     >
-      {/* Header */}
+      {/* Header with Settings Button */}
       <View style={styles.headerRow}>
         <Text variant="headlineSmall" style={{ fontWeight: "700" }}>
           Staff Dashboard
         </Text>
-      
+        
+        <View style={styles.headerActions}>
+          {/* Business picker (chips) */}
+          {businesses?.length > 1 ? (
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginRight: 8 }}>
+              {businesses.map((b) => (
+                <Chip
+                  key={b.id}
+                  compact
+                  selected={businessId === b.id}
+                  onPress={() => handleBusinessSwitch(b.id)}
+                >
+                  {b.name}
+                </Chip>
+              ))}
+            </View>
+          ) : null}
+          
+          {/* Settings Icon Button */}
+          <IconButton
+            icon="cog"
+            size={24}
+            onPress={navigateToSettings}
+            style={{ margin: 0 }}
+          />
+        </View>
       </View>
 
       {loading ? (
@@ -114,7 +204,15 @@ export default function StaffHubScreen() {
 
           {/* Quick Actions */}
           <View style={styles.grid2}>
-            <Card style={styles.action}onPress={() => router.push("/business/dashboard/staff/profile" as RelativePathString)}>
+            <Card
+              style={styles.action}
+              onPress={() =>
+                router.push({
+                  pathname: "/business/dashboard/staff/profile",
+                  params: { businessId: businessId || "" },
+                } as any)
+              }
+            >
               <Card.Title
                 title="Profile Settings"
                 left={(p) => <List.Icon {...p} icon="account" />}
@@ -122,15 +220,27 @@ export default function StaffHubScreen() {
             </Card>
             <Card
               style={styles.action}
-              onPress={() => router.push("/business/dashboard/staff/availability" as RelativePathString)}
-
+              onPress={() =>
+                router.push({
+                  pathname: "/business/dashboard/staff/availability",
+                  params: { businessId: businessId || "" },
+                } as any)
+              }
             >
               <Card.Title
                 title="Availability & Time-off"
                 left={(p) => <List.Icon {...p} icon="calendar-clock" />}
               />
             </Card>
-            <Card style={styles.action} onPress={() => router.push("schedule" as RelativePathString)}>
+            <Card
+              style={styles.action}
+              onPress={() =>
+                router.push({
+                  pathname: "/business/dashboard/staff/schedule",
+                  params: { businessId: businessId || "" },
+                } as any)
+              }
+            >
               <Card.Title
                 title="My Schedule"
                 left={(p) => <List.Icon {...p} icon="calendar" />}
@@ -138,7 +248,12 @@ export default function StaffHubScreen() {
             </Card>
             <Card
               style={styles.action}
-              onPress={() => router.push("/business/dashboard/staff/performance" as RelativePathString)}
+              onPress={() =>
+                router.push({
+                  pathname: "/business/dashboard/staff/performance",
+                  params: { businessId: businessId || "" },
+                } as any)
+              }
             >
               <Card.Title
                 title="Performance"
@@ -147,7 +262,12 @@ export default function StaffHubScreen() {
             </Card>
             <Card
               style={styles.action}
-              onPress={() => router.push("/business/dashboard/staff/notifications" as RelativePathString)}
+              onPress={() =>
+                router.push({
+                  pathname: "/business/dashboard/staff/notifications",
+                  params: { businessId: businessId || "" },
+                } as any)
+              }
             >
               <Card.Title
                 title="Notifications"
@@ -161,6 +281,8 @@ export default function StaffHubScreen() {
                 }
               />
             </Card>
+            
+
           </View>
 
           {/* At a Glance Metrics */}
@@ -227,14 +349,22 @@ export default function StaffHubScreen() {
             </View>
           </Surface>
 
-          {/* Today’s Schedule (preview) */}
+          {/* Today's Schedule (preview) */}
           <Surface
             elevation={1}
             style={[styles.card, { backgroundColor: theme.colors.surface }]}
           >
             <View style={styles.sectionHeader}>
               <Text variant="titleMedium">Today</Text>
-              <Button mode="text" onPress={() => router.push("/business/dashboard/staff/schedule" as RelativePathString)}>
+              <Button
+                mode="text"
+                onPress={() =>
+                  router.push({
+                    pathname: "/business/dashboard/staff/schedule",
+                    params: { businessId: businessId || "" },
+                  } as any)
+                }
+              >
                 View all
               </Button>
             </View>
@@ -243,7 +373,7 @@ export default function StaffHubScreen() {
               <List.Item
                 key={item.id}
                 title={item.clientName}
-               description={`${item.service} • ${item.duration}`}
+                description={`${item.service} • ${item.duration}`}
                 left={() => (
                   <View
                     style={{
@@ -283,7 +413,15 @@ export default function StaffHubScreen() {
           >
             <View style={styles.sectionHeader}>
               <Text variant="titleMedium">Notifications</Text>
-              <Button mode="text" onPress={() => router.push("/business/dashboard/staff/notifications" as RelativePathString)}>
+              <Button
+                mode="text"
+                onPress={() =>
+                  router.push({
+                    pathname: "/business/dashboard/staff/notifications",
+                    params: { businessId: businessId || "" },
+                  } as any)
+                }
+              >
                 Open
               </Button>
             </View>
@@ -299,7 +437,7 @@ export default function StaffHubScreen() {
             ))}
             {notes.length === 0 && (
               <Text style={{ marginTop: 12, color: theme.colors.onSurfaceVariant }}>
-                You’re all caught up.
+                You're all caught up.
               </Text>
             )}
           </Surface>
@@ -315,6 +453,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: 12,
+  },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
   },
   card: { borderRadius: 20, padding: 12 },
   grid2: { flexDirection: "row", flexWrap: "wrap", gap: 12 },

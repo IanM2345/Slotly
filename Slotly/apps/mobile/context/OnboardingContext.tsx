@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useMemo, useState, useCallback, useEffect, type ReactNode } from "react";
+import { createContext, useContext, useMemo, useState, useCallback, useEffect, useRef, type ReactNode } from "react";
 import { useRouter, type Href } from "expo-router";
 import { useSession } from "./SessionContext";
 import type { BusinessTier } from "./SessionContext";
@@ -184,6 +184,10 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { user, token, updateBusiness } = useSession();
 
+  // Add refs to prevent infinite loops
+  const hasCheckedInitialStatus = useRef(false);
+  const isNavigatingRef = useRef(false);
+
   // initial state
   const initialData: OnboardingData = {
     kycSections: { kra: false, owner: false, industry: false, payment: false, admin: false },
@@ -209,30 +213,46 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
 
   const clearData = useCallback(() => setDataState(initialData), []);
 
-  // Add entry guard for onboarding step 1
+  // FIXED: Add entry guard for onboarding step 1 - prevent infinite loop
   useEffect(() => {
+    // Only run this check once when the component mounts
+    if (hasCheckedInitialStatus.current || !token || isNavigatingRef.current) {
+      return;
+    }
+
     let mounted = true;
-    (async () => {
+    
+    const checkInitialStatus = async () => {
       try {
-        const me = await getMe(token); // jsonFetch attaches token itself in your setup
-        if (!mounted || !me) return;
+        hasCheckedInitialStatus.current = true;
+        const me = await getMe(token);
+        
+        if (!mounted || !me || isNavigatingRef.current) return;
 
         const status = me?.business?.verificationStatus?.toLowerCase?.() || null;
 
         if (me.business) {
           if (["approved", "active", "verified"].includes(status)) {
+            isNavigatingRef.current = true;
             router.replace("/business/dashboard");
             return;
           }
           // has business but not approved yet
+          isNavigatingRef.current = true;
           router.replace("/business/onboarding/pending");
         }
-      } catch {
+      } catch (error) {
+        console.log("Initial status check failed:", error);
         // ignore; user can proceed to fill the form
       }
-    })();
-    return () => { mounted = false; };
-  }, [router, token]);
+    };
+
+    checkInitialStatus();
+    
+    return () => { 
+      mounted = false; 
+    };
+  }, [token]); // Only depend on token, not router
 
   const isStepComplete = useCallback(
     (step: StepKey): boolean => {
@@ -562,6 +582,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         });
 
         // navigate client-side only
+        isNavigatingRef.current = true;
         router.replace("/business/onboarding/pending");
         return { success: true, businessId };
       } catch (e: any) {

@@ -74,3 +74,18 @@ export async function POST(req) {
     return NextResponse.json({ error: "Failed to create business" }, { status: 500 });
   }
 }
+
+export async function GET() {
+  try {
+    const items = await prisma.business.findMany({
+      select: {
+        id: true, name: true, address: true, latitude: true, longitude: true, logoUrl: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return NextResponse.json({ businesses: items }, { status: 200 });
+  } catch (err) {
+    console.error('GET /api/businesses error:', err);
+    return NextResponse.json({ message: 'Internal error' }, { status: 500 });
+  }
+}

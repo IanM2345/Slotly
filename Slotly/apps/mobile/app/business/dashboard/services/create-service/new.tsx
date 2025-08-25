@@ -4,6 +4,8 @@ import { useState } from "react"
 import { View, ScrollView, StyleSheet } from "react-native"
 import { Text, Surface, TextInput, Button, IconButton, Snackbar, useTheme } from "react-native-paper"
 import { useRouter } from "expo-router"
+import { createService } from "../../../../../lib/api/modules/manager"
+import * as Sentry from "sentry-expo"
 
 export default function ServiceNew() {
   const theme = useTheme()
@@ -21,10 +23,24 @@ export default function ServiceNew() {
   const save = async () => {
     if (!isValid) return
     setSaving(true)
-    await new Promise((r) => setTimeout(r, 600))
-    setSaving(false)
-    setSnack({ visible: true, msg: "Service created" })
-    setTimeout(() => router.replace(".."), 350)
+    try {
+      await createService({
+        name: name.trim(),
+        price: Math.max(0, parseInt(price, 10) || 0),     // whole KSh
+        duration: Math.max(0, parseInt(duration, 10) || 0), // minutes
+        // category/emoji/desc optional for now
+      })
+      setSnack({ visible: true, msg: "Service created" })
+      setTimeout(() => router.replace(".."), 350)
+    } catch (e: any) {
+      setSnack({
+        visible: true,
+        msg: e?.response?.data?.error || e?.message || "Failed to create service",
+      })
+      Sentry.Native.captureException(e)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (

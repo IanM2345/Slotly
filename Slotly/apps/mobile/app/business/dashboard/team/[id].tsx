@@ -1,41 +1,34 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import { View, ScrollView, StyleSheet, Alert } from "react-native"
-import { Text, Surface, Button, Switch, IconButton, useTheme } from "react-native-paper"
-import { useLocalSearchParams, useRouter } from "expo-router"
-import { teamApi } from "../../../../lib/team/api"
-import type { TeamMember } from "../../../../lib/team/types"
+import { useEffect, useState } from "react";
+import { View, ScrollView, StyleSheet, Alert } from "react-native";
+import { Text, Surface, Button, IconButton, useTheme } from "react-native-paper";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { listStaff, removeStaff } from "../../../../lib/api/modules/manager";
 
 export default function TeamDetail() {
   const theme = useTheme()
   const router = useRouter()
   const { id } = useLocalSearchParams<{ id: string }>()
-  const [m, setM] = useState<TeamMember | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [m, setM] = useState<any | null>(null)
 
   useEffect(() => {
-    ;(async () => setM((await teamApi.get(id!)) ?? null))()
+    (async () => {
+      const data = await listStaff();
+      const match = (data?.approvedStaff ?? []).find((u: any) => String(u.id) === String(id));
+      setM(match ?? null);
+    })();
   }, [id])
-
-  const toggleActive = async () => {
-    if (!m) return
-    setBusy(true)
-    const next = m.status === "active" ? "inactive" : "active"
-    const updated = await teamApi.update(m.id, { status: next })
-    setM(updated ?? m)
-    setBusy(false)
-  }
 
   const remove = () => {
     if (!m) return
-    Alert.alert("Remove staff?", `${m.firstName} ${m.lastName}`, [
+    Alert.alert("Remove staff?", `${m?.name ?? "—"}`, [
       { text: "Cancel", style: "cancel" },
       {
         text: "Remove",
         style: "destructive",
         onPress: async () => {
-          await teamApi.remove(m.id)
+          await removeStaff(m.id);
           router.replace("..")
         },
       },
@@ -52,18 +45,14 @@ export default function TeamDetail() {
       <View style={styles.header}>
         <IconButton icon="arrow-left" onPress={() => router.back()} />
         <Text style={styles.title}>
-          {m.firstName} {m.lastName}
+          {m?.name ?? "Staff Member"}
         </Text>
       </View>
 
       <Surface style={styles.card} elevation={2}>
-        <Text style={{ marginBottom: 6 }}>Role: {m.role}</Text>
-        <Text style={{ marginBottom: 6 }}>User ID: {m.userId}</Text>
-
-        <View style={styles.row}>
-          <Text>Status: {m.status}</Text>
-          <Switch value={m.status === "active"} onValueChange={toggleActive} disabled={busy} />
-        </View>
+        <Text style={{ marginBottom: 6 }}>Name: {m?.name ?? "—"}</Text>
+        <Text style={{ marginBottom: 6 }}>Email: {m?.email ?? "—"}</Text>
+        <Text style={{ marginBottom: 6 }}>Phone: {m?.phone ?? "—"}</Text>
 
         <View style={{ flexDirection: "row", gap: 12, marginTop: 12 }}>
           <Button mode="outlined" onPress={() => router.back()} style={{ flex: 1 }}>
@@ -82,5 +71,4 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingTop: 60, paddingBottom: 20 },
   title: { fontSize: 22, fontWeight: "bold", color: "#1559C1" },
   card: { backgroundColor: "#FFF", borderRadius: 12, padding: 16, marginHorizontal: 16 },
-  row: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 8 },
 })

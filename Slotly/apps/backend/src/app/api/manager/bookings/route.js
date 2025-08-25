@@ -1,10 +1,13 @@
-
 import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
 import { verifyToken } from '@/middleware/auth'
 
 const prisma = new PrismaClient()
+
+async function getBusinessForOwner(userId) {
+  return prisma.business.findFirst({ where: { ownerId: userId } })
+}
 
 export async function GET(request) {
   try {
@@ -22,13 +25,29 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url)
     const staffId = searchParams.get('staffId') || undefined
     const serviceId = searchParams.get('serviceId') || undefined
-    const businessId = searchParams.get('businessId') || undefined
+    const businessIdQuery = searchParams.get('businessId') || undefined
     const date = searchParams.get('date') || undefined // YYYY-MM-DD
+    const status = searchParams.get('status') || undefined // optional filter
+
+    // Tenant scoping:
+    // - BUSINESS_OWNER: force own business
+    // - ADMIN: may pass ?businessId=..., otherwise reject to avoid cross-tenant dumps
+    let businessId = businessIdQuery
+    if (decoded.role === 'BUSINESS_OWNER') {
+      const biz = await getBusinessForOwner(decoded.userId)
+      if (!biz) return NextResponse.json({ error: 'Business not found' }, { status: 404 })
+      businessId = biz.id
+    } else {
+      if (!businessId) {
+        return NextResponse.json({ error: 'businessId is required' }, { status: 400 })
+      }
+    }
 
     const where = {
-      ...(businessId ? { businessId } : {}),
+      businessId,
       ...(staffId ? { staffId } : {}),
       ...(serviceId ? { serviceId } : {}),
+      ...(status ? { status } : {}),
       ...(date
         ? {
             startTime: {
@@ -45,12 +64,11 @@ export async function GET(request) {
       include: {
         user: { select: { id: true, name: true } },
         staff: { select: { id: true, name: true } },
-        service: { select: { id: true, name: true, duration: true } },
+        service: { select: { id: true, name: true, duration: true, price: true } },
       },
     })
 
-    // ---------- Enrich: paidViaApp (avoid extra per-card request) ----------
-    // Consider "paid via app" when there exists a SUCCESS payment with provider/txRef.
+    // --- Enrich: paidViaApp ---
     const bookingIds = bookings.map(b => b.id)
     let successPayments = []
     if (bookingIds.length > 0) {
@@ -71,8 +89,8 @@ export async function GET(request) {
     const enriched = bookings.map(b => ({
       ...b,
       paidViaApp: paidViaAppSet.has(b.id),
+      price: b?.service?.price ?? null, // convenience for UI
     }))
-    // ----------------------------------------------------------------------
 
     return NextResponse.json({ bookings: enriched })
   } catch (error) {
@@ -111,6 +129,15 @@ export async function PATCH(request) {
     })
     if (!booking) {
       return NextResponse.json({ error: 'Booking not found' }, { status: 404 })
+    }
+
+    // Owner guard: ensure they can only mutate their own business' booking
+    if (decoded.role === 'BUSINESS_OWNER') {
+      const biz = await getBusinessForOwner(decoded.userId)
+      if (!biz) return NextResponse.json({ error: 'Business not found' }, { status: 404 })
+      if (booking.businessId !== biz.id) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      }
     }
 
     switch (action) {

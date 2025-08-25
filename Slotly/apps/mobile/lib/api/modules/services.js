@@ -1,52 +1,43 @@
-
-import api from "../../api/client";
+// apps/mobile/lib/api/modules/services.js
+import api from "../client";
 
 /**
  * List services for a business.
- * Backend: GET /services?businessId=...
+ * Backend: GET /api/services?businessId=...
  */
-export async function listServices({ businessId } = {}) {
-  if (!businessId) throw new Error("listServices: 'businessId' is required.");
-  const { data } = await api.get("/services", { params: { businessId } });
+export async function listServicesForBusiness({ businessId } = {}) {
+  if (!businessId) throw new Error("listServicesForBusiness: 'businessId' is required.");
+  const { data } = await api.get("/api/services", { params: { businessId } });
   return data;
 }
 
 /**
  * Get a single service by id.
- * Since backend has no GET /services/:id, we fetch the business' list and find it.
+ * Backend: GET /api/services/:id
  */
-export async function getService(id, { businessId } = {}) {
+export async function getService(id) {
   if (!id) throw new Error("getService: 'id' is required.");
-  if (!businessId) {
-    throw new Error("getService: 'businessId' is required (no GET /services/:id on backend).");
-  }
-  const services = await listServices({ businessId });
-  const service = services.find((s) => s.id === id);
-  if (!service) {
-    const e = new Error("Service not found");
-    e.code = "NOT_FOUND";
-    throw e;
-  }
-  return service;
+  const { data } = await api.get(`/api/services/${encodeURIComponent(id)}`);
+  return data;
 }
 
 /**
  * Create service.
- * Backend: POST /services
+ * Backend: POST /api/services
  */
 export async function createService(payload) {
-  const { data } = await api.post("/services", payload);
+  const { data } = await api.post("/api/services", payload);
   return data;
 }
 
 /**
  * Update service (requires STAFF role; user must belong to the business).
- * Backend: PUT /services/:id
+ * Backend: PUT /api/services/:id
  */
 export async function updateService(id, updates, { userId, role = "STAFF" } = {}) {
   if (!id) throw new Error("updateService: 'id' is required.");
   if (!userId) throw new Error("updateService: 'userId' is required for authorization.");
-  const { data } = await api.put(`/services/${id}`, updates, {
+  const { data } = await api.put(`/api/services/${encodeURIComponent(id)}`, updates, {
     headers: { "x-user-role": role, "x-user-id": userId },
   });
   return data;
@@ -54,13 +45,18 @@ export async function updateService(id, updates, { userId, role = "STAFF" } = {}
 
 /**
  * Delete service (requires STAFF role; user must belong to the business).
- * Backend: DELETE /services/:id
+ * Backend: DELETE /api/services/:id
  */
 export async function deleteService(id, { userId, role = "STAFF" } = {}) {
   if (!id) throw new Error("deleteService: 'id' is required.");
   if (!userId) throw new Error("deleteService: 'userId' is required for authorization.");
-  const { data } = await api.delete(`/services/${id}`, {
+  const { data } = await api.delete(`/api/services/${encodeURIComponent(id)}`, {
     headers: { "x-user-role": role, "x-user-id": userId },
   });
   return data;
+}
+
+// Legacy function name for backwards compatibility
+export async function listServices({ businessId } = {}) {
+  return listServicesForBusiness({ businessId });
 }

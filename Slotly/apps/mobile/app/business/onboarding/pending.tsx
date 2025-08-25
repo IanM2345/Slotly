@@ -14,7 +14,7 @@ import {
   Chip,
 } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter, type Href } from "expo-router";
+import { useRouter, type Href, useFocusEffect } from "expo-router";
 import { useOnboarding } from "../../../context/OnboardingContext";
 import { useSession } from "../../../context/SessionContext";
 
@@ -29,6 +29,8 @@ export default function PendingVerification() {
   const [status, setStatus] = useState<string>(
     user?.business?.verificationStatus || "pending"
   );
+  const [isMounted, setIsMounted] = useState(false);
+  const [navigationReady, setNavigationReady] = useState(false);
 
   const planName = data.selectedPlan?.name || "Level 1";
   const planTier = data.selectedPlan?.tier?.toUpperCase?.() || "LEVEL1";
@@ -39,6 +41,20 @@ export default function PendingVerification() {
     return s === "approved" || s === "active" || s === "verified";
   }, [status]);
 
+  // Enhanced safe navigation helper with better timing checks
+  const safeNavigate = useCallback((path: string) => {
+    if (isMounted && navigationReady) {
+      try {
+        // Use setTimeout to ensure navigation happens in next tick
+        setTimeout(() => {
+          router.replace(path as any);
+        }, 100);
+      } catch (error) {
+        console.error("Navigation error:", error);
+      }
+    }
+  }, [router, isMounted, navigationReady]);
+
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
@@ -46,30 +62,82 @@ export default function PendingVerification() {
       const me = await getMe(token || undefined);
       if (me) {
         setUser(me as any);
-        setStatus(me?.business?.verificationStatus || "pending");
-      }
+        const newStatus = me?.business?.verificationStatus || "pending";
+        setStatus(newStatus);
 
-      if (me?.business?.verificationStatus &&
-          ["approved", "active", "verified"].includes(me.business.verificationStatus.toLowerCase())) {
-        router.replace("/business/dashboard");
+        // Auto-redirect when approved - enhanced logic with better safety checks
+        const verificationStatus = newStatus?.toLowerCase();
+        if (verificationStatus && ["approved", "active", "verified"].includes(verificationStatus)) {
+          // Only navigate if component is mounted and navigation is ready
+          if (isMounted && navigationReady) {
+            // Add a longer delay to ensure everything is ready
+            setTimeout(() => {
+              safeNavigate("/business/dashboard");
+            }, 1500);
+          }
+        }
       }
     } catch (e) {
-      // silently ignore refresh errors
+      console.error("Failed to refresh verification status:", e);
+      // Optionally show a subtle error indicator
     } finally {
       setRefreshing(false);
     }
-  }, [router, setUser, token]);
+  }, [setUser, token, safeNavigate, isMounted, navigationReady]);
 
-  // Background poll every 15s while on this screen
+  // Use useFocusEffect to ensure component is ready for navigation
+  useFocusEffect(
+    useCallback(() => {
+      setNavigationReady(true);
+      return () => {
+        setNavigationReady(false);
+      };
+    }, [])
+  );
+
+  // Enhanced mount detection and initial setup
   useEffect(() => {
-    setChecking(true);
-    refresh().finally(() => setChecking(false));
-    const id = setInterval(refresh, 15000);
-    return () => clearInterval(id);
-  }, [refresh]);
+    setIsMounted(true);
+    
+    // Add a small delay before starting to check status
+    const mountTimer = setTimeout(() => {
+      setChecking(true);
+      refresh().finally(() => setChecking(false));
+    }, 500);
 
-  const goToOnboarding = () => router.push("/business/onboarding" as Href);
-  const goToSupport = () => router.push("/settings/support" as Href);
+    // Polling interval - reduced frequency to prevent too many requests
+    const pollInterval = setInterval(() => {
+      if (isMounted && navigationReady) {
+        refresh();
+      }
+    }, 10000); // Increased to 10 seconds for better performance
+
+    return () => {
+      clearTimeout(mountTimer);
+      clearInterval(pollInterval);
+      setIsMounted(false);
+      setNavigationReady(false);
+    };
+  }, [refresh, isMounted, navigationReady]);
+
+  // Safe navigation functions with proper checks
+  const goToOnboarding = () => {
+    if (navigationReady) safeNavigate("/business/onboarding");
+  };
+  
+  const goToSupport = () => {
+    if (navigationReady) safeNavigate("/settings/support");
+  };
+  
+  const goToHome = () => {
+    if (navigationReady) safeNavigate("/(tabs)");
+  };
+  
+  const goToDashboard = () => {
+    if (navigationReady && canEnterDashboard) {
+      safeNavigate("/business/dashboard");
+    }
+  };
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -86,7 +154,7 @@ export default function PendingVerification() {
             icon="arrow-left"
             size={22}
             iconColor={theme.colors.primary}
-            onPress={() => router.back()}
+            onPress={() => navigationReady && router.back()}
           />
           <View style={styles.titleContainer}>
             <View style={[styles.stepIndicator, { backgroundColor: theme.colors.primary }]}>
@@ -118,6 +186,23 @@ export default function PendingVerification() {
             {checking ? <ActivityIndicator style={{ marginLeft: 8 }} /> : null}
           </View>
         </Surface>
+
+        {/* Success Banner for Approved Status */}
+        {canEnterDashboard && (
+          <Card style={[styles.pendingBanner, { backgroundColor: "#E8F5E8" }]}>
+            <Card.Content style={styles.bannerContent}>
+              <Text style={styles.successIcon}>✅</Text>
+              <View style={styles.bannerText}>
+                <Text variant="bodyMedium" style={[styles.bannerTitle, { color: "#1B5E20" }]}>
+                  Congratulations! Your business has been approved.
+                </Text>
+                <Text variant="bodySmall" style={[styles.bannerSubtitle, { color: theme.colors.onSurfaceVariant }]}>
+                  You can now access your business dashboard.
+                </Text>
+              </View>
+            </Card.Content>
+          </Card>
+        )}
 
         {/* Pending Warning Banner */}
         {!canEnterDashboard && (
@@ -202,7 +287,9 @@ export default function PendingVerification() {
         <Surface style={[styles.card, { backgroundColor: theme.colors.surface }]} elevation={1}>
           <View style={styles.cardHeader}>
             <Text variant="titleLarge" style={styles.cardTitle}>Submission Summary</Text>
-            <Button mode="text" onPress={refresh}>Refresh</Button>
+            <Button mode="text" onPress={refresh} disabled={!navigationReady}>
+              Refresh
+            </Button>
           </View>
           <Divider />
           <View style={styles.row}>
@@ -270,6 +357,7 @@ export default function PendingVerification() {
             style={styles.actionButton} 
             icon="pencil"
             contentStyle={styles.actionButtonContent}
+            disabled={!navigationReady}
           >
             Edit business profile
           </Button>
@@ -280,6 +368,7 @@ export default function PendingVerification() {
             style={styles.actionButton} 
             icon="eye"
             contentStyle={styles.actionButtonContent}
+            disabled={!navigationReady}
           >
             View verification status
           </Button>
@@ -290,6 +379,7 @@ export default function PendingVerification() {
             style={styles.actionButton} 
             icon="help-circle"
             contentStyle={styles.actionButtonContent}
+            disabled={!navigationReady}
           >
             Contact support
           </Button>
@@ -302,6 +392,7 @@ export default function PendingVerification() {
             onPress={refresh}
             style={[styles.primaryBtn, { backgroundColor: theme.colors.primary }]}
             icon="refresh"
+            disabled={!navigationReady}
           >
             Refresh status
           </Button>
@@ -309,18 +400,20 @@ export default function PendingVerification() {
           {canEnterDashboard ? (
             <Button
               mode="contained"
-              onPress={() => router.replace("/business/dashboard")}
+              onPress={goToDashboard}
               style={[styles.primaryBtn, { backgroundColor: "#1B5E20" }]}
               icon="view-dashboard"
+              disabled={!navigationReady}
             >
               Open dashboard
             </Button>
           ) : (
             <Button
               mode="outlined"
-              onPress={() => router.replace("/(tabs)")}
+              onPress={goToHome}
               style={styles.secondaryBtn}
               icon="home"
+              disabled={!navigationReady}
             >
               Back to home
             </Button>
@@ -358,6 +451,7 @@ const styles = StyleSheet.create({
   pendingBanner: { marginBottom: 12 },
   bannerContent: { flexDirection: "row", alignItems: "center", padding: 12 },
   warningIcon: { fontSize: 20, marginRight: 12 },
+  successIcon: { fontSize: 20, marginRight: 12 },
   bannerText: { flex: 1 },
   bannerTitle: { fontWeight: "600", marginBottom: 2 },
   bannerSubtitle: { fontWeight: "400" },

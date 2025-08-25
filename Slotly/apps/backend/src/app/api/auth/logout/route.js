@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { PrismaClient } from "@/generated/prisma";
 import { authenticateRequest } from "@/middleware/auth";
-import { verify } from "@/lib/tokens";
+import { verifyRefresh } from "../../../../lib/token";
 
 const prisma = new PrismaClient();
 const CORS = {
@@ -31,7 +31,7 @@ export async function POST(req) {
       });
     } else if (refreshToken) {
       try {
-        const d = verify(refreshToken);
+        const d = verifyRefresh(refreshToken);
         if (d.type === "refresh" && d.sub === auth.decoded.sub && d.jti) {
           await prisma.refreshToken.updateMany({
             where: { jti: d.jti, revokedAt: null },

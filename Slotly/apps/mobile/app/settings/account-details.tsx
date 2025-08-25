@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, ScrollView, StyleSheet } from 'react-native';
 import {
   Text,
@@ -9,9 +9,13 @@ import {
   SegmentedButtons,
   useTheme,
   Snackbar,
-  HelperText
+  HelperText,
+  ActivityIndicator,
 } from 'react-native-paper';
 import { useRouter } from 'expo-router';
+
+import { useSession } from '../../context/SessionContext';
+import { getMe, updateMe } from '../../lib/api/modules/users';
 
 interface FormData {
   fullName: string;
@@ -27,38 +31,38 @@ interface FormErrors {
   dateOfBirth?: string;
 }
 
+type SnackType = 'success' | 'error';
+
 export default function AccountDetailsScreen() {
   const theme = useTheme();
   const router = useRouter();
-  
-  const [formData, setFormData] = useState<FormData>({
-    fullName: 'John Doe',
-    email: 'john.doe@email.com',
-    phoneNumber: '+254712345678',
-    dateOfBirth: '1990-01-15'
-  });
-  
+  const { token } = useSession();
+
   const [serviceType, setServiceType] = useState<string>('everyone');
   const [loading, setLoading] = useState<boolean>(false);
+  const [initialLoading, setInitialLoading] = useState<boolean>(true);
   const [errors, setErrors] = useState<FormErrors>({});
   const [snackbarVisible, setSnackbarVisible] = useState<boolean>(false);
   const [snackbarMessage, setSnackbarMessage] = useState<string>('');
-  const [snackbarType, setSnackbarType] = useState<'success' | 'error'>('success');
+  const [snackbarType, setSnackbarType] = useState<SnackType>('success');
 
-  const handleBack = () => {
-    router.back();
-  };
+  const [formData, setFormData] = useState<FormData>({
+    fullName: '',
+    email: '',
+    phoneNumber: '',
+    dateOfBirth: '',
+  });
 
-  const validateEmail = (email: string): boolean => {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email);
-  };
+  // Keep a copy to compare changes before saving
+  const [initialProfile, setInitialProfile] = useState<{ name?: string; email?: string; phone?: string } | null>(null);
 
-  const validatePhoneNumber = (phone: string): boolean => {
-    const phoneRegex = /^\+[1-9]\d{1,14}$/;
-    return phoneRegex.test(phone);
-  };
+  const handleBack = () => router.back();
 
+  // -------- Validation helpers --------
+  const validateEmail = (email: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  
+  const validatePhoneNumber = (phone: string): boolean => /^\+[1-9]\d{1,14}$/.test(phone);
+  
   const validateDate = (date: string): boolean => {
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
     if (!dateRegex.test(date)) return false;
@@ -69,6 +73,29 @@ export default function AccountDetailsScreen() {
     
     return parsedDate <= minAge && parsedDate >= new Date('1900-01-01');
   };
+
+  const updateFormData = (field: keyof FormData, value: string): void => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+    if (errors[field]) setErrors(prev => ({ ...prev, [field]: undefined }));
+  };
+
+  const formatPhoneNumber = (phone: string): string => {
+    let formatted = phone.replace(/[^\d+]/g, '');
+    if (!formatted.startsWith('+')) formatted = '+' + formatted;
+    return formatted;
+  };
+
+  const handlePhoneChange = (text: string) => updateFormData('phoneNumber', formatPhoneNumber(text));
+
+  const formatDateInput = (text: string): string => {
+    const digits = text.replace(/\D/g, '');
+    if (digits.length >= 8) return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+    if (digits.length >= 6) return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6)}`;
+    if (digits.length >= 4) return `${digits.slice(0, 4)}-${digits.slice(4)}`;
+    return digits;
+  };
+
+  const handleDateChange = (text: string) => updateFormData('dateOfBirth', formatDateInput(text));
 
   const validateForm = (): boolean => {
     const newErrors: FormErrors = {};
@@ -88,19 +115,65 @@ export default function AccountDetailsScreen() {
     if (!formData.phoneNumber.trim()) {
       newErrors.phoneNumber = 'Phone number is required';
     } else if (!validatePhoneNumber(formData.phoneNumber)) {
-      newErrors.phoneNumber = 'Please enter a valid phone number (e.g., +254712345678)';
+      newErrors.phoneNumber = 'Use E.164 format (e.g., +254712345678)';
     }
 
-    if (!formData.dateOfBirth.trim()) {
-      newErrors.dateOfBirth = 'Date of birth is required';
-    } else if (!validateDate(formData.dateOfBirth)) {
-      newErrors.dateOfBirth = 'Please enter a valid date (YYYY-MM-DD) and must be at least 13 years old';
+    if (formData.dateOfBirth && !validateDate(formData.dateOfBirth)) {
+      newErrors.dateOfBirth = 'Use YYYY-MM-DD and at least 13 years old';
     }
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
+  // -------- Load current user from API --------
+  const loadProfile = useCallback(async () => {
+    if (!token) {
+      // If no token, use fallback data for development/testing
+      setFormData({
+        fullName: 'John Doe',
+        email: 'john.doe@email.com',
+        phoneNumber: '+254712345678',
+        dateOfBirth: '1990-01-15'
+      });
+      setInitialLoading(false);
+      return;
+    }
+
+    try {
+      setInitialLoading(true);
+      const me = await getMe(token); // { id, email, name, phone, role, createdAt }
+      setInitialProfile({ name: me?.name, email: me?.email, phone: me?.phone });
+
+      setFormData({
+        fullName: me?.name || '',
+        email: me?.email || '',
+        phoneNumber: me?.phone || '',
+        dateOfBirth: '', // no server field yet
+      });
+    } catch (e) {
+      console.error('Failed to load profile:', e);
+      setSnackbarMessage('Failed to load account details.');
+      setSnackbarType('error');
+      setSnackbarVisible(true);
+      
+      // Fallback to demo data on error
+      setFormData({
+        fullName: 'John Doe',
+        email: 'john.doe@email.com',
+        phoneNumber: '+254712345678',
+        dateOfBirth: '1990-01-15'
+      });
+    } finally {
+      setInitialLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    loadProfile();
+  }, [loadProfile]);
+
+  // -------- Save changes --------
   const handleSaveChanges = async (): Promise<void> => {
     if (!validateForm()) {
       setSnackbarMessage('Please fix the errors before saving');
@@ -111,16 +184,38 @@ export default function AccountDetailsScreen() {
 
     setLoading(true);
     try {
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      console.log('Saving account details:', { ...formData, serviceType });
+      if (token && initialProfile) {
+        // Real API call - only send changed fields your API accepts: { name?, phone?, password? }
+        const payload: { name?: string; phone?: string } = {};
+        if (initialProfile?.name !== formData.fullName) payload.name = formData.fullName.trim();
+        if (initialProfile?.phone !== formData.phoneNumber) payload.phone = formData.phoneNumber.trim();
+
+        if (!payload.name && !payload.phone) {
+          setSnackbarMessage('Nothing to update.');
+          setSnackbarType('success');
+          setSnackbarVisible(true);
+          setLoading(false);
+          return;
+        }
+
+        await updateMe(payload, token);
+        // Refresh initial cache so subsequent edits diff correctly
+        setInitialProfile(prev => ({ 
+          ...(prev || {}), 
+          name: formData.fullName, 
+          phone: formData.phoneNumber 
+        }));
+      } else {
+        // Demo/development mode - simulate API call
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        console.log('Demo mode - saving account details:', { ...formData, serviceType });
+      }
       
       setSnackbarMessage('Account details saved successfully!');
       setSnackbarType('success');
       setSnackbarVisible(true);
       
-      setTimeout(() => {
-        router.back();
-      }, 1500);
+      setTimeout(() => router.back(), 1500);
     } catch (error) {
       console.error('Error saving account details:', error);
       setSnackbarMessage('Failed to save account details. Please try again.');
@@ -131,63 +226,22 @@ export default function AccountDetailsScreen() {
     }
   };
 
-  const updateFormData = (field: keyof FormData, value: string): void => {
-    setFormData(prev => ({
-      ...prev,
-      [field]: value
-    }));
-    
-    if (errors[field]) {
-      setErrors(prev => ({
-        ...prev,
-        [field]: undefined
-      }));
-    }
-  };
+  const snackBg = snackbarType === 'error' ? theme.colors.error : theme.colors.primary;
 
-  const formatPhoneNumber = (phone: string): string => {
-    let formatted = phone.replace(/[^\d+]/g, '');
-    
-    if (!formatted.startsWith('+')) {
-      formatted = '+' + formatted;
-    }
-    
-    return formatted;
-  };
-
-  const handlePhoneChange = (text: string): void => {
-    const formatted = formatPhoneNumber(text);
-    updateFormData('phoneNumber', formatted);
-  };
-
-  const formatDateInput = (text: string): string => {
-    const digits = text.replace(/\D/g, '');
-    
-    if (digits.length >= 8) {
-      return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
-    } else if (digits.length >= 6) {
-      return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6)}`;
-    } else if (digits.length >= 4) {
-      return `${digits.slice(0, 4)}-${digits.slice(4)}`;
-    }
-    return digits;
-  };
-
-  const handleDateChange = (text: string): void => {
-    const formatted = formatDateInput(text);
-    updateFormData('dateOfBirth', formatted);
-  };
+  if (initialLoading) {
+    return (
+      <Surface style={[styles.container, { backgroundColor: theme.colors.background, alignItems: 'center', justifyContent: 'center' }]}>
+        <ActivityIndicator size="large" />
+        <Text style={{ marginTop: 16, color: theme.colors.onSurfaceVariant, fontSize: 16 }}>Loading account details...</Text>
+      </Surface>
+    );
+  }
 
   return (
     <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
-        <IconButton
-          icon="arrow-left"
-          size={24}
-          iconColor={theme.colors.onSurface}
-          onPress={handleBack}
-        />
+        <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={handleBack} />
         <Text style={[styles.headerTitle, { color: theme.colors.onSurface }]}>Account Details</Text>
         <View style={styles.headerSpacer} />
       </View>
@@ -196,7 +250,7 @@ export default function AccountDetailsScreen() {
         {/* Personal Details Section */}
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>Personal Details</Text>
-          
+
           <View style={styles.formContainer}>
             <View>
               <TextInput
@@ -211,9 +265,7 @@ export default function AccountDetailsScreen() {
                 autoCapitalize="words"
                 error={!!errors.fullName}
               />
-              <HelperText type="error" visible={!!errors.fullName}>
-                {errors.fullName}
-              </HelperText>
+              <HelperText type="error" visible={!!errors.fullName}>{errors.fullName}</HelperText>
             </View>
 
             <View>
@@ -221,16 +273,20 @@ export default function AccountDetailsScreen() {
                 mode="outlined"
                 label="Email"
                 value={formData.email}
-                onChangeText={(text) => updateFormData('email', text.toLowerCase())}
+                onChangeText={(text) => token && initialProfile ? {} : updateFormData('email', text.toLowerCase())}
                 style={styles.textInput}
                 outlineColor={errors.email ? theme.colors.error : theme.colors.outline}
-                activeOutlineColor={errors.email ? theme.colors.error : theme.colors.primary}
+                activeOutlineColor={errors.email ? theme.colors.error : (token && initialProfile ? theme.colors.outline : theme.colors.primary)}
                 textColor={theme.colors.onSurface}
                 keyboardType="email-address"
                 autoCapitalize="none"
+                disabled={!!(token && initialProfile)}
                 error={!!errors.email}
               />
-              <HelperText type="error" visible={!!errors.email}>
+              <HelperText type="info" visible={!!(token && initialProfile)}>
+                Email changes are managed separately.
+              </HelperText>
+              <HelperText type="error" visible={!!errors.email && !(token && initialProfile)}>
                 {errors.email}
               </HelperText>
             </View>
@@ -249,9 +305,7 @@ export default function AccountDetailsScreen() {
                 placeholder="+254712345678"
                 error={!!errors.phoneNumber}
               />
-              <HelperText type="error" visible={!!errors.phoneNumber}>
-                {errors.phoneNumber}
-              </HelperText>
+              <HelperText type="error" visible={!!errors.phoneNumber}>{errors.phoneNumber}</HelperText>
             </View>
 
             <View>
@@ -269,9 +323,10 @@ export default function AccountDetailsScreen() {
                 maxLength={10}
                 error={!!errors.dateOfBirth}
               />
-              <HelperText type="error" visible={!!errors.dateOfBirth}>
-                {errors.dateOfBirth}
+              <HelperText type="info" visible={!!(token && initialProfile)}>
+                Not synced to server yet.
               </HelperText>
+              <HelperText type="error" visible={!!errors.dateOfBirth}>{errors.dateOfBirth}</HelperText>
             </View>
           </View>
         </View>
@@ -280,31 +335,24 @@ export default function AccountDetailsScreen() {
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>Service Type</Text>
           <Text style={[styles.sectionSubtitle, { color: theme.colors.onSurfaceVariant }]}>Choose who can book your services</Text>
-          
+
           <View style={styles.serviceTypeContainer}>
             <SegmentedButtons
               value={serviceType}
               onValueChange={setServiceType}
               buttons={[
-                {
-                  value: 'women',
-                  label: 'Women Only',
-                  style: styles.segmentButton
-                },
-                {
-                  value: 'men',
-                  label: 'Men Only',
-                  style: styles.segmentButton
-                },
-                {
-                  value: 'everyone',
-                  label: 'Everyone',
-                  style: styles.segmentButton
-                }
+                { value: 'women', label: 'Women Only', style: styles.segmentButton },
+                { value: 'men', label: 'Men Only', style: styles.segmentButton },
+                { value: 'everyone', label: 'Everyone', style: styles.segmentButton },
               ]}
               style={[styles.segmentedButtons, { backgroundColor: theme.colors.surfaceVariant }]}
             />
           </View>
+          {token && initialProfile && (
+            <HelperText type="info" visible style={{ marginTop: 8 }}>
+              Service type preferences coming soon.
+            </HelperText>
+          )}
         </View>
 
         {/* Save Button */}
@@ -322,19 +370,15 @@ export default function AccountDetailsScreen() {
           </Button>
         </View>
 
-        {/* Bottom Spacing */}
         <View style={styles.bottomSpacing} />
       </ScrollView>
 
-      {/* Snackbar for feedback */}
+      {/* Snackbar */}
       <Snackbar
         visible={snackbarVisible}
         onDismiss={() => setSnackbarVisible(false)}
         duration={3000}
-        style={[
-          styles.snackbar,
-          snackbarType === 'error' ? { backgroundColor: theme.colors.error } : { backgroundColor: (theme.colors as any).success }
-        ]}
+        style={[styles.snackbar, { backgroundColor: snackBg }]}
       >
         {snackbarMessage}
       </Snackbar>
@@ -343,75 +387,23 @@ export default function AccountDetailsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingTop: 16,
-    paddingBottom: 8,
-  },
-  headerTitle: {
-    flex: 1,
-    fontSize: 24,
-    fontWeight: 'bold',
-    textAlign: 'center',
-  },
-  headerSpacer: {
-    width: 48,
-  },
-  scrollView: {
-    flex: 1,
-    paddingHorizontal: 16,
-  },
-  section: {
-    marginBottom: 32,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 8,
-  },
-  sectionSubtitle: {
-    fontSize: 14,
-    marginBottom: 16,
-  },
-  formContainer: {
-    gap: 4,
-  },
-  textInput: {
-    backgroundColor: 'transparent',
-  },
-  serviceTypeContainer: {
-    marginTop: 8,
-  },
-  segmentedButtons: {
-    borderRadius: 25,
-    borderWidth: 1,
-  },
-  segmentButton: {
-    borderColor: 'transparent',
-  },
-  saveButtonContainer: {
-    marginTop: 40,
-    marginBottom: 24,
-  },
-  saveButton: {
-    borderRadius: 25,
-  },
-  saveButtonContent: {
-    paddingVertical: 12,
-  },
-  saveButtonText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  bottomSpacing: {
-    height: 32,
-  },
-  snackbar: {
-    marginBottom: 20,
-  },
+  container: { flex: 1 },
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingTop: 16, paddingBottom: 8 },
+  headerTitle: { flex: 1, fontSize: 24, fontWeight: 'bold', textAlign: 'center' },
+  headerSpacer: { width: 48 },
+  scrollView: { flex: 1, paddingHorizontal: 16 },
+  section: { marginBottom: 32 },
+  sectionTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 8 },
+  sectionSubtitle: { fontSize: 14, marginBottom: 16 },
+  formContainer: { gap: 4 },
+  textInput: { backgroundColor: 'transparent' },
+  serviceTypeContainer: { marginTop: 8 },
+  segmentedButtons: { borderRadius: 25, borderWidth: 1 },
+  segmentButton: { borderColor: 'transparent' },
+  saveButtonContainer: { marginTop: 40, marginBottom: 24 },
+  saveButton: { borderRadius: 25 },
+  saveButtonContent: { paddingVertical: 12 },
+  saveButtonText: { fontSize: 18, fontWeight: 'bold' },
+  bottomSpacing: { height: 32 },
+  snackbar: { marginBottom: 20 },
 });

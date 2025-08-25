@@ -7,7 +7,6 @@ import { Snackbar } from "react-native-paper";
 import { useSession } from "../../../../context/SessionContext";
 import { slotlyTheme } from "../../../theme/paper";
 
-
 interface ToastContextType {
   notify: (message: string) => void;
 }
@@ -22,9 +21,9 @@ export const useToast = () => {
 export default function StaffLayout() {
   const { user } = useSession();
 
-  // 🔒 guard
+  // 🔒 role-aware guard
   if (!user) return <Redirect href="/login" />;
-  if (user.accountType !== "staff") return <Redirect href="/" />;
+  if (user.role !== "STAFF") return <Redirect href="/" />;
 
   const [snackbarVisible, setSnackbarVisible] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState("");
@@ -37,7 +36,7 @@ export default function StaffLayout() {
   return (
     <ToastContext.Provider value={{ notify }}>
       <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="index" />          {/* ← add index explicitly */}
+        <Stack.Screen name="index" />
         <Stack.Screen name="profile" />
         <Stack.Screen name="availability" />
         <Stack.Screen name="notifications" />

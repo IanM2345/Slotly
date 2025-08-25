@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from "react"
 import { View, ScrollView, StyleSheet, Dimensions, Platform } from "react-native"
-import { Text, Surface, ActivityIndicator, IconButton, Button, useTheme, TextInput } from "react-native-paper"
+import { Text, Surface, ActivityIndicator, IconButton, Button, useTheme, TextInput, Banner } from "react-native-paper"
 import { useRouter } from "expo-router"
 import { useTier } from "../../../context/TierContext"
 import { useVerification } from "../../../context/VerificationContext"
@@ -12,6 +12,7 @@ import { LockedFeature } from "../../../components/LockedFeature"
 import { KpiCard } from "../../../components/KpiCard"
 import { Section } from "../../../components/Section"
 import { FilterChipsRow } from "../../../components/FilterChipsRow"
+import { useSession } from "../../../context/SessionContext"
 
 // API
 import { getAnalytics, getAnalyticsCsv } from "../../../lib/api/modules/manager"
@@ -35,7 +36,6 @@ import {
   VictoryLegend,
   VictoryLabel,
   VictoryTheme,
-  // VictoryTheme (only exists on web build)
 } from "victory-native";
 
 
@@ -130,6 +130,7 @@ export default function AnalyticsScreen() {
   const theme = useTheme()
   const { features } = useTier()
   const { isVerified } = useVerification()
+  const { token } = useSession() // token is attached by the shared API client; kept here if needed elsewhere
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -150,6 +151,8 @@ export default function AnalyticsScreen() {
   const [showEndPicker, setShowEndPicker] = useState(false)
 
   const [data, setData] = useState<AnalyticsResponse | null>(null)
+  const [empty, setEmpty] = useState(false)
+  const [lockedMsg, setLockedMsg] = useState<string | null>(null)
 
   // Cleanup date pickers on unmount
   useEffect(() => {
@@ -162,24 +165,113 @@ export default function AnalyticsScreen() {
   const loadAnalytics = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setLockedMsg(null)
     try {
+      // Current backend (shared client attaches token). We'll support both response shapes.
       const res = await getAnalytics({
-        view: viewToQuery(selectedPeriod[0]),
-        metrics: selectedMetrics.join(","),
-        startDate: fmtDate(startDate),
-        endDate: fmtDate(endDate),
-        smoothing: "false",
-        staffLimit: 8,
+        view: viewToQuery(selectedPeriod[0]), // "daily" | "weekly" | "monthly"
+        ...(startDate ? { startDate: fmtDate(startDate) } : {}),
+        ...(endDate ? { endDate: fmtDate(endDate) } : {}),
+        metrics: "bookings,revenue,clients,services,staffPerformance,noShows",
       })
-      setData(res)
+
+      // Normalize to screen shape
+      let adapted: AnalyticsResponse
+      if (res?.analytics) {
+        // New backend shape: { analytics, meta }
+        const a = res.analytics || {}
+        adapted = {
+          analytics: {
+            revenue: a.revenue ?? {},
+            bookings: a.bookings ?? {},
+            clients: Number.isFinite(a.clients) ? a.clients : 0,
+            popularServices: Array.isArray(a.popularServices)
+              ? a.popularServices.map((row: any) => ({
+                  name: row?.name ?? "—",
+                  count: Number.isFinite(+row?.count) ? +row.count : 0,
+                }))
+              : [],
+            staffPerformance: Array.isArray(a.staffPerformance) ? a.staffPerformance : [],
+            noShows: a.noShows ?? {},
+          },
+          meta: {
+            startDate: fmtDate(startDate) ?? "",
+            endDate: fmtDate(endDate) ?? "",
+            view: viewToQuery(selectedPeriod[0]),
+          },
+        }
+      } else {
+        // Earlier proposal: { kpis, series }
+        const k = res?.kpis ?? {}
+        const s = res?.series ?? {}
+        const revenue: Record<string, number> = {}
+        const bookings: Record<string, number> = {}
+        const byDay = Array.isArray(s.byDay) ? s.byDay : []
+        for (const p of byDay) {
+          const d = String(p?.date ?? "")
+          if (!d) continue
+          revenue[d]  = Number.isFinite(+p?.revenue)  ? +p.revenue  : 0
+          bookings[d] = Number.isFinite(+p?.bookings) ? +p.bookings : 0
+        }
+        const byService = Array.isArray(s.byService) ? s.byService : []
+        const popularServices = byService.map((row: any) => ({
+          name: row?.name ?? "—",
+          count: Number.isFinite(+row?.count) ? +row.count : 0,
+        }))
+        adapted = {
+          analytics: {
+            revenue,
+            bookings,
+            clients: Number.isFinite(k.clients) ? k.clients : 0,
+            popularServices,
+            staffPerformance: [],
+            noShows: {},
+          },
+          meta: {
+            startDate: fmtDate(startDate) ?? "",
+            endDate: fmtDate(endDate) ?? "",
+            view: viewToQuery(selectedPeriod[0]),
+          },
+        }
+      }
+
+      setData(adapted)
+
+      // Empty-state check based on normalized dicts
+      const hasRevenue = Object.values(adapted.analytics.revenue ?? {}).some((v) => Number(v) > 0)
+      const hasBookings = Object.values(adapted.analytics.bookings ?? {}).some((v) => Number(v) > 0)
+      setEmpty(!(hasRevenue || hasBookings))
     } catch (e: unknown) {
-      const errorMessage = e instanceof Error ? e.message : "Failed to load analytics"
+      // Axios/fetch error shapes
+      const status = (e as any)?.response?.status ?? (e as any)?.status
+      const msg = (e as any)?.response?.data?.error || (e as any)?.message
       console.error("Error loading analytics:", e)
-      setError(errorMessage)
+
+      // Treat 403/404 as soft empty (renderable) + optional banner
+      if (status === 403 || status === 404) {
+        setLockedMsg(
+          status === 403
+            ? ((e as any)?.response?.data?.suggestion
+                ? `${(e as any)?.response?.data?.error} • ${(e as any)?.response?.data?.suggestion}`
+                : "Analytics not available on your current plan.")
+            : "No business found for your account."
+        )
+        setError(null)
+      } else {
+        const fallback = typeof msg === "string" && msg ? msg : "Failed to load analytics"
+        setError(fallback)
+      }
+
+      // Render an empty dataset so UI can display empty charts
+      setData({
+        analytics: { revenue: {}, bookings: {}, clients: 0, popularServices: [], staffPerformance: [], noShows: {} },
+        meta: { startDate: "", endDate: "", view: viewToQuery(selectedPeriod[0]) },
+      })
+      setEmpty(true)
     } finally {
       setLoading(false)
     }
-  }, [selectedPeriod, selectedMetrics, startDate, endDate])
+  }, [selectedPeriod, selectedMetrics, startDate, endDate, token])
 
   useEffect(() => {
     if (features.analytics && isVerified) {
@@ -409,7 +501,7 @@ export default function AnalyticsScreen() {
     }
   }, [])
 
-  // Render locked state
+  // Render locked state (feature flag or verification gate)
   if (!features.analytics || !isVerified) {
     return (
       <VerificationGate>
@@ -462,6 +554,18 @@ export default function AnalyticsScreen() {
           </View>
         ) : (
           <>
+            {lockedMsg && (
+              <View style={{ paddingHorizontal: 16 }}>
+                <Banner
+                  visible
+                  icon="lock"
+                  style={{ marginBottom: 12, borderRadius: 12 }}
+                >
+                  {lockedMsg}
+                </Banner>
+              </View>
+            )}
+
             {/* KPI Metrics */}
             <Section title="Key Metrics">
               <View style={styles.kpiGrid}>
@@ -549,8 +653,16 @@ export default function AnalyticsScreen() {
               </View>
             </Section>
 
-            {/* Charts */}
+            {/* Charts or Empty */}
             <Section title="Performance Charts">
+              {empty ? (
+                <Surface style={styles.chartContainer} elevation={1}>
+                  <Text style={{ color: "#6B7280", marginBottom: 6 }}>No analytics yet.</Text>
+                  <Text style={{ color: "#9CA3AF" }}>
+                    You'll see charts here once you start getting bookings and revenue.
+                  </Text>
+                </Surface>
+              ) : (
               <View style={styles.chartsContainer}>
                 {/* Grouped Bar Chart */}
                 <Surface style={styles.chartContainer} elevation={2}>
@@ -586,7 +698,7 @@ export default function AnalyticsScreen() {
                             x, 
                             y: Math.round((groupBars.a[i] || 0) / 100) 
                           }))}
-                          labels={({ datum }: { datum: ChartPoint }) => (datum.y ? `$${datum.y}` : "")}
+                          labels={({ datum }: { datum: ChartPoint }) => (datum.y ? `${datum.y}` : "")}
                           labelComponent={<VictoryLabel dy={-6} style={{ fontSize: 8 }} />}
                         />
                         <VictoryBar
@@ -605,18 +717,22 @@ export default function AnalyticsScreen() {
                 {/* Pie Chart */}
                 <Surface style={styles.chartContainer} elevation={2}>
                   <Text style={styles.chartTitle}>Service Distribution</Text>
-                  <Svg width={chartW} height={260}>
-                    <VictoryPie
-                      standalone={false}
-                      width={chartW}
-                      height={260}
-                      data={pieData}
-                      labels={({ datum }: { datum: PieDataPoint }) => datum.label}
-                      labelPlacement="parallel"
-                      labelRadius={(props) => typeof props.radius === "number" ? props.radius * 0.7 : 0}
-                      padding={{ left: 30, right: 30, top: 10, bottom: 10 }}
-                    />
-                  </Svg>
+                  {pieData.length === 0 ? (
+                    <Text style={{ color: "#6B7280" }}>No service activity yet.</Text>
+                  ) : (
+                    <Svg width={chartW} height={260}>
+                      <VictoryPie
+                        standalone={false}
+                        width={chartW}
+                        height={260}
+                        data={pieData}
+                        labels={({ datum }: { datum: PieDataPoint }) => datum.label}
+                        labelPlacement="parallel"
+                        labelRadius={(props) => typeof props.radius === "number" ? props.radius * 0.7 : 0}
+                        padding={{ left: 30, right: 30, top: 10, bottom: 10 }}
+                      />
+                    </Svg>
+                  )}
                 </Surface>
 
                 {/* Staff Performance Horizontal Bar Chart */}
@@ -665,6 +781,7 @@ export default function AnalyticsScreen() {
                   </Svg>
                 </Surface>
               </View>
+              )}
             </Section>
 
             {/* Export & Reports Actions */}

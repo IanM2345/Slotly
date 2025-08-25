@@ -9,7 +9,7 @@ import { useHeaderHeight } from "@react-navigation/elements";
 import { useOnboarding } from "../../../context/OnboardingContext";
 import { useSession } from "../../../context/SessionContext";
 import { clearSession } from "../../../lib/api/modules/auth";
-import { getMe } from "../../../lib/api/modules/users"; // Static import
+import { getMe } from "../../../lib/api/modules/users";
 import { newPlacesSessionToken, placesAutocomplete, geocode } from "../../../lib/api/map";
 import { useRouter } from "expo-router";
 
@@ -18,7 +18,7 @@ export default function BusinessInformation() {
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
   const router = useRouter();
-  const { updateBusiness, token } = useSession();
+  const { updateBusiness, token, user } = useSession(); // Also get user from session
   const { setData, goNext } = useOnboarding();
 
   const [formData, setFormData] = useState({
@@ -29,12 +29,10 @@ export default function BusinessInformation() {
     address: "",
   });
 
-  // keep coords in local state so we can ship them forward on "Next"
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
-
   const [loading, setLoading] = useState(false);
 
-  // Auth guard
+  // Auth guard - simplified
   const [authChecking, setAuthChecking] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
 
@@ -45,73 +43,122 @@ export default function BusinessInformation() {
   const [fetching, setFetching] = useState(false);
   const debounceRef = useRef<any>(null);
 
-  // Single guard: token → getMe() → branch by verification tied to that user
+  // Simplified auth guard - fix the race condition
   useEffect(() => {
     let mounted = true;
-    (async () => {
+    
+    const checkAuth = async () => {
       try {
+        console.log("🔍 Auth check starting...");
         setAuthChecking(true);
         setAuthError(null);
 
-        // If you expect strictly token auth on mobile, bail early when missing
+        // Early exit if no token
         if (!token) {
-          setAuthError("You're not signed in. Please sign in to register a business.");
+          if (mounted) {
+            setAuthError("You're not signed in. Please sign in to register a business.");
+            setAuthChecking(false);
+          }
           return;
         }
 
+        console.log("🔍 Token exists, checking user data...");
+
+        // Single call to getMe
         const me = await getMe(token);
+        
         if (!mounted) return;
 
-        const status = String(me?.business?.verificationStatus || "").toLowerCase();
+        console.log("🔍 User data received:", {
+          hasUser: !!me,
+          hasBusiness: !!me?.business,
+          verificationStatus: me?.business?.verificationStatus,
+          role: me?.role
+        });
+
+        // Check if user has business and is verified
         if (me?.business) {
+          const status = String(me.business.verificationStatus || "").toLowerCase();
+          console.log("🔍 Business verification status:", status);
+          
           if (["approved", "active", "verified"].includes(status)) {
+            console.log("→ Redirecting to dashboard (verified business)");
             router.replace("/business/dashboard");
             return;
           }
-          router.replace("/business/onboarding/pending");
-          return;
+          
+          if (["pending", "submitted"].includes(status)) {
+            console.log("→ Redirecting to pending (business under review)");
+            router.replace("/business/onboarding/pending");
+            return;
+          }
         }
-        // no business → stay
-      } catch (e: any) {
-        const msg =
-          e?.response?.data?.error ||
-          e?.response?.data?.message ||
-          e?.message ||
+
+        // If we get here, user can proceed with onboarding
+        console.log("✅ Auth check passed - user can proceed with onboarding");
+        
+      } catch (error: any) {
+        console.error("❌ Auth check failed:", error);
+        
+        if (!mounted) return;
+        
+        const errorMessage = error?.response?.data?.error ||
+          error?.response?.data?.message ||
+          error?.message ||
           "Your session has expired. Please sign in again.";
-        if (mounted) setAuthError(msg);
-        await clearSession();
+          
+        setAuthError(errorMessage);
+        
+        // Clear session on auth failure
+        try {
+          await clearSession();
+        } catch (clearError) {
+          console.error("Failed to clear session:", clearError);
+        }
       } finally {
-        if (mounted) setAuthChecking(false);
+        if (mounted) {
+          setAuthChecking(false);
+        }
       }
-    })();
-    return () => { mounted = false; };
-  }, [token, router]);
+    };
+
+    checkAuth();
+    
+    return () => {
+      mounted = false;
+    };
+  }, [token, router]); // Only depend on token and router
 
   // Watch address for autocomplete
   useEffect(() => {
     if (!addrQuery?.trim()) {
       setSuggestions([]);
-      setSessionToken(null); // reset session when cleared
+      setSessionToken(null);
       return;
     }
-    if (!sessionToken) setSessionToken(newPlacesSessionToken()); // first keystroke → token
-    if (debounceRef.current) clearTimeout(debounceRef.current);
+    
+    if (!sessionToken) {
+      setSessionToken(newPlacesSessionToken());
+    }
+    
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
 
     debounceRef.current = setTimeout(async () => {
       setFetching(true);
       try {
         const predictions = await placesAutocomplete(addrQuery, {
           sessiontoken: sessionToken || undefined,
-          // Toggle this on/off to test businesses vs broad:
-          // types: "establishment",
         });
         setSuggestions(predictions);
-      } catch {
+      } catch (error) {
+        console.warn("Autocomplete failed:", error);
         setSuggestions([]);
       } finally {
         setFetching(false);
       }
-    }, 250); // per spec
+    }, 250);
 
     return () => clearTimeout(debounceRef.current);
   }, [addrQuery, sessionToken]);
@@ -119,7 +166,6 @@ export default function BusinessInformation() {
   const handleInputChange = (field: string, value: string) =>
     setFormData((prev) => ({ ...prev, [field]: value }));
 
-  // Pick suggestion → geocode by place_id → capture address+coords
   const onPickSuggestion = async (prediction: any) => {
     try {
       setFetching(true);
@@ -129,54 +175,66 @@ export default function BusinessInformation() {
       setFormData((p) => ({ ...p, address: finalAddress }));
       setAddrQuery(finalAddress);
       setSuggestions([]);
+      
       if (g.location?.lat != null && g.location?.lng != null) {
         setCoords({ lat: g.location.lat, lng: g.location.lng });
       } else {
         setCoords(null);
       }
+    } catch (error) {
+      console.error("Geocoding failed:", error);
     } finally {
       setFetching(false);
     }
   };
 
-  // If user edits address after pick, require fresh pick for valid coords
+  // Reset coords if user manually edits address
   useEffect(() => {
-    if (addrQuery !== formData.address) setCoords(null);
+    if (addrQuery !== formData.address) {
+      setCoords(null);
+    }
   }, [addrQuery]);
 
   const handleNext = async () => {
+    if (loading) return; // Prevent double-submission
+    
     setLoading(true);
 
-    // Short re-check - use getMe instead of meHeartbeat to be consistent
     try {
-      if (!token) throw new Error("No token available");
+      // Quick auth re-check
+      if (!token) {
+        throw new Error("No token available");
+      }
+      
       await getMe(token);
-    } catch {
-      setLoading(false);
+
+      // Update session state
+      updateBusiness({
+        businessName: formData.businessName,
+        businessType: formData.businessType,
+      });
+
+      // Push to onboarding context
+      setData({
+        businessName: formData.businessName,
+        businessType: formData.businessType,
+        email: formData.email,
+        phone: formData.phone,
+        address: formData.address,
+        latitude: coords!.lat,
+        longitude: coords!.lng,
+      });
+
+      console.log("✅ Moving to next step");
+      goNext("step1");
+      
+    } catch (error) {
+      console.error("❌ Next step failed:", error);
       setAuthError("Your session has expired. Please sign in to continue.");
       await clearSession();
-      return;
+    } finally {
+      setLoading(false);
     }
-
-    // keep your session state in sync
-    updateBusiness({
-      businessName: formData.businessName,
-      businessType: formData.businessType,
-    });
-
-    // push *everything* into onboarding context for later steps
-    setData({
-      businessName: formData.businessName,
-      businessType: formData.businessType,
-      email: formData.email,
-      phone: formData.phone,
-      address: formData.address,
-      latitude: coords!.lat,
-      longitude: coords!.lng,
-    });
-
-    setLoading(false);
-    goNext("step1"); // continue your flow
   };
 
   const canProceed = useMemo(() => {
@@ -186,10 +244,19 @@ export default function BusinessInformation() {
     return hasName && hasAddress && hasCoords;
   }, [formData.businessName, formData.address, coords]);
 
-  const disabled = authChecking || !!authError;
-
-  // Calculate proper keyboard offset for iOS
+  const isDisabled = authChecking || !!authError;
   const keyboardVerticalOffset = Platform.OS === "ios" ? headerHeight : 0;
+
+  // Show loading state
+  if (authChecking) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
+        <View style={styles.loadingContainer}>
+          <Text variant="bodyLarge">Checking authentication...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -220,7 +287,7 @@ export default function BusinessInformation() {
           </View>
 
           {/* Auth error banner */}
-          {authError ? (
+          {authError && (
             <Card mode="contained" style={{ marginBottom: 12, borderRadius: 12, backgroundColor: "#FDECEA" }}>
               <Card.Content>
                 <Text style={{ color: "#B00020", fontWeight: "600", marginBottom: 8 }}>{authError}</Text>
@@ -233,7 +300,7 @@ export default function BusinessInformation() {
                 </Button>
               </Card.Content>
             </Card>
-          ) : null}
+          )}
 
           <Surface style={[styles.formContainer, { backgroundColor: theme.colors.surface }]} elevation={1}>
             {/* Form Header */}
@@ -250,11 +317,11 @@ export default function BusinessInformation() {
 
             <View style={[styles.divider, { backgroundColor: theme.colors.primary }]} />
 
-            {/* Inputs (disabled if unauthenticated) */}
-            <View pointerEvents={disabled ? "none" : "auto"} style={{ opacity: disabled ? 0.5 : 1 }}>
+            {/* Form Inputs */}
+            <View pointerEvents={isDisabled ? "none" : "auto"} style={{ opacity: isDisabled ? 0.5 : 1 }}>
               <View style={styles.fieldGroup}>
                 <Text variant="titleMedium" style={[styles.fieldLabel, { color: theme.colors.primary }]}>
-                  Business Name
+                  Business Name *
                 </Text>
                 <TextInput
                   mode="outlined"
@@ -321,7 +388,7 @@ export default function BusinessInformation() {
 
               <View style={styles.fieldGroup}>
                 <Text variant="titleMedium" style={[styles.fieldLabel, { color: theme.colors.primary }]}>
-                  Address
+                  Address *
                 </Text>
                 <TextInput
                   mode="outlined"
@@ -369,10 +436,10 @@ export default function BusinessInformation() {
               mode="contained"
               onPress={handleNext}
               loading={loading}
-              disabled={disabled || loading || !canProceed}
+              disabled={isDisabled || loading || !canProceed}
               style={[
                 styles.nextButton,
-                { backgroundColor: !disabled && canProceed ? "#FBC02D" : theme.colors.surfaceDisabled },
+                { backgroundColor: !isDisabled && canProceed ? "#FBC02D" : theme.colors.surfaceDisabled },
               ]}
               contentStyle={styles.buttonContent}
               labelStyle={[styles.buttonLabel, { color: theme.colors.primary }]}
@@ -388,6 +455,11 @@ export default function BusinessInformation() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   scrollContent: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 20 },
   header: { alignItems: "center", marginBottom: 20 },
   stepIndicator: {

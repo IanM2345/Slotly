@@ -4,15 +4,9 @@ import { useEffect, useState } from "react"
 import { View, ScrollView, StyleSheet } from "react-native"
 import { Text, Surface, TextInput, Button, IconButton, Checkbox, Snackbar, useTheme } from "react-native-paper"
 import { useRouter } from "expo-router"
+import { listServices, createBundle } from "../../../../../lib/api/modules/manager"
 
-// Mock available services locally (replace with real fetch later)
 type Service = { id: string; name: string; price: number }
-const mockServices: Service[] = [
-  { id: "s1", name: "Hair Cut", price: 800 },
-  { id: "s2", name: "Massage", price: 3500 },
-  { id: "s3", name: "Manicure", price: 1200 },
-  { id: "s4", name: "Facial", price: 2200 },
-]
 
 export default function BundleNew() {
   const theme = useTheme()
@@ -26,8 +20,18 @@ export default function BundleNew() {
   const [snack, setSnack] = useState<{ visible: boolean; msg: string }>({ visible: false, msg: "" })
 
   useEffect(() => {
-    setServices(mockServices)
+    (async () => {
+      try {
+        const svc = await listServices()
+        setServices(Array.isArray(svc) ? svc.map(s => ({ id: s.id, name: s.name, price: s.price ?? 0 })) : [])
+      } catch (e: any) {
+        // plan may not include bundles; still render form with empty list
+        setServices([])
+        setSnack({ visible: true, msg: e?.response?.data?.error || "Bundles may be unavailable on your plan" })
+      }
+    })()
   }, [])
+
   const toggle = (id: string) => setSelected((v) => (v.includes(id) ? v.filter((x) => x !== id) : [...v, id]))
 
   const isValid = name.trim().length >= 2 && Number(price) > 0 && selected.length >= 2
@@ -35,10 +39,23 @@ export default function BundleNew() {
   const save = async () => {
     if (!isValid) return
     setSaving(true)
-    await new Promise((r) => setTimeout(r, 600))
-    setSaving(false)
-    setSnack({ visible: true, msg: "Bundle created" })
-    setTimeout(() => router.replace(".."), 350)
+    try {
+      await createBundle({
+        name: name.trim(),
+        price: Math.max(0, parseInt(price, 10) || 0),
+        duration: 0, // optional: compute sum or ask user; keep 0 safe
+        serviceIds: selected,
+      })
+      setSnack({ visible: true, msg: "Bundle created" })
+      setTimeout(() => router.replace(".."), 350)
+    } catch (e: any) {
+      const msg = e?.response?.status === 403
+        ? (e?.response?.data?.error || "Your plan does not support bundles")
+        : (e?.response?.data?.error || e?.message || "Failed to create bundle")
+      setSnack({ visible: true, msg })
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -63,7 +80,9 @@ export default function BundleNew() {
 
       <Surface style={styles.card} elevation={2}>
         <Text style={{ fontWeight: "600", marginBottom: 8 }}>Included Services (min 2)</Text>
-        {services.map((s) => (
+        {services.length === 0 ? (
+          <Text style={{ color: "#6B7280" }}>No services yet.</Text>
+        ) : services.map((s) => (
           <View key={s.id} style={styles.row}>
             <Checkbox status={selected.includes(s.id) ? "checked" : "unchecked"} onPress={() => toggle(s.id)} />
             <Text style={{ flex: 1 }}>{s.name}</Text>

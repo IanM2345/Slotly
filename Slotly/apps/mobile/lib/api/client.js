@@ -7,17 +7,23 @@ import { router } from 'expo-router';
 
 /* ------------------------------- Config ---------------------------------- */
 
-// Enhanced base URL resolution with environment variable priority
+// Enhanced base URL resolution with better debugging
 function resolveBaseURL() {
   // Get the host from Expo's config (works for physical devices on same network)
   const hostFromExpo = Constants.expoConfig?.hostUri?.split(':')?.[0];
+  
+  // Debug all available environment variables
+  console.log('🔍 Environment Variables Debug:');
+  console.log('  - EXPO_PUBLIC_API_URL:', process.env.EXPO_PUBLIC_API_URL);
+  console.log('  - EXPO_PUBLIC_API_URL_WEB:', process.env.EXPO_PUBLIC_API_URL_WEB);
+  console.log('  - API_BASE_URL:', process.env.API_BASE_URL); // Check if this exists
+  console.log('  - NODE_ENV:', process.env.NODE_ENV);
+  console.log('  - __DEV__:', __DEV__);
   
   if (__DEV__) {
     console.log('🔧 DEV MODE: Resolving API base URL...');
     console.log('Platform:', Platform.OS);
     console.log('Host from Expo:', hostFromExpo);
-    console.log('EXPO_PUBLIC_API_URL:', process.env.EXPO_PUBLIC_API_URL);
-    console.log('EXPO_PUBLIC_API_URL_WEB:', process.env.EXPO_PUBLIC_API_URL_WEB);
     
     // Check if we're running on web
     if (Platform.OS === 'web') {
@@ -73,6 +79,9 @@ function resolveBaseURL() {
 const BASE_URL = resolveBaseURL();
 const ACCESS_KEY = 'accessToken';
 const REFRESH_KEY = 'refreshToken';
+
+// Export BASE_URL for use in other modules
+export const API_BASE_URL = BASE_URL;
 
 // Updated timeouts - longer default timeout for Next.js dev compilation
 const DEFAULT_TIMEOUT = 
@@ -143,9 +152,10 @@ const api = axios.create({
 });
 
 // Log the final configuration for debugging
-if (__DEV__) {
-  console.log('🔗 API Client initialized with baseURL:', BASE_URL, 'timeout:', DEFAULT_TIMEOUT);
-}
+console.log('🔗 API Client initialized with:');
+console.log('  - baseURL:', BASE_URL);
+console.log('  - timeout:', DEFAULT_TIMEOUT);
+console.log('  - API_BASE_URL export:', API_BASE_URL);
 
 /* ------------------------------ Auth utils ------------------------------- */
 
@@ -258,6 +268,7 @@ api.interceptors.request.use(
     if (__DEV__) {
       console.log(`🚀 ${config.method?.toUpperCase()} ${config.url}`);
       console.log(`   BaseURL: ${config.baseURL}`);
+      console.log(`   Full URL: ${config.baseURL}${config.url}`);
       console.log(`   Has Auth: ${!!config.headers?.Authorization}`);
       console.log(`   Timeout: ${config.timeout || 'default'}ms`);
     }
@@ -291,7 +302,8 @@ function normalizeError(err) {
       details: {
         originalMessage: err?.message,
         url: err?.config?.url,
-        baseURL: err?.config?.baseURL
+        baseURL: err?.config?.baseURL,
+        fullURL: `${err?.config?.baseURL}${err?.config?.url}`
       }
     };
   }

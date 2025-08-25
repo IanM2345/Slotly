@@ -3,8 +3,31 @@ import api, { setTokens, clearTokens, getTokens } from "../client";
 import * as SecureStore from "expo-secure-store";
 
 // ================== Config ==================
+const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "https://your-backend-host";
 const SESSION_STARTED_AT_KEY = "sessionStartedAt";
 const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+// ================== Current Path Provider ==================
+// A pluggable provider so we can always pass the current path to /auth/me
+let _currentPath = "/";
+export function setCurrentPath(path) { 
+  _currentPath = typeof path === "string" && path ? path : "/"; 
+}
+export function getCurrentPath() { 
+  return _currentPath || "/"; 
+}
+
+// ================== JWT Utils ==================
+export function decodeJwt(token) {
+  try {
+    if (!token || typeof token !== "string" || !token.includes(".")) return {};
+    const [, payloadB64] = token.split(".");
+    const json = atob(payloadB64.replace(/-/g, "+").replace(/_/g, "/"));
+    return JSON.parse(decodeURIComponent(escape(json)));
+  } catch {
+    return {};
+  }
+}
 
 // ========== Storage helpers ==========
 async function markSessionStart() {
@@ -43,11 +66,54 @@ export async function getStoredTokens() {
   return await getTokens();
 }
 
+// ================== API Logout Client ==================
+/**
+ * Call the backend logout endpoint to revoke refresh tokens
+ */
+export async function apiLogout(accessToken, opts = {}) {
+  const { allDevices = true, refreshToken } = opts;
+  
+  try {
+    const res = await fetch(`${BASE_URL}/api/auth/logout`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`, // Required by your backend route
+      },
+      body: JSON.stringify({
+        allDevices, // revoke all refresh tokens by default
+        refreshToken, // pass if you're storing it locally
+      }),
+    });
+
+    // Your route returns 200 { ok: true } (and handles OPTIONS as well)
+    if (!res.ok) {
+      // Don't block logout on network errors — we'll still clear local state
+      // but bubble up for logging if you want
+      try {
+        const data = await res.json();
+        throw new Error(data?.error || `Logout failed (${res.status})`);
+      } catch {
+        throw new Error(`Logout failed (${res.status})`);
+      }
+    }
+
+    const data = await res.json();
+    console.log("✅ Backend logout successful:", data);
+    return true;
+    
+  } catch (error) {
+    console.warn("⚠️ Backend logout failed (continuing with local cleanup):", error.message);
+    // Don't throw - allow local cleanup to continue
+    return false;
+  }
+}
+
 // ================== Auth flows ==================
 
 /**
  * Login with email/phone and password
- * Enhanced with better error handling and validation
+ * Enhanced with session tracking and better error handling
  */
 export async function login({ email, phone, password }) {
   try {
@@ -73,7 +139,7 @@ export async function login({ email, phone, password }) {
     }
     
     // Store tokens if provided
-    if (data?.token && data?.refreshToken) {
+    if (data?.token) {
       await setTokens({ 
         accessToken: data.token, 
         refreshToken: data.refreshToken 
@@ -84,25 +150,33 @@ export async function login({ email, phone, password }) {
       console.warn('⚠️ Login response missing tokens');
     }
     
-    // Immediately load user data to verify auth
+    // Extract sessionJti from refresh token for session tracking
+    let sessionJti = null;
+    if (data?.refreshToken) {
+      sessionJti = decodeJwt(data.refreshToken)?.jti || null;
+    }
+    
+    // Immediately ping /auth/me with session tracking
     let user = null;
     try {
-      user = await meHeartbeat(); // <- This now returns the user object directly
-      console.log('✅ User data loaded:', user?.email || user?.phone);
+      user = await meHeartbeat({
+        accessToken: data?.token,
+        sessionJti,
+        currentPath: getCurrentPath(),
+      });
+      console.log('✅ User data loaded with session tracking:', user?.email || user?.phone);
     } catch (userError) {
       console.warn('⚠️ Failed to load user data after login:', userError.message);
-      // Don't fail login if user fetch fails, just return what we have
     }
     
     return { 
       ...data, 
-      user: user || data.user
+      user: user?.user || user || data.user,
+      sessionJti
     };
     
   } catch (error) {
     console.error('❌ Login failed:', error.message);
-    
-    // Clear any partial session data on login failure
     await clearSession();
     
     throw new Error(
@@ -119,9 +193,9 @@ export async function login({ email, phone, password }) {
  */
 export async function signupInitiate({ firstName, lastName, email, phone, password }) {
   try {
-    console.log('📝 Initiating signup...');
+    console.log('🔐 Initiating signup...');
     
-    const name = `${firstName} ${lastName}`.trim();
+    const name = `${firstName || ""} ${lastName || ""}`.trim();
     
     // Validate required fields
     if (!name) throw new Error('Name is required');
@@ -160,7 +234,7 @@ export async function signupVerify(payload) {
     const { data } = await api.post("/api/auth/signup/verfiy", payload);
     
     // Store tokens if provided
-    if (data?.token && data?.refreshToken) {
+    if (data?.token) {
       await setTokens({ 
         accessToken: data.token, 
         refreshToken: data.refreshToken 
@@ -169,18 +243,29 @@ export async function signupVerify(payload) {
       console.log('✅ Signup verification tokens stored');
     }
     
-    // Load user data
+    // Extract sessionJti for session tracking
+    let sessionJti = null;
+    if (data?.refreshToken) {
+      sessionJti = decodeJwt(data.refreshToken)?.jti || null;
+    }
+    
+    // Load user data with session tracking
     let user = null;
     try {
-      user = await meHeartbeat(); // <- This now returns the user object directly
-      console.log('✅ New user data loaded:', user?.email || user?.phone);
+      user = await meHeartbeat({
+        accessToken: data?.token,
+        sessionJti,
+        currentPath: getCurrentPath(),
+      });
+      console.log('✅ New user data loaded with session tracking:', user?.email || user?.phone);
     } catch (userError) {
       console.warn('⚠️ Failed to load user data after signup:', userError.message);
     }
     
     return { 
       ...data, 
-      user: user || data.user
+      user: user?.user || user || data.user,
+      sessionJti
     };
     
   } catch (error) {
@@ -196,17 +281,26 @@ export async function signupVerify(payload) {
 
 /**
  * Logout - clears session and notifies backend
+ * Enhanced to use the new apiLogout function
  */
 export async function logout() {
   try {
     console.log('👋 Logging out...');
     
-    // Attempt to notify backend
-    try { 
-      await api.post("/api/auth/logout"); 
-      console.log('✅ Backend logout successful');
-    } catch (logoutError) {
-      console.warn('⚠️ Backend logout failed, continuing with local cleanup:', logoutError.message);
+    // Get current tokens before clearing
+    const { accessToken, refreshToken } = await getTokens().catch(() => ({}));
+    
+    // Attempt to notify backend and revoke refresh tokens
+    if (accessToken) {
+      try {
+        await apiLogout(accessToken, { 
+          allDevices: true, // revoke all sessions by default
+          refreshToken 
+        });
+        console.log('✅ Backend logout successful');
+      } catch (logoutError) {
+        console.warn('⚠️ Backend logout failed, continuing with local cleanup:', logoutError.message);
+      }
     }
     
     // Always clear local session
@@ -225,8 +319,6 @@ export async function logout() {
 
 /**
  * Manual refresh session
- * This is mostly handled by the API client's interceptors
- * But we keep it for manual refresh scenarios
  */
 export async function refreshSession() {
   try {
@@ -255,7 +347,6 @@ export async function refreshSession() {
     
   } catch (error) {
     console.error('❌ Manual refresh failed:', error.message);
-    // Clear tokens on refresh failure
     await clearSession();
     return null;
   }
@@ -263,34 +354,75 @@ export async function refreshSession() {
 
 /**
  * Clear all session data locally
+ * Enhanced to clear all auth-related storage
  */
 export async function clearSession() {
   try {
+    // Clear tokens via client helper
     await clearTokens();
+    
+    // Clear session timing
     await clearSessionStart();
+    
+    // Clear any other auth-related keys
+    const keysToCleanup = [
+      "access_token", // legacy key if it exists
+      "refresh_token", // legacy key if it exists
+      "user_data", // if you cache user data
+    ];
+    
+    for (const key of keysToCleanup) {
+      try {
+        await SecureStore.deleteItemAsync(key);
+      } catch (e) {
+        // Ignore individual key failures
+      }
+    }
+    
     console.log('✅ Session cleared');
   } catch (error) {
     console.error('❌ Failed to clear session:', error);
   }
 }
 
+// ================== Enhanced Heartbeat with Session Tracking ==================
 /**
- * Full logout with backend notification
+ * meHeartbeat - fetch current user data with per-page tracking
+ * @param {Object} options - Configuration options
+ * @param {string} options.accessToken - Optional access token (will use stored if not provided)
+ * @param {string} options.sessionJti - Optional refresh token JTI for session tracking
+ * @param {string} options.currentPath - Optional current path (will use global if not provided)
  */
-export async function logoutFull() {
-  return await logout(); // Same as regular logout
-}
-
-/**
- * Heartbeat - fetch current user data
- * FIXED: Now normalizes API response to return user object directly
- */
-export async function meHeartbeat() {
+export async function meHeartbeat({ accessToken, sessionJti, currentPath } = {}) {
   try {
-    const { data } = await api.get("/api/auth/me");
+    // Get tokens from storage if not provided
+    const tokens = await getTokens().catch(() => ({}));
+    const token = accessToken || tokens?.accessToken || "";
     
-    // Normalize response: if backend returns { user: {...} }, return user; otherwise return data as-is
-    return data && typeof data === "object" && data.user ? data.user : data;
+    if (!token) {
+      throw new Error('No access token available');
+    }
+    
+    // Build headers with session tracking
+    const headers = { Authorization: `Bearer ${token}` };
+    
+    // Add session tracking headers if available
+    if (sessionJti) {
+      headers["X-Session"] = String(sessionJti);
+    }
+    
+    const path = currentPath || getCurrentPath() || "/";
+    headers["X-Path"] = path;
+    
+    // Add app build info if available
+    if (process.env.EXPO_PUBLIC_APP_VERSION) {
+      headers["X-App-Build"] = process.env.EXPO_PUBLIC_APP_VERSION;
+    }
+    
+    const { data } = await api.get("/api/auth/me", { headers });
+    
+    // Normalize response: backend returns { ok, user, ... } or just user data
+    return data && typeof data === "object" && data.user ? data : { user: data };
     
   } catch (error) {
     console.error('❌ Me heartbeat failed:', error.message);
@@ -325,7 +457,8 @@ export async function getCurrentUser() {
       return null;
     }
     
-    return await meHeartbeat();
+    const result = await meHeartbeat({ currentPath: getCurrentPath() });
+    return result?.user || result;
   } catch (error) {
     console.warn('Failed to get current user:', error.message);
     return null;
@@ -358,7 +491,20 @@ export async function getAuthStatus() {
   }
 }
 
-// Export all storage helpers for direct use
+/**
+ * Password reset flows
+ */
+export async function requestPasswordReset(email) {
+  const { data } = await api.post("/auth/forgot-password", { email });
+  return data; // { message, devToken?, devResetUrl? }
+}
+
+export async function confirmPasswordReset({ token, newPassword }) {
+  const { data } = await api.post("/auth/reset-password", { token, newPassword });
+  return data; // { message: 'Password updated' }
+}
+
+// Export storage helpers for direct use
 export {
   markSessionStart,
   clearSessionStart

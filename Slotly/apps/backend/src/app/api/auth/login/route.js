@@ -51,7 +51,14 @@ export async function OPTIONS(req) {
  */
 export async function POST(request) {
   try {
-    const { email, phone, password, name } = await request.json();
+    // Parse and normalize input
+    const body = await request.json();
+    const rawEmail = typeof body.email === 'string' ? body.email : undefined;
+    const rawPhone = typeof body.phone === 'string' ? body.phone : undefined;
+    const email = rawEmail?.trim().toLowerCase();   // normalize email
+    const phone = rawPhone?.trim();                 // normalize phone (consider E.164 later)
+    const password = body.password;
+    const name = body.name;
 
     // Validate input
     if (!email && !phone) {
@@ -64,7 +71,7 @@ export async function POST(request) {
       );
     }
 
-    if (!password && process.env.NODE_ENV !== 'development') {
+    if (!password) {
       return NextResponse.json(
         { 
           error: 'Password is required',
@@ -79,7 +86,7 @@ export async function POST(request) {
     if (email) searchConditions.push({ email });
     if (phone) searchConditions.push({ phone });
 
-    // Find existing user - only select fields that exist on User model
+    // Find existing user
     let user = await prisma.user.findFirst({
       where: { 
         OR: searchConditions
@@ -95,61 +102,7 @@ export async function POST(request) {
       }
     });
 
-    // DEV MODE: Auto-create user if missing (remove this in production)
-    if (!user && process.env.NODE_ENV === 'development') {
-      console.log('🔧 DEV MODE: Auto-creating user');
-      
-      try {
-        user = await prisma.user.create({
-          data: {
-            email: email || null,
-            phone: phone || null,
-            role: 'CUSTOMER',
-            name: name || 'New User',
-            password: password ? await bcrypt.hash(password, 10) : null,
-          },
-          select: { 
-            id: true, 
-            email: true, 
-            phone: true, 
-            role: true, 
-            name: true, 
-            password: true,
-            createdAt: true
-          }
-        });
-        
-        console.log('✅ DEV MODE: User created successfully');
-        
-        // Log user creation in Sentry for development tracking
-        Sentry.addBreadcrumb({
-          message: 'Dev mode user auto-creation',
-          category: 'auth',
-          level: 'info',
-          data: {
-            user_id: user.id,
-            endpoint: '/api/auth/login'
-          }
-        });
-        
-      } catch (createError) {
-        console.error('❌ DEV MODE: Failed to create user:', createError);
-        
-        Sentry.captureException(createError, {
-          tags: {
-            endpoint: '/api/auth/login',
-            error_type: 'dev_user_creation_failed'
-          }
-        });
-        
-        return NextResponse.json(
-          { error: 'Failed to create user account' }, 
-          { status: 500, headers: CORS_HEADERS }
-        );
-      }
-    }
-
-    // User not found and not in dev mode
+    // User not found → authentication failed
     if (!user) {
       console.warn('Login attempt with invalid credentials');
       
@@ -174,39 +127,40 @@ export async function POST(request) {
       );
     }
 
-    // Password validation (skip in dev if no password provided)
-    if (password && user.password) {
-      const isMatch = await bcrypt.compare(password, user.password);
-      if (!isMatch) {
-        console.warn('Login attempt with incorrect password');
-        
-        // Track password mismatch
-        Sentry.addBreadcrumb({
-          message: 'Failed login attempt - incorrect password',
-          category: 'auth',
-          level: 'warning',
-          data: {
-            user_id: user.id,
-            endpoint: '/api/auth/login'
-          }
-        });
-        
-        return NextResponse.json(
-          { 
-            error: 'Invalid credentials',
-            details: 'The provided email/phone and password combination is not valid.'
-          }, 
-          { status: 401, headers: CORS_HEADERS }
-        );
-      }
-    } else if (!password && process.env.NODE_ENV !== 'development') {
-      // Require password in production
+    // Password validation
+    if (!user.password) {
+      console.warn('Login attempt for user without password');
+      
       return NextResponse.json(
         { 
-          error: 'Password is required',
-          details: 'Please provide a password to log in.'
+          error: 'Invalid credentials',
+          details: 'The provided email/phone and password combination is not valid.'
         }, 
-        { status: 400, headers: CORS_HEADERS }
+        { status: 401, headers: CORS_HEADERS }
+      );
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      console.warn('Login attempt with incorrect password');
+      
+      // Track password mismatch
+      Sentry.addBreadcrumb({
+        message: 'Failed login attempt - incorrect password',
+        category: 'auth',
+        level: 'warning',
+        data: {
+          user_id: user.id,
+          endpoint: '/api/auth/login'
+        }
+      });
+      
+      return NextResponse.json(
+        { 
+          error: 'Invalid credentials',
+          details: 'The provided email/phone and password combination is not valid.'
+        }, 
+        { status: 401, headers: CORS_HEADERS }
       );
     }
 

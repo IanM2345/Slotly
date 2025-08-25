@@ -12,6 +12,17 @@ import { jsonFetch, formDataFetch } from "./_fetch";
  * @property {string|null=} licenseUrl
  */
 
+// ================== Services endpoints ==================
+
+/**
+ * Get a single service by ID (includes business)
+ * @param {string} id - Service ID
+ */
+export function getServiceById(id) {
+  if (!id) throw new Error("getServiceById requires an id");
+  return jsonFetch(`/api/services/${encodeURIComponent(id)}`);
+}
+
 // ================== Business onboarding flow ==================
 
 /**

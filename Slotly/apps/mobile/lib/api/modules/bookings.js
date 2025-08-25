@@ -1,37 +1,59 @@
 // apps/mobile/lib/api/modules/bookings.js
-import api from "../../api/client";
+// Updated to always use manager endpoint for business dashboard usage
 
-/** CUSTOMER create booking */
-export async function createBooking(payload) {
-  // POST /api/bookings
-  const { data } = await api.post("/api/bookings", payload);
-  return data; // { booking, discountApplied }
-}
+import api from "../client";
 
-/** List bookings (manager or customer) */
+/**
+ * List bookings - always hits manager endpoint for proper tenant scoping
+ * Business owners automatically get their own business bookings
+ * Admins must provide businessId parameter
+ */
 export async function listBookings(params = {}) {
-  // If you want manager context, call /api/manager/bookings
-  if (params.businessId) {
-    const { data } = await api.get("/api/manager/bookings", { params: { businessId: params.businessId } });
-    return Array.isArray(data) ? data : (data.bookings ?? []);
-  }
-  const { data } = await api.get("/api/bookings");
+  const { data } = await api.get("/api/manager/bookings", { params });
   return Array.isArray(data) ? data : (data.bookings ?? []);
 }
 
-/** Update (staff) */
-export async function updateBooking(bookingId, payload) {
-  const { data } = await api.put(`/api/bookings/${bookingId}`, payload);
+/**
+ * Get booking details by ID
+ */
+export async function getBooking(id) {
+  const { data } = await api.get(`/api/bookings/${id}`);
   return data;
 }
 
-/** Delete (staff) */
-export async function deleteBooking(bookingId) {
-  const { data } = await api.delete(`/api/bookings/${bookingId}`);
+/**
+ * Create a new booking
+ */
+export async function createBooking(bookingData) {
+  const { data } = await api.post('/api/bookings', bookingData);
   return data;
 }
 
-/** Optional alias used by some screens */
-export async function getBookings(businessId) {
-  return listBookings(businessId ? { businessId } : {});
+/**
+ * Update booking status or details
+ */
+export async function updateBooking(id, updates) {
+  const { data } = await api.patch(`/api/bookings/${id}`, updates);
+  return data;
+}
+
+/**
+ * Cancel a booking (regular user cancellation)
+ */
+export async function cancelBooking(id, reason) {
+  const { data } = await api.patch(`/api/bookings/${id}`, { 
+    status: 'CANCELLED',
+    cancelReason: reason 
+  });
+  return data;
+}
+
+/**
+ * Reschedule a booking (regular user reschedule)
+ */
+export async function rescheduleBooking(id, newStartTime) {
+  const { data } = await api.patch(`/api/bookings/${id}`, { 
+    startTime: newStartTime 
+  });
+  return data;
 }

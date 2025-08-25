@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { View, ScrollView, StyleSheet, Alert } from "react-native";
 import {
   Text,
@@ -22,22 +22,49 @@ import { Section } from "../../../components/Section";
 import { FilterChipsRow } from "../../../components/FilterChipsRow";
 import { StatusPill } from "../../../components/StatusPill";
 import { ConfirmDialog } from "../../../components/ConfirmDialog";
-import { listCoupons, createCoupon, deleteCoupon } from "../../../lib/api/modules/manager"; // ← real endpoints :contentReference[oaicite:5]{index=5}
+import { listCoupons, createCoupon, deleteCoupon } from "../../../lib/api/modules/manager";
 
 type CouponRow = {
   id: string;
   code: string;
   description?: string | null;
-  discount: number;          // numeric amount or percent
+  discount: number;
   isPercentage: boolean;
-  expiresAt: string;         // ISO string
+  expiresAt: string;
   createdAt?: string;
   userCoupons?: Array<{ usedAt: string | null }>;
-  usageCount?: number;       // backend GET adds this
-  redeemedUsers?: number;    // backend GET adds this
+  usageCount?: number;
+  redeemedUsers?: number;
 };
 
 type FilterKey = "All" | "Active" | "Expired" | "Expiring Soon";
+
+const filterOptions = [
+  { key: "All", label: "All" },
+  { key: "Active", label: "Active" },
+  { key: "Expired", label: "Expired" },
+  { key: "Expiring Soon", label: "Expiring Soon" },
+];
+
+// Helper functions - StatusPill expects uppercase status types
+function deriveStatus(coupon: CouponRow): "ACTIVE" | "EXPIRED" | "EXPIRING" {
+  const now = new Date();
+  const expiryDate = new Date(coupon.expiresAt);
+  const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  
+  if (expiryDate < now) return "EXPIRED";
+  if (expiryDate <= sevenDaysFromNow) return "EXPIRING";
+  return "ACTIVE";
+}
+
+function usageText(coupon: CouponRow): string {
+  const count = coupon.usageCount ?? 0;
+  return count === 1 ? "1 time" : `${count} times`;
+}
+
+function formatDate(dateString: string): string {
+  return new Date(dateString).toLocaleDateString();
+}
 
 export default function CouponsScreen() {
   const router = useRouter();
@@ -74,15 +101,14 @@ export default function CouponsScreen() {
   async function load() {
     setLoading(true);
     try {
-      // Server can filter active/expired/used; we also do a client filter for "Expiring Soon"
       const f = selectedFilter[0];
       const params: any = {};
       if (f === "Active") params.active = true;
       if (f === "Expired") params.expired = true;
-      // "Expiring Soon" is client-side (<= 7 days)
-      const res = await listCoupons(params); // returns { coupons } on backend; module returns data.coupons array :contentReference[oaicite:6]{index=6}:contentReference[oaicite:7]{index=7}
-
+      
+      const res = await listCoupons(params);
       let list = Array.isArray(res) ? res : [];
+      
       if (f === "Expiring Soon") {
         const now = new Date();
         const soon = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
@@ -102,18 +128,17 @@ export default function CouponsScreen() {
   }
 
   const handleUpgrade = () => {
-    router.push("/business/dashboard/billing" as any)
-  }
+    router.push("/business/dashboard/billing" as any);
+  };
 
-  const handleCouponAction = (coupon: Coupon, action: string) => {
-    setMenuVisible(null)
+  const handleCouponAction = (coupon: CouponRow, action: string) => {
+    setMenuVisible(null);
 
     switch (action) {
       case "edit":
         Alert.alert("Not implemented", "Editing coupons is not available yet.");
         break;
       case "deactivate":
-        // No PATCH route yet; you could implement by setting expiresAt=now on backend
         Alert.alert("Not available", "Deactivation requires an update route.");
         break;
       case "extend":
@@ -134,7 +159,7 @@ export default function CouponsScreen() {
           message: `Are you sure you want to archive "${coupon.code}"?`,
           onConfirm: async () => {
             try {
-              await deleteCoupon(coupon.id); // backend forbids deleting used coupons :contentReference[oaicite:8]{index=8}
+              await deleteCoupon(coupon.id);
               await load();
             } catch (e: any) {
               Alert.alert("Delete failed", e?.message || "Could not delete coupon");
@@ -145,7 +170,7 @@ export default function CouponsScreen() {
         });
         break;
     }
-  }
+  };
 
   async function handleCreate() {
     try {
@@ -159,9 +184,13 @@ export default function CouponsScreen() {
         isPercentage: Boolean(isPct),
         expiresAt: new Date(expires).toISOString(),
       };
-      await createCoupon(payload); // POST /api/manager/coupons :contentReference[oaicite:9]{index=9}
+      await createCoupon(payload);
       setShowCreate(false);
-      setCode(""); setDesc(""); setDiscount("10"); setIsPct(true); setExpires("");
+      setCode("");
+      setDesc("");
+      setDiscount("10");
+      setIsPct(true);
+      setExpires("");
       await load();
     } catch (e: any) {
       Alert.alert("Create failed", e?.message || "Could not create coupon");
@@ -336,8 +365,6 @@ export default function CouponsScreen() {
   );
 }
 
-
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -449,26 +476,7 @@ const styles = StyleSheet.create({
     color: "#6B7280",
     marginTop: 2,
   },
-  usageBar: {
-    marginTop: 8,
-  },
-  usageBarBackground: {
-    height: 6,
-    backgroundColor: "#E5E7EB",
-    borderRadius: 3,
-    overflow: "hidden",
-    marginBottom: 4,
-  },
-  usageBarFill: {
-    height: "100%",
-    borderRadius: 3,
-  },
-  usageText: {
-    fontSize: 12,
-    color: "#6B7280",
-    textAlign: "center",
-  },
   bottomSpacing: {
     height: 40,
   },
-})
+});

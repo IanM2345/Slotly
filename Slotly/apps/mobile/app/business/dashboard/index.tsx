@@ -2,32 +2,219 @@
 
 import React, { useEffect, useState } from "react";
 import { ScrollView, StyleSheet, View, useWindowDimensions } from "react-native";
-import { Button, Card, Chip, Divider, Surface, Text, useTheme } from "react-native-paper";
- import { Link, type Href } from "expo-router";
-import { dashboardApi } from "../../../lib/dashboard/api";
-import type { DashboardMetrics, BookingPreview } from "../../../lib/dashboard/types";
+import { Button, Card, Chip, Divider, IconButton, Surface, Text, useTheme } from "react-native-paper";
+import { Link, type Href, useRouter } from "expo-router";
+import { useSession } from "../../../context/SessionContext";
 
+/* ---------- Local types ---------- */
+type DashboardMetrics = {
+  bookingsToday: number;
+  revenueTodayKES: number;
+  bookingsChangePct?: number;
+  revenueChangePct?: number;
+  cancellationsToday: number;
+  cancellationsDelta?: number;
+  noShowsToday: number;
+  noShowsDelta?: number;
+};
+
+type BookingPreview = {
+  id: string;
+  service: string;
+  customer: string;
+  time: string;
+  startTime?: string;
+};
+
+/* ---------- Config ---------- */
+const API_BASE =
+  (typeof process !== "undefined" && (process as any).env?.EXPO_PUBLIC_API_BASE_URL) || "";
+
+/* ---------- Strict fetchers: token REQUIRED ---------- */
+async function fetchJSON<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
+  const url = API_BASE ? `${API_BASE}${path}` : path;
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    ...(init.headers as Record<string, string>),
+    Authorization: `Bearer ${token}`,
+  };
+
+  const res = await fetch(url, {
+    method: init.method || "GET",
+    headers,
+    ...(init.body ? { body: init.body } : {}),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const err: any = new Error(`${init.method || "GET"} ${path} ${res.status}: ${text || res.statusText}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+async function fetchAnalyticsDaily(token: string, startISO: string, endISO: string) {
+  const qs = new URLSearchParams({
+    view: "daily",
+    startDate: startISO,
+    endDate: endISO,
+    metrics: "bookings,revenue",
+  }).toString();
+  return fetchJSON<any>(`/api/manager/analytics?${qs}`, token);
+}
+
+async function fetchBookings(token: string) {
+  return fetchJSON<any[]>(`/api/manager/bookings`, token);
+}
+
+/* ---------- Screen ---------- */
 export default function BusinessOverview() {
   const theme = useTheme();
+  const router = useRouter();
   const { width } = useWindowDimensions();
   const oneCol = width < 980;
+
+  const { token } = useSession(); // token: string | null
 
   const [loading, setLoading] = useState(true);
   const [m, setM] = useState<DashboardMetrics | null>(null);
   const [upcoming, setUpcoming] = useState<BookingPreview[]>([]);
 
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
-      const [metrics, next] = await Promise.all([dashboardApi.getMetrics(), dashboardApi.getUpcoming(5)]);
-      setM(metrics);
-      setUpcoming(next);
-      setLoading(false);
+      // Require token: if not present, do nothing (avoids unauth loops).
+      if (!token) {
+        // Optional: dev hint
+        console.warn("[BusinessOverview] Missing auth token — skipping dashboard fetch.");
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        // ----- today YYYY-MM-DD -----
+        const today = new Date();
+        const yyyy = today.getFullYear();
+        const mm = String(today.getMonth() + 1).padStart(2, "0");
+        const dd = String(today.getDate()).padStart(2, "0");
+        const todayISO = `${yyyy}-${mm}-${dd}`;
+
+        // 1) KPIs via analytics
+        let bookingsToday = 0;
+        let revenueTodayMinor = 0;
+
+        try {
+          const res = await fetchAnalyticsDaily(token, todayISO, todayISO);
+          const a = res?.analytics ?? {};
+          const bkt = a?.bookings && typeof a.bookings === "object" ? a.bookings : {};
+          const rvt = a?.revenue && typeof a.revenue === "object" ? a.revenue : {};
+          bookingsToday = Number.isFinite(bkt[todayISO]) ? Number(bkt[todayISO]) : 0;
+          revenueTodayMinor = Number.isFinite(rvt[todayISO]) ? Number(rvt[todayISO]) : 0;
+        } catch {
+          // 401/403/etc → soft empty
+          bookingsToday = 0;
+          revenueTodayMinor = 0;
+        }
+
+        // 2) Upcoming + derived cancels/no-shows
+        let nextFive: BookingPreview[] = [];
+        let cancellationsToday = 0;
+        let noShowsToday = 0;
+
+        try {
+          const list = await fetchBookings(token);
+          const now = Date.now();
+          const safe = Array.isArray(list) ? list : [];
+
+          const upcomingRaw = safe
+            .filter((b: any) => b?.startTime && new Date(b.startTime).getTime() >= now)
+            .sort((a: any, b: any) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
+            .slice(0, 5);
+
+          nextFive = upcomingRaw.map((b: any) => ({
+            id: String(b?.id ?? ""),
+            service: String(b?.service?.name ?? "—"),
+            customer: String(b?.user?.name ?? b?.user?.email ?? "—"),
+            time: formatTime(b?.startTime),
+            startTime: b?.startTime,
+          }));
+
+          const isSameDay = (iso?: string) => {
+            if (!iso) return false;
+            const d = new Date(iso);
+            return d.getFullYear() === yyyy && d.getMonth() + 1 === Number(mm) && d.getDate() === Number(dd);
+          };
+
+          for (const b of safe) {
+            if (!isSameDay(b?.startTime)) continue;
+            const status = String(b?.status || "").toUpperCase();
+            if (status === "CANCELLED") cancellationsToday++;
+            if (status === "NO_SHOW") noShowsToday++;
+          }
+        } catch {
+          nextFive = [];
+          cancellationsToday = 0;
+          noShowsToday = 0;
+        }
+
+        const revenueTodayKES = Math.round(revenueTodayMinor / 100);
+
+        if (!cancelled) {
+          setM({
+            bookingsToday,
+            revenueTodayKES,
+            bookingsChangePct: 0,
+            revenueChangePct: 0,
+            cancellationsToday,
+            cancellationsDelta: 0,
+            noShowsToday,
+            noShowsDelta: 0,
+          });
+          setUpcoming(nextFive);
+        }
+      } catch {
+        if (!cancelled) {
+          setM({
+            bookingsToday: 0,
+            revenueTodayKES: 0,
+            cancellationsToday: 0,
+            noShowsToday: 0,
+          });
+          setUpcoming([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     })();
-  }, []);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token]); // token is REQUIRED; effect runs only when it's available
+
+  // Navigation to settings
+  const navigateToSettings = () => {
+    router.push("/settings" as any);
+  };
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.colors.background }} contentContainerStyle={styles.container}>
-      <Text variant="headlineLarge" style={[styles.h1, { color: "#0F4BAC" }]}>Dashboard Overview</Text>
+      
+      {/* Header with Settings Navigation */}
+      <View style={styles.headerRow}>
+        <Text variant="headlineLarge" style={[styles.h1, { color: "#0F4BAC" }]}>
+          Dashboard Overview
+        </Text>
+        <IconButton
+          icon="cog"
+          size={24}
+          onPress={navigateToSettings}
+          style={{ margin: 0 }}
+        />
+      </View>
 
       {/* METRICS */}
       <View style={[styles.metricsGrid, oneCol && { gap: 14 }]}>
@@ -77,17 +264,15 @@ export default function BusinessOverview() {
         <Divider />
         <View style={{ paddingVertical: 8 }}>
           {upcoming.map((b) => (
-            <Surface
-              key={b.id}
-              elevation={0}
-              style={styles.upcomingRow}
-            >
+            <Surface key={b.id} elevation={0} style={styles.upcomingRow}>
               <Text style={styles.upcomingText}>{`${b.service} - ${b.customer}`}</Text>
               <Text style={styles.upcomingTime}>{b.time}</Text>
             </Surface>
           ))}
           {(!upcoming || upcoming.length === 0) && (
-            <Text style={{ marginTop: 12, color: theme.colors.onSurfaceVariant }}>Nothing upcoming yet.</Text>
+            <Text style={{ marginTop: 12, color: theme.colors.onSurfaceVariant }}>
+              No bookings have been made yet.
+            </Text>
           )}
         </View>
       </Surface>
@@ -137,7 +322,7 @@ function MetricCard(props: { title: string; value: string | number; pill: string
 
 function QuickLink({ href, label, icon }: { href: string; label: string; icon: string }) {
   return (
-     <Link href={href as Href} asChild>
+    <Link href={href as Href} asChild>
       <Chip icon={icon} style={styles.quickChip} textStyle={{ fontWeight: "600" }}>
         {label}
       </Chip>
@@ -149,10 +334,28 @@ function QuickLink({ href, label, icon }: { href: string; label: string; icon: s
 const sign = (n?: number) => (n == null ? "0" : n > 0 ? `+${n}` : `${n}`);
 const delta = (n?: number) => (n == null ? "0" : n > 0 ? `+${n}` : `${n}`);
 
+function formatTime(iso?: string): string {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+  } catch {
+    return "—";
+  }
+}
+
 /* ---------- Styles ---------- */
 const styles = StyleSheet.create({
   container: { padding: 16, gap: 14 },
-  h1: { fontWeight: "900", letterSpacing: 0.2, marginBottom: 8 },
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  h1: { fontWeight: "900", letterSpacing: 0.2 },
   metricsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
   metricCard: {
     flexBasis: "48%",
@@ -179,7 +382,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   quickChip: {
-    backgroundColor: "#FFE6C7", // soft orange pill to match wireframe
+    backgroundColor: "#FFE6C7",
     borderRadius: 20,
     height: 36,
   },
@@ -188,7 +391,7 @@ const styles = StyleSheet.create({
   sectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
 
   upcomingRow: {
-    backgroundColor: "#FFF8E1", // pale yellow row
+    backgroundColor: "#FFF8E1",
     borderRadius: 10,
     paddingVertical: 12,
     paddingHorizontal: 14,

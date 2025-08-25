@@ -1,10 +1,8 @@
-
 import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
 import { getPlanFeatures } from '@/shared/subscriptionPlanUtils';
-
 
 const prisma = new PrismaClient();
 
@@ -44,7 +42,11 @@ export async function GET(request) {
     if (error) return NextResponse.json({ error }, { status });
 
     const features = getPlanFeatures(business.plan);
-    if (!features.canAccessReports) {
+    
+    // Use consistent feature flag name - check both for compatibility
+    const canAccessReports = features.canAccessReports || features.canUseReports || features.reports;
+    
+    if (!canAccessReports) {
       Sentry.captureMessage(`Blocked report access for business ${business.id} (Plan: ${business.plan})`);
 
       return NextResponse.json(
@@ -67,6 +69,13 @@ export async function GET(request) {
     const reports = await prisma.monthlyReport.findMany({
       where: whereClause,
       orderBy: { period: 'desc' },
+      select: { 
+        id: true, 
+        businessId: true, 
+        period: true, 
+        fileUrl: true, 
+        createdAt: true 
+      },
     });
 
     return NextResponse.json({ reports }, { status: 200 });

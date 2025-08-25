@@ -5,8 +5,89 @@ import { verifyToken } from '@/middleware/auth';
 import { createNotification } from '@/shared/notifications/createNotification'; 
 import { staffLimitByPlan } from '@/shared/subscriptionPlanUtils';
 
-
 const prisma = new PrismaClient();
+
+async function getOwnerBusiness(userId) {
+  return prisma.business.findFirst({ where: { ownerId: userId } });
+}
+
+// ✅ Direct add: set user role to STAFF, set name, and create/approve StaffEnrollment for this business
+export async function POST(request) {
+  try {
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const token = authHeader.split(' ')[1];
+    const { valid, decoded } = await verifyToken(token);
+    if (!valid || decoded.role !== 'BUSINESS_OWNER') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    const business = await getOwnerBusiness(decoded.userId);
+    if (!business) return NextResponse.json({ error: 'Business not found' }, { status: 404 });
+
+    const body = await request.json().catch(() => ({}));
+    const { userId, firstName, lastName } = body || {};
+    if (!userId) {
+      return NextResponse.json({ error: 'userId is required' }, { status: 400 });
+    }
+
+    // Validate MongoDB ObjectId format (24 hex characters)
+    if (!/^[0-9a-fA-F]{24}$/.test(userId)) {
+      return NextResponse.json({ error: 'Invalid userId format. Must be a valid MongoDB ObjectId' }, { status: 400 });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
+
+    // Do not override privileged roles
+    if (user.role === 'ADMIN' || user.role === 'BUSINESS_OWNER') {
+      return NextResponse.json({ error: 'Cannot change role for this account' }, { status: 400 });
+    }
+
+    const fullName = `${firstName || ''} ${lastName || ''}`.trim() || user.name || null;
+
+    // 1) Promote to STAFF + set name (single "name" field in schema)
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: { role: 'STAFF', ...(fullName ? { name: fullName } : {}) },
+      select: { id: true, name: true, email: true, role: true },
+    });
+
+    // 2) Ensure StaffEnrollment exists and is APPROVED for this business
+    const existing = await prisma.staffEnrollment.findFirst({
+      where: { userId, businessId: business.id },
+      select: { id: true, status: true },
+    });
+
+    if (!existing) {
+      // Model requires idNumber/idPhotoUrl/selfieWithIdUrl → use placeholders for direct add.
+      await prisma.staffEnrollment.create({
+        data: {
+          userId,
+          businessId: business.id,
+          idNumber: '',
+          idPhotoUrl: '',
+          selfieWithIdUrl: '',
+          status: 'APPROVED',
+          reviewedAt: new Date(),
+        },
+      });
+    } else if (existing.status !== 'APPROVED') {
+      await prisma.staffEnrollment.update({
+        where: { id: existing.id },
+        data: { status: 'APPROVED', reviewedAt: new Date() },
+      });
+    }
+
+    return NextResponse.json({ message: 'Staff added', staff: updatedUser }, { status: 201 });
+  } catch (e) {
+    Sentry.captureException(e);
+    console.error('POST /manager/staff (direct add) error:', e);
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+  }
+}
 
 export async function GET(request) {
     try {

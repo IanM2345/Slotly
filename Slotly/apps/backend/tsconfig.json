@@ -18,9 +18,10 @@
     "jsx": "preserve",
     "incremental": true,
     "paths": {
-    "@/*": ["src/*"]
-  },
-
+      "@/*": [
+        "src/*"
+      ]
+    },
     "plugins": [
       {
         "name": "next"
@@ -35,5 +36,6 @@
   ],
   "exclude": [
     "node_modules"
-  ]
+  ],
+  "extends": "expo/tsconfig.base"
 }

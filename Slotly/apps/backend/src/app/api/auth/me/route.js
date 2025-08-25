@@ -1,197 +1,197 @@
 // apps/backend/src/app/api/auth/me/route.js
+import * as Sentry from "@sentry/nextjs";
 import { NextResponse } from "next/server";
 import { PrismaClient } from "@/generated/prisma";
-import { authenticateRequest } from "@/middleware/auth";
-import * as Sentry from "@sentry/nextjs";
+import { requireAuth } from "@/lib/token";
 
 export const dynamic = "force-dynamic";
 
-// ✅ Prisma singleton (no disconnect in finally)
+// ✅ Prisma singleton (avoid multiple connections in dev)
 const prisma = globalThis._prisma ?? new PrismaClient();
 if (process.env.NODE_ENV !== "production") globalThis._prisma = prisma;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": process.env.FRONTEND_URL || "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Headers": 
+    "Content-Type, Authorization, X-Session, X-Path, X-App-Build",
   "Access-Control-Max-Age": "86400",
   "Cache-Control": "no-store, no-cache, must-revalidate",
-  Pragma: "no-cache",
+  "Pragma": "no-cache",
+  "Vary": "Origin",
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "DENY",
-  Vary: "Origin",
 };
 
+export async function OPTIONS() {
+  return NextResponse.json({}, { status: 200, headers: CORS_HEADERS });
+}
+
 export async function GET(req) {
+  const startTime = Date.now();
+  
   try {
-    const authHeader = req.headers.get("authorization");
-    if (!authHeader) {
-      Sentry.addBreadcrumb({
-        message: "Missing Authorization header",
-        category: "auth",
-        level: "warning",
-        data: { endpoint: "/api/auth/me" },
+    // 🔐 Validate access token using your existing helper
+    const { id: userId, role, email } = await requireAuth(req);
+
+    // 🧭 Extract optional session-telemetry headers
+    const jti = req.headers.get("x-session")?.trim() || undefined;
+    const path = req.headers.get("x-path")?.trim() || undefined;
+    const appBuild = req.headers.get("x-app-build")?.trim() || undefined;
+    const userAgent = req.headers.get("user-agent") || undefined;
+    const clientIp = getClientIp(req);
+
+    // 📝 Update session activity (non-blocking, best-effort)
+    if (jti) {
+      updateSessionActivity(jti, userId, {
+        path,
+        userAgent,
+        ip: clientIp,
+        appBuild
+      }).catch(err => {
+        // Log but don't fail the request
+        Sentry.captureException(err, {
+          tags: { 
+            endpoint: "/api/auth/me", 
+            phase: "session_update",
+            user_id: userId 
+          },
+          extra: { jti, path }
+        });
       });
-      return NextResponse.json(
-        {
-          error:
-            "Authorization header is required. Please include 'Authorization: Bearer <token>' in your request.",
-          authenticated: false,
-          timestamp: new Date().toISOString(),
-        },
-        { status: 401, headers: CORS_HEADERS }
-      );
     }
 
-    // Validate access token (your authenticateRequest should enforce access type)
-    const auth = await authenticateRequest(req);
-    if (!auth.valid) {
-      Sentry.addBreadcrumb({
-        message: "Authentication failed",
-        category: "auth",
-        level: "warning",
-        data: { error: auth.error, endpoint: "/api/auth/me" },
-      });
-      return NextResponse.json(
-        {
-          error: auth.error,
-          authenticated: false,
-          timestamp: new Date().toISOString(),
-          hint:
-            "Make sure your token is valid and not expired. Use the token from /api/auth/login response.",
-        },
-        { status: 401, headers: CORS_HEADERS }
-      );
-    }
-
-    // Get user id from token
-    const userId = auth.decoded?.sub || auth.decoded?.id;
-    if (!userId) {
-      const err = new Error("No user ID found in decoded token");
-      Sentry.captureException(err, {
-        tags: { endpoint: "/api/auth/me", error_type: "invalid_token_payload" },
-        contexts: { token: { decoded: auth.decoded } },
-      });
-      return NextResponse.json(
-        {
-          error: "Invalid token payload - missing user ID",
-          authenticated: false,
-          timestamp: new Date().toISOString(),
-        },
-        { status: 401, headers: CORS_HEADERS }
-      );
-    }
-
-    // Load user (minimal fields)
+    // 👤 Load user with minimal required fields
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
         id: true,
         email: true,
         phone: true,
-        role: true,
         name: true,
+        role: true,
         createdAt: true,
+        updatedAt: true,
       },
     });
 
     if (!user) {
-      Sentry.captureMessage("User not found during authentication check", {
+      Sentry.captureMessage("User not found during /api/auth/me check", {
         level: "warning",
         tags: { endpoint: "/api/auth/me", user_id: userId },
-        contexts: { auth: { token_valid: true, user_id_from_token: userId } },
       });
       return NextResponse.json(
-        {
-          error: "User not found",
+        { 
+          error: "User not found", 
           authenticated: false,
-          timestamp: new Date().toISOString(),
+          timestamp: new Date().toISOString()
         },
         { status: 404, headers: CORS_HEADERS }
       );
     }
 
-    // OPTIONAL: robust business-suspension check (won’t crash /me)
+    // 🏢 Optional business suspension check (non-blocking)
     let hasSuspendedBusiness = false;
-    try {
-      const suspendedBiz = await prisma.business.findFirst({
-        where: { ownerId: user.id, suspended: true },
-        select: { id: true },
-      });
-      hasSuspendedBusiness = !!suspendedBiz;
-    } catch (e) {
-      // This is the bit that used to throw “Engine was empty”.
-      // We swallow/log it so /me stays resilient.
-      console.warn(
-        "Could not check business suspension status:",
-        e?.message || e
-      );
-      hasSuspendedBusiness = false;
+    if (user.role === "BUSINESS_OWNER" || user.role === "ADMIN") {
+      try {
+        const suspendedBiz = await prisma.business.findFirst({
+          where: { ownerId: user.id, suspended: true },
+          select: { id: true },
+        });
+        hasSuspendedBusiness = !!suspendedBiz;
+      } catch (e) {
+        console.warn("Could not check business suspension status:", e?.message);
+        // Continue without failing
+      }
     }
 
-    // Sentry user context
+    // 🎯 Set Sentry user context
     Sentry.setUser({
       id: user.id,
       email: user.email,
-      username: user.name,
       role: user.role,
     });
 
+    // ✅ Build response payload
     const responseData = {
+      ok: true,
       authenticated: true,
       user: {
         id: user.id,
-        email: user.email,
-        phone: user.phone,
-        name: user.name,
-        role: user.role,
+        email: user.email ?? null,
+        phone: user.phone ?? null,
+        name: user.name ?? null,
+        role: user.role ?? role ?? "CUSTOMER",
       },
       metadata: {
         memberSince: user.createdAt,
+        lastUpdated: user.updatedAt,
         hasSuspendedBusiness,
+        sessionTracked: !!jti,
       },
-      session: {
-        tokenType: auth.decoded?.type || "access",
-        issuedAt: auth.decoded?.iat
-          ? new Date(auth.decoded.iat * 1000).toISOString()
-          : null,
-        expiresAt: auth.decoded?.exp
-          ? new Date(auth.decoded.exp * 1000).toISOString()
-          : null,
-        timeUntilExpiry: auth.decoded?.exp
-          ? auth.decoded.exp * 1000 - Date.now()
-          : null,
-      },
-      timestamp: new Date().toISOString(),
+      serverTime: new Date().toISOString(),
+      responseTime: Date.now() - startTime,
     };
 
+    // 📊 Success breadcrumb
     Sentry.addBreadcrumb({
-      message: "Successful authentication check",
+      message: "Successful /api/auth/me check",
       category: "auth",
       level: "info",
-      data: { user_id: user.id, user_role: user.role, endpoint: "/api/auth/me" },
-    });
-
-    return NextResponse.json(responseData, { status: 200, headers: CORS_HEADERS });
-  } catch (error) {
-    console.error("Auth me endpoint error:", error);
-    Sentry.captureException(error, {
-      tags: { endpoint: "/api/auth/me", error_type: "internal_server_error" },
-      contexts: {
-        request: {
-          url: req.url,
-          method: req.method,
-          headers: {
-            "user-agent": req.headers.get("user-agent"),
-            referer: req.headers.get("referer"),
-            authorization: req.headers.get("authorization") ? "present" : "missing",
-          },
-        },
+      data: { 
+        user_id: user.id, 
+        user_role: user.role, 
+        has_session: !!jti,
+        response_time: Date.now() - startTime
       },
     });
+
+    return NextResponse.json(responseData, { 
+      status: 200, 
+      headers: CORS_HEADERS 
+    });
+
+  } catch (err) {
+    const responseTime = Date.now() - startTime;
+    
+    // Handle known auth errors from requireAuth
+    const authErrorCodes = ["NO_TOKEN", "INVALID_TOKEN", "EXPIRED_TOKEN"];
+    if (authErrorCodes.includes(err?.code)) {
+      Sentry.addBreadcrumb({
+        message: "Authentication failed in /api/auth/me",
+        category: "auth",
+        level: "warning",
+        data: { 
+          error: err.message, 
+          code: err.code,
+          response_time: responseTime
+        },
+      });
+
+      return NextResponse.json(
+        {
+          error: err.message || "Unauthorized",
+          code: err.code,
+          authenticated: false,
+          timestamp: new Date().toISOString(),
+        },
+        { status: 401, headers: CORS_HEADERS }
+      );
+    }
+
+    // Handle unexpected errors
+    console.error("Unexpected error in /api/auth/me:", err);
+    Sentry.captureException(err, {
+      tags: { 
+        endpoint: "/api/auth/me", 
+        error_type: "internal_server_error" 
+      },
+      extra: { response_time: responseTime }
+    });
+
     return NextResponse.json(
       {
-        error: "Internal server error",
+        error: "Internal Server Error",
         authenticated: false,
         timestamp: new Date().toISOString(),
       },
@@ -200,7 +200,41 @@ export async function GET(req) {
   }
 }
 
-// CORS preflight
-export async function OPTIONS() {
-  return NextResponse.json({}, { status: 200, headers: CORS_HEADERS });
+/**
+ * Extract client IP from various possible headers
+ */
+function getClientIp(req) {
+  return (
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    req.headers.get("x-real-ip") ||
+    req.headers.get("cf-connecting-ip") ||  // Cloudflare
+    req.headers.get("x-client-ip") ||
+    undefined
+  );
+}
+
+/**
+ * Update session activity in background (non-blocking)
+ */
+async function updateSessionActivity(jti, userId, metadata = {}) {
+  if (!jti || !userId) return;
+
+  const updateData = {
+    lastSeenAt: new Date(),
+    ...(metadata.path && { lastPath: metadata.path }),
+    ...(metadata.userAgent && { userAgent: metadata.userAgent }),
+    ...(metadata.ip && { ip: metadata.ip }),
+    ...(metadata.appBuild && { appVersion: metadata.appBuild }),
+  };
+
+  // Use updateMany to avoid errors if JTI doesn't exist
+  await prisma.refreshToken.updateMany({
+    where: { 
+      jti, 
+      userId,
+      // Optionally ensure token is still valid
+      expiresAt: { gt: new Date() }
+    },
+    data: updateData,
+  });
 }

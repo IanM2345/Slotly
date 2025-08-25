@@ -29,13 +29,9 @@ import {
   reassignBookingStaff,
   rescheduleBooking,
   cancelManagerBooking,
-} from "../../../../lib/api/modules/manager"; // returns bookings, and PATCH actions (reassign/reschedule/cancel) :contentReference[oaicite:3]{index=3}
+} from "../../../../lib/api/modules/manager";
 
-// Payment API (IntaSend)
-import {
-  getPaymentStatus,
-  // startBookingPayment, // not needed here
-} from "../../../../lib/api/modules/payment"; // lets us check if the booking was paid via app (provider/txRef present) :contentReference[oaicite:4]{index=4}
+// No need to import payment API anymore - backend provides paidViaApp
 
 type BookingRow = {
   id: string;
@@ -49,6 +45,7 @@ type BookingRow = {
   businessId?: string;
   lateCancellationFee?: number | null;
   cancellationDeadlineMinutes?: number | null;
+  paidViaApp?: boolean; // Added by backend
 };
 
 type StaffLite = { id: string; name?: string };
@@ -82,7 +79,7 @@ export default function BookingsManageScreen() {
     try {
       const params: any = {};
       if (filters[0] === "Today") params.date = new Date().toISOString().slice(0, 10);
-      const rows = await listBookings(params); // /api/manager/bookings → { bookings } mapped to array here :contentReference[oaicite:5]{index=5}
+      const rows = await listBookings(params);
       setBookings(Array.isArray(rows) ? rows : []);
     } catch (e: any) {
       console.error(e);
@@ -128,7 +125,7 @@ export default function BookingsManageScreen() {
   async function openReassign(b: BookingRow) {
     try {
       setReassignOpen(b);
-      const resp = await listStaff(); // { approvedStaff, pendingEnrollments } per your backend :contentReference[oaicite:6]{index=6}
+      const resp = await listStaff();
       setStaffList(resp?.approvedStaff || []);
       setSelectedStaffId(b.staff?.id || "");
     } catch (e) {
@@ -173,21 +170,11 @@ export default function BookingsManageScreen() {
     });
   }
 
-  // Heuristic to detect "paid via app" using latest Payment row
-  function isPaidViaApp(latestPayment: any | null): boolean {
-    if (!latestPayment) return false;
-    const status = String(latestPayment.status || "").toUpperCase();
-    const providerish = latestPayment.provider || latestPayment.txRef || latestPayment.checkoutLink;
-    return status === "SUCCESS" && !!providerish; // success + has provider/txRef/link ⇒ came through app (IntaSend) :contentReference[oaicite:7]{index=7}
-  }
-
   async function doCancel(b: BookingRow) {
     try {
-      // 1) Check latest payment for this booking
-      const latest = await getPaymentStatus(b.id).catch(() => null); // GET /api/payments?bookingId=... (latest first) :contentReference[oaicite:8]{index=8}
-      const paidApp = isPaidViaApp(latest);
+      // Use server-provided paidViaApp flag instead of making extra API call
+      const paidApp = !!(b as any).paidViaApp;
 
-      // 2) Confirm with manager; if paid via app, clearly say refund will be initiated
       const proceed = await confirmAsync(
         paidApp ? "Refund & Cancel" : "Cancel booking?",
         paidApp
@@ -196,8 +183,7 @@ export default function BookingsManageScreen() {
       );
       if (!proceed) return;
 
-      // 3) Call manager cancel endpoint — backend should perform refund first when applicable
-      const resp = await cancelManagerBooking({ id: b.id, reason: "Cancelled by manager" }); // PATCH /api/manager/bookings { action: 'cancel' } :contentReference[oaicite:9]{index=9}
+      const resp = await cancelManagerBooking({ id: b.id, reason: "Cancelled by manager" });
       setSnackbar({ visible: true, msg: resp?.message || (paidApp ? "Cancelled and refund initiated" : "Booking cancelled") });
 
       await load();
@@ -238,8 +224,8 @@ export default function BookingsManageScreen() {
           <View style={styles.bookingsContainer}>
             {filtered.length === 0 ? (
               <Surface style={styles.emptyState} elevation={1}>
-                <Text style={styles.emptyText}>No bookings</Text>
-                <Text style={styles.emptySubtext}>Try changing filters</Text>
+                <Text style={styles.emptyText}>No bookings yet.</Text>
+                <Text style={styles.emptySubtext}>They'll appear here once customers start booking.</Text>
               </Surface>
             ) : (
               filtered.map((b) => (

@@ -1,4 +1,3 @@
-
 import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
@@ -6,6 +5,17 @@ import { verifyToken } from '@/lib/auth';
 import { sendNotification } from '@/lib/notifications/sendNotification';
 
 const prisma = new PrismaClient();
+
+function mapPaymentMethod(method) {
+  if (!method) return null;
+  
+  const normalizedMethod = String(method).toUpperCase();
+  if (normalizedMethod === 'MPESA') return 'MPESA';
+  if (normalizedMethod === 'AIRTEL' || normalizedMethod === 'AIRTEL_MONEY') return 'AIRTEL_MONEY';
+  if (normalizedMethod === 'CARD') return 'CARD';
+  // For "IN_PERSON", "CASH", or anything else
+  return 'OTHER';
+}
 
 export async function POST(request) {
   const { valid, decoded, error } = await verifyToken(request);
@@ -17,13 +27,17 @@ export async function POST(request) {
 
   try {
     const data = await request.json();
-    const { businessId, serviceId, startTime, couponCode } = data;
+    const { businessId, serviceId, startTime, couponCode, paymentMethod } = data;
 
     if (!businessId || !serviceId || !startTime) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    const service = await prisma.service.findUnique({ where: { id: serviceId }, select: { duration: true, price: true } });
+    const service = await prisma.service.findUnique({ 
+      where: { id: serviceId }, 
+      select: { duration: true, price: true } 
+    });
+    
     if (!service) return NextResponse.json({ error: 'Service not found' }, { status: 404 });
 
     const start = new Date(startTime);
@@ -37,6 +51,7 @@ export async function POST(request) {
         where: { code: couponCode },
         include: { business: true },
       });
+      
       if (!coupon) return NextResponse.json({ error: 'Invalid coupon' }, { status: 404 });
       if (coupon.usedByUserId) return NextResponse.json({ error: 'Coupon already used' }, { status: 400 });
 
@@ -45,18 +60,67 @@ export async function POST(request) {
         : coupon.discount;
     }
 
+    // Calculate final amount after discount
+    const finalAmount = service.price - discountApplied;
+
+    // Create booking data with only valid Booking model fields
+    const bookingData = {
+      userId: decoded.id,
+      businessId,
+      serviceId,
+      startTime: start,
+      endTime: end,
+      discountApplied,
+      status: 'PENDING', // Default status
+      // Only include couponId if we have a coupon
+      ...(coupon ? { couponId: coupon.id } : {}),
+    };
+
+    // Add payment creation if paymentMethod is provided
+    if (paymentMethod) {
+      const mappedPaymentMethod = mapPaymentMethod(paymentMethod);
+      if (mappedPaymentMethod) {
+        bookingData.payments = {
+          create: {
+            amount: finalAmount, // Amount after discount
+            method: mappedPaymentMethod,
+            status: paymentMethod === 'IN_PERSON' ? 'PENDING' : 'PENDING', // Could be 'SUCCESS' if already paid
+            businessId,
+            // Add other payment fields as needed (provider, txRef, metadata, etc.)
+          },
+        };
+      }
+    }
+
     const booking = await prisma.booking.create({
-      data: {
-        userId: decoded.id,
-        businessId,
-        serviceId,
-        startTime: start,
-        endTime: end,
-        couponId: coupon?.id || null,
-        discountApplied,
+      data: bookingData,
+      include: {
+        service: { 
+          select: { 
+            id: true, 
+            name: true, 
+            duration: true, 
+            price: true, 
+            imageUrl: true 
+          } 
+        },
+        business: { 
+          select: { 
+            id: true, 
+            name: true, 
+            address: true, 
+            latitude: true, 
+            longitude: true, 
+            logoUrl: true 
+          } 
+        },
+        payments: true,
+        reminder: true,
+        coupon: true,
       },
     });
 
+    // Handle coupon usage and notifications
     if (coupon) {
       await prisma.coupon.update({
         where: { id: coupon.id },
@@ -125,6 +189,30 @@ export async function GET(request) {
     const bookings = await prisma.booking.findMany({
       where: filters,
       orderBy: { startTime: 'asc' },
+      include: {
+        service: { 
+          select: { 
+            id: true, 
+            name: true, 
+            duration: true, 
+            price: true, 
+            imageUrl: true 
+          } 
+        },
+        business: { 
+          select: { 
+            id: true, 
+            name: true, 
+            address: true, 
+            latitude: true, 
+            longitude: true, 
+            logoUrl: true 
+          } 
+        },
+        payments: true,
+        reminder: true,
+        coupon: true,
+      },
     });
 
     return NextResponse.json(bookings);

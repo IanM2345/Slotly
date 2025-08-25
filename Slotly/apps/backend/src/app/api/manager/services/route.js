@@ -1,4 +1,3 @@
-
 import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
@@ -6,13 +5,12 @@ import { verifyToken } from '@/middleware/auth';
 import { serviceLimitByPlan } from '@/shared/subscriptionPlanUtils';
 import { createNotification } from '@/shared/notifications/createNotification';
 
-
-
 const prisma = new PrismaClient();
 
 async function getBusinessFromRequest(request) {
   try {
-    const authHeader = request.headers.get('Authorization');
+    // Use lowercase 'authorization' for consistency
+    const authHeader = request.headers.get('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return { error: 'Unauthorized', status: 401 };
     }
@@ -48,14 +46,19 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-   
+    // Add Sentry context for debugging
+    Sentry.setContext('service_creation', { 
+      businessId: business.id, 
+      serviceName: name,
+      plan: business.plan 
+    });
+
     const limit = serviceLimitByPlan[business.plan];
     const currentCount = await prisma.service.count({
       where: { businessId: business.id },
     });
 
     if (currentCount >= limit) {
-     
       await createNotification({
         userId: business.ownerId,
         type: 'SYSTEM',
@@ -63,10 +66,8 @@ export async function POST(request) {
         message: `Your plan allows a maximum of ${limit} services. Upgrade your subscription or purchase a Service Add-on to create more.`,
       });
 
-      
       Sentry.captureMessage(`Service limit reached for business ${business.id} (Plan: ${business.plan}, Limit: ${limit})`);
 
-     
       return NextResponse.json(
         {
           error: `Service limit reached (${limit}) for your current plan.`,
@@ -104,6 +105,8 @@ export async function PUT(request) {
     const { id, name, price, duration, category, available } = await request.json();
     if (!id) return NextResponse.json({ error: 'Service ID is required' }, { status: 400 });
 
+    Sentry.setContext('service_update', { businessId: business.id, serviceId: id });
+
     const existing = await prisma.service.findUnique({ where: { id } });
     if (!existing || existing.businessId !== business.id) {
       return NextResponse.json({ error: 'Service not found' }, { status: 404 });
@@ -137,6 +140,8 @@ export async function DELETE(request) {
     const id = searchParams.get('id');
     if (!id) return NextResponse.json({ error: 'Service ID is required' }, { status: 400 });
 
+    Sentry.setContext('service_deletion', { businessId: business.id, serviceId: id });
+
     const existing = await prisma.service.findUnique({ where: { id } });
     if (!existing || existing.businessId !== business.id) {
       return NextResponse.json({ error: 'Service not found' }, { status: 404 });
@@ -160,6 +165,8 @@ export async function PATCH(request) {
     if (!id || typeof available !== 'boolean') {
       return NextResponse.json({ error: 'Invalid payload' }, { status: 400 });
     }
+
+    Sentry.setContext('service_toggle', { businessId: business.id, serviceId: id, available });
 
     const existing = await prisma.service.findUnique({ where: { id } });
     if (!existing || existing.businessId !== business.id) {
@@ -187,8 +194,7 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const category = searchParams.get("category")?.toLowerCase() || undefined;
 
-    const where = { businessId: business.id };
-    if (category) where.category = category;
+    const where = { businessId: business.id, ...(category ? { category } : {}) };
 
     const rows = await prisma.service.findMany({
       where,
@@ -200,7 +206,7 @@ export async function GET(request) {
       },
     });
 
-    // 🔧 Shape to what the app expects: staff: [{id,name}]
+    // Shape to what the app expects: staff: [{id,name}]
     const services = rows.map(s => ({
       id: s.id,
       name: s.name,
@@ -213,7 +219,8 @@ export async function GET(request) {
       staff: s.serviceStaff.map(a => ({ id: a.staff.id, name: a.staff.name })),
     }));
 
-    return NextResponse.json({ services }, { status: 200 });
+    // Return a plain array (your screen checks Array.isArray(response))
+    return NextResponse.json(services, { status: 200 });
   } catch (e) {
     Sentry.captureException(e);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });

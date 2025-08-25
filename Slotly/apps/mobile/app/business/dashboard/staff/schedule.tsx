@@ -4,8 +4,9 @@ import { useState, useEffect } from "react"
 import { ScrollView, View, StyleSheet } from "react-native"
 import { Text, Surface, TextInput, useTheme, IconButton, Chip, Menu, Button } from "react-native-paper"
 import { SafeAreaView } from "react-native-safe-area-context"
+import { useLocalSearchParams } from "expo-router"
 import { useToast } from "./_layout"
-import { staffApi } from "../../../../lib/staff/api"
+import { staffApi } from "../../../../../mobile/lib/api/modules/staff"
 import type { Appointment } from "../../../../lib/staff/types"
 
 const STATUS_OPTIONS = [
@@ -17,6 +18,9 @@ const STATUS_OPTIONS = [
 ]
 
 export default function StaffScheduleScreen() {
+  const { businessId: businessIdParam } = useLocalSearchParams<{ businessId?: string }>();
+  const businessId = typeof businessIdParam === "string" ? businessIdParam : undefined;
+  
   const theme = useTheme()
   const { notify } = useToast()
 
@@ -27,13 +31,14 @@ export default function StaffScheduleScreen() {
 
   useEffect(() => {
     loadSchedule()
-  }, [statusFilter, dateFilter])
+  }, [statusFilter, dateFilter, businessId])
 
   const loadSchedule = async () => {
     try {
       const filters = {
         status: statusFilter !== "all" ? statusFilter : undefined,
         date: dateFilter || undefined,
+        businessId,
       }
       const data = await staffApi.getSchedule(filters)
       setAppointments(data)

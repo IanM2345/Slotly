@@ -1,24 +1,35 @@
 // apps/mobile/lib/api/modules/manager.js
-import api from "../../api/client";
+import api from "../client";
 
 /* --------------------------- Analytics --------------------------- */
-/** GET /api/manager/analytics
- * Supports params:
- *  - view: "daily" | "weekly" | "monthly"
- *  - startDate, endDate (ISO)
- *  - metrics: CSV list
- *  - smoothing: "true" | "false"
- *  - abGroup
- *  - staffLimit
- *  - export: "csv" (returns CSV bytes)
+/**
+ * GET /api/manager/analytics
+ * Back-compat:
+ *  - Old usage: getAnalytics(paramsObject)
+ *  - New usage: getAnalytics(token, { period: "30d", tz: "Africa/Nairobi" })
  */
-export async function getAnalytics(params) {
+export async function getAnalytics(arg1, arg2) {
+  const isNewSignature = typeof arg1 === "string" || (arg2 && typeof arg2 === "object");
+  if (isNewSignature) {
+    const token = typeof arg1 === "string" ? arg1 : undefined;
+    const { period = "30d", tz } = arg2 || {};
+    const params = {};
+    if (period) params.period = period;
+    if (tz) params.tz = tz;
+    const res = await api.get("api/manager/analytics", {
+      params,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    return res.data; // { kpis, series }
+  }
+  // Legacy signature: (params)
+  const params = arg1 || {};
   const isCsv = params?.export === "csv";
   const res = await api.get("api/manager/analytics", {
     params,
     ...(isCsv ? { responseType: "arraybuffer" } : {}),
   });
-  return res.data; // JSON or CSV bytes
+  return res.data;
 }
 
 export async function getAnalyticsCsv(params = {}) {
@@ -221,7 +232,7 @@ export const getStaff = async () => {
 };
 
 export const getBookings = async (/* businessId? */) => {
-  // If your endpoint doesn’t need businessId, just ignore the param
+  // If your endpoint doesn't need businessId, just ignore the param
   return await listBookings({});
 };
 
@@ -265,6 +276,12 @@ export async function setStaffServices({ staffId, desiredServiceIds }) {
 export async function listStaff() {
   const { data } = await api.get("api/manager/staff");
   return data; // { approvedStaff, pendingEnrollments } (per backend)
+}
+
+/** POST /api/manager/staff { userId, firstName?, lastName? } → direct add (role=STAFF + enrollment APPROVED) */
+export async function addStaffDirect({ userId, firstName, lastName }) {
+  const { data } = await api.post("api/manager/staff", { userId, firstName, lastName });
+  return data; // { message, staff }
 }
 
 /** PUT /api/manager/staff { enrollmentId, status } */
@@ -332,4 +349,20 @@ export async function overrideTimeOff({
 export async function forceRejectTimeOff(id) {
   const { data } = await api.delete("api/manager/timeoff", { params: { id } });
   return data; // { message, updated }
+}
+
+/* ----------------------------- Billing --------------------------- */
+/** GET /api/manager/billing */
+export async function getBilling() {
+  const { data } = await api.get("api/manager/billing");
+  return data; // { businessId, plan, planLabel, subscription, payments, ... }
+}
+
+/** (Optional future) POST /api/manager/billing/checkout
+ *  payload: { targetPlan: "LEVEL_2" } etc.
+ *  returns { checkoutLink } or similar
+ */
+export async function startPlanCheckout(payload) {
+  const { data } = await api.post("api/manager/billing/checkout", payload);
+  return data;
 }

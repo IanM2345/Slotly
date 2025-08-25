@@ -5,11 +5,15 @@ import { ScrollView, View, StyleSheet } from "react-native"
 import { Text, Surface, TextInput, Button, useTheme, Avatar, IconButton, HelperText } from "react-native-paper"
 import { useRouter } from "expo-router"
 import { SafeAreaView } from "react-native-safe-area-context"
+import { useLocalSearchParams } from "expo-router"
 import { useToast } from "./_layout"
-import { staffApi } from "../../../../lib/staff/api"
+import { staffApi } from "../../../../../mobile/lib/api/modules/staff"
 import type { StaffProfile, PasswordChange } from "../../../../lib/staff/types"
 
 export default function StaffProfileScreen() {
+  const { businessId: businessIdParam } = useLocalSearchParams<{ businessId?: string }>();
+  const businessId = typeof businessIdParam === "string" ? businessIdParam : undefined;
+  
   const theme = useTheme()
   const router = useRouter()
   const { notify } = useToast()
@@ -34,11 +38,12 @@ export default function StaffProfileScreen() {
 
   useEffect(() => {
     loadProfile()
-  }, [])
+  }, [businessId])
 
   const loadProfile = async () => {
     try {
-      const profileData = await staffApi.getProfile()
+      // Profile endpoints typically don't need business scoping, but passing it just in case
+      const profileData = await staffApi.getProfile({ businessId })
       setProfile(profileData)
     } catch (error) {
       notify("Failed to load profile")
@@ -69,10 +74,10 @@ export default function StaffProfileScreen() {
 
     setLoading(true)
     try {
-      await staffApi.updateProfile(profile)
+      await staffApi.updateProfile(profile, { businessId })
 
       if (passwordData.currentPassword && passwordData.newPassword) {
-        await staffApi.changePassword(passwordData)
+        await staffApi.changePassword(passwordData, { businessId })
       }
 
       notify("Profile updated successfully")

@@ -2,6 +2,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import * as Sentry from "sentry-expo"; // mobile Sentry
 import { View, ScrollView, StyleSheet } from "react-native";
 import {
   Text,
@@ -16,12 +17,15 @@ import {
 import { useRouter } from "expo-router";
 import { useSession } from "../../context/SessionContext";
 import { getNotificationsEnabled, setNotificationsEnabled } from "../../lib/settings/api";
+import { meHeartbeat } from "../../lib/api/modules/auth";
 
 export default function SettingsScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { user, setUser } = useSession();
+  const { token, user, setUser, signOut } = useSession(); // Added signOut from context
   const [notificationsEnabledState, setNotificationsEnabledState] = useState(true);
+  const [verifyingRole, setVerifyingRole] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false); // Added loading state
 
   useEffect(() => {
     getNotificationsEnabled().then(setNotificationsEnabledState).catch(() => {});
@@ -35,9 +39,80 @@ export default function SettingsScreen() {
     router.push(route as any);
   };
 
-  const handleLogout = () => {
-    console.log("Logging out...");
-    // router.replace('/login');
+  // 🔐 Verify role from backend using current token -> merge into session
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!token) return;
+      try {
+        setVerifyingRole(true);
+        const fresh = await meHeartbeat(); // server-authoritative user { id, role, ... }
+        if (mounted && fresh) {
+          // Keep any client-only fields, prefer server ones
+          setUser({ ...(user ?? {}), ...fresh });
+        }
+      } catch (e) {
+        // capture but don't block settings
+        Sentry.Native.captureException(e);
+      } finally {
+        mounted && setVerifyingRole(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [token]);
+
+  // 🎯 Role-aware primary action
+  const role = user?.role; // 'CUSTOMER' | 'STAFF' | 'BUSINESS_OWNER' | 'ADMIN' | ...
+  const toTitle = (r?: string) => {
+    switch (r) {
+      case "CUSTOMER": return "Switch to Business Account";
+      case "STAFF": return "Go to Staff Dashboard";
+      case "BUSINESS_OWNER": return "Go to Business Dashboard";
+      case "ADMIN": return "Open Admin Console";
+      default: return "Verify Account";
+    }
+  };
+  const goPrimary = () => {
+    if (role === "CUSTOMER") return router.push("/business/onboarding" as any);
+    if (role === "STAFF") return router.push("/business/dashboard/staff" as any);
+    if (role === "BUSINESS_OWNER") return router.push("/business/dashboard" as any);
+    if (role === "ADMIN") return router.push("/admin" as any);
+    return router.push("/business/onboarding" as any);
+  };
+
+  // 🚪 Complete logout implementation
+  const handleLogout = async () => {
+    if (loggingOut) return; // Prevent double-clicks
+    
+    setLoggingOut(true);
+    try {
+      console.log("👋 Logging out...");
+      
+      // Call the centralized signOut from SessionContext
+      // This will:
+      // 1. Call the backend /api/auth/logout (revokes refresh tokens)
+      // 2. Clear tokens from SecureStore 
+      // 3. Clear in-memory session state
+      // 4. Clear Sentry user context
+      await signOut();
+      
+      console.log("✅ Logout completed successfully");
+      
+    } catch (error) {
+      // signOut() already handles errors gracefully, so this shouldn't happen
+      console.error("❌ Logout error:", error);
+      
+      // Capture for monitoring but don't block logout
+      if (Sentry?.Native?.captureException) {
+        Sentry.Native.captureException(error);
+      }
+    } finally {
+      setLoggingOut(false);
+      
+      // Always navigate to login, regardless of logout success/failure
+      // Replace the entire navigation stack so back button can't return
+      router.replace("auth/login" as any);
+    }
   };
 
   const handleSwitchToBusiness = () => {
@@ -45,13 +120,8 @@ export default function SettingsScreen() {
     setUser({
       ...(user ?? { accountType: "consumer" }),
       accountType: "business",
-      business: {
-        ...(user?.business ?? {}),
-        verificationStatus: "unverified",
-      },
+      business: { ...(user?.business ?? {}), verificationStatus: "unverified" },
     });
-
-    // Typed routes may not be available in this file; cast to satisfy TS
     router.push(ONBOARDING_START as any);
   };
 
@@ -78,25 +148,28 @@ export default function SettingsScreen() {
             }}
             elevation={1}
           >
-            <Text
-              style={{
-                color: theme.colors.onSurfaceVariant,
-                marginBottom: 12,
-              }}
-            >
-              Run your services on Slotly with bookings, payments and analytics.
-            </Text>
+            <View style={{ gap: 8 }}>
+              <Text style={{ color: theme.colors.onSurfaceVariant }}>
+                Run your services on Slotly with bookings, payments and analytics.
+              </Text>
 
-            <Button
-              mode="contained"
-              onPress={handleSwitchToBusiness}
-              style={{ borderRadius: 28 }}
-              contentStyle={{ paddingVertical: 8 }}
-              labelStyle={{ fontWeight: "700", color: theme.colors.primary }}
-              buttonColor={"#FBC02D"}
-            >
-              Switch to Business Account
-            </Button>
+              {/* Small status line */}
+              <Text style={{ color: theme.colors.onSurfaceVariant, fontSize: 12 }}>
+                {verifyingRole ? "Verifying role…" : `Signed in as ${role ?? "unknown role"}`}
+              </Text>
+
+              <Button
+                mode="contained"
+                onPress={role === "CUSTOMER" ? handleSwitchToBusiness : goPrimary}
+                disabled={verifyingRole}
+                style={{ borderRadius: 28, marginTop: 4 }}
+                contentStyle={{ paddingVertical: 8 }}
+                labelStyle={{ fontWeight: "700", color: theme.colors.primary }}
+                buttonColor={"#FBC02D"}
+              >
+                {toTitle(role)}
+              </Button>
+            </View>
           </Surface>
         </View>
 
@@ -194,12 +267,29 @@ export default function SettingsScreen() {
           </TouchableRipple>
         </View>
 
-        {/* Logout */}
+        {/* Logout - Enhanced with loading state and better UX */}
         <View style={styles.logoutSection}>
-          <TouchableRipple onPress={handleLogout} rippleColor="rgba(0,0,0,0.1)">
-            <View style={styles.logoutItem}>
-              <Text style={[styles.logoutText, { color: theme.colors.onBackground }]}>Log Out</Text>
-              <IconButton icon="arrow-right" size={24} iconColor={theme.colors.onBackground} />
+          <TouchableRipple 
+            onPress={handleLogout} 
+            rippleColor="rgba(0,0,0,0.1)"
+            disabled={loggingOut}
+          >
+            <View style={[
+              styles.logoutItem, 
+              loggingOut && { opacity: 0.6 }
+            ]}>
+              <Text style={[
+                styles.logoutText, 
+                { color: theme.colors.onBackground }
+              ]}>
+                {loggingOut ? "Signing out..." : "Log Out"}
+              </Text>
+              <IconButton 
+                icon={loggingOut ? "loading" : "arrow-right"} 
+                size={24} 
+                iconColor={theme.colors.onBackground}
+                disabled={loggingOut}
+              />
             </View>
           </TouchableRipple>
         </View>

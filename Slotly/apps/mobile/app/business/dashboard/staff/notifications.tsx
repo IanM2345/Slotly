@@ -4,11 +4,15 @@ import { useState, useEffect } from "react"
 import { ScrollView, View, StyleSheet } from "react-native"
 import { Text, Surface, Button, useTheme, IconButton, List } from "react-native-paper"
 import { SafeAreaView } from "react-native-safe-area-context"
+import { useLocalSearchParams } from "expo-router"
 import { useToast } from "./_layout"
-import { staffApi } from "../../../../lib/staff/api"
+import { staffApi } from "../../../../../mobile/lib/api/modules/staff"
 import type { Notification } from "../../../../lib/staff/types"
 
 export default function StaffNotificationsScreen() {
+  const { businessId: businessIdParam } = useLocalSearchParams<{ businessId?: string }>();
+  const businessId = typeof businessIdParam === "string" ? businessIdParam : undefined;
+  
   const theme = useTheme()
   const { notify } = useToast()
 
@@ -17,11 +21,11 @@ export default function StaffNotificationsScreen() {
 
   useEffect(() => {
     loadNotifications()
-  }, [])
+  }, [businessId])
 
   const loadNotifications = async () => {
     try {
-      const data = await staffApi.getNotifications()
+      const data = await staffApi.getNotifications({ businessId })
       setNotifications(data)
     } catch (error) {
       notify("Failed to load notifications")
@@ -30,7 +34,7 @@ export default function StaffNotificationsScreen() {
 
   const handleMarkAsRead = async (id: string) => {
     try {
-      await staffApi.markNotificationRead(id)
+      await staffApi.markNotificationRead(id, { businessId })
       setNotifications((prev) => prev.map((notif) => (notif.id === id ? { ...notif, isRead: true } : notif)))
       notify("Marked as read")
     } catch (error) {
@@ -41,7 +45,7 @@ export default function StaffNotificationsScreen() {
   const handleMarkAllAsRead = async () => {
     setLoading(true)
     try {
-      await staffApi.markAllRead()
+      await staffApi.markAllRead({ businessId })
       setNotifications((prev) => prev.map((notif) => ({ ...notif, isRead: true })))
       notify("All notifications marked as read")
     } catch (error) {

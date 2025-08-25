@@ -15,8 +15,9 @@ import {
   Chip,
 } from "react-native-paper"
 import { SafeAreaView } from "react-native-safe-area-context"
+import { useLocalSearchParams } from "expo-router"
 import { useToast } from "./_layout"
-import { staffApi } from "../../../../lib/staff/api"
+import { staffApi } from "../../../../../mobile/lib/api/modules/staff"
 import type { WeeklyAvailability, TimeOffRequest } from "../../../../lib/staff/types"
 
 const DAYS = [
@@ -30,6 +31,9 @@ const DAYS = [
 ]
 
 export default function StaffAvailabilityScreen() {
+  const { businessId: businessIdParam } = useLocalSearchParams<{ businessId?: string }>();
+  const businessId = typeof businessIdParam === "string" ? businessIdParam : undefined;
+  
   const theme = useTheme()
   const { notify } = useToast()
 
@@ -45,13 +49,13 @@ export default function StaffAvailabilityScreen() {
 
   useEffect(() => {
     loadData()
-  }, [])
+  }, [businessId])
 
   const loadData = async () => {
     try {
       const [availabilityData, timeOffData] = await Promise.all([
-        staffApi.getAvailability(),
-        staffApi.getTimeOffRequests(),
+        staffApi.getAvailability({ businessId }),
+        staffApi.getTimeOffRequests({ businessId }),
       ])
       setAvailability(availabilityData)
       setTimeOffRequests(timeOffData)
@@ -73,7 +77,7 @@ export default function StaffAvailabilityScreen() {
   const handleUpdateAvailability = async () => {
     setLoading(true)
     try {
-      await staffApi.saveAvailability(availability)
+      await staffApi.saveAvailability(availability, { businessId })
       notify("Availability updated successfully")
     } catch (error) {
       notify("Failed to update availability")
@@ -89,7 +93,7 @@ export default function StaffAvailabilityScreen() {
     }
 
     try {
-      await staffApi.requestTimeOff(timeOffData)
+      await staffApi.requestTimeOff(timeOffData, { businessId })
       notify("Time-off request submitted")
       setDialogVisible(false)
       setTimeOffData({ fromDate: "", toDate: "", reason: "" })
