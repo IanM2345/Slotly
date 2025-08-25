@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0 --port 3000",
     "build": "npx prisma generate && next build",
-    "start": "next start -p $PORT -H 0.0.0.0",
+    "start": "node index.js",
     "lint": "next lint"
   },
   "prisma": { "seed": "node scripts/seed-admin.js" },
