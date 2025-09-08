@@ -7,6 +7,10 @@ function withAuth(config = {}, token) {
   return { ...config, headers: { ...(config.headers || {}), Authorization: `Bearer ${token}` } };
 }
 
+function authHeaders(token) {
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 /* ========================= USERS (admin-ish) ========================= */
 /** GET /api/users — list users */
 export async function getUsers(config) {
@@ -35,22 +39,42 @@ export async function deleteUser(id, config) {
 }
 
 /* ============================ ME (/me) ============================== */
-/** GET /api/users/me — returns {id,email,name,phone,role,createdAt} */
+/** GET /api/users/me — returns current profile (preload-friendly) */
 export async function getMe(token) {
-  // Use lightweight wrapper to avoid RN client mismatch ("jsonFetch doesn't exist") issues
-  return jsonFetch("/api/users/me", { token });
+  return jsonFetch("/api/users/me", { method: "GET", headers: authHeaders(token) });
 }
 
-/** PATCH /api/users/me — accepts { name?, phone?, password? } */
+/** PATCH /api/users/me — update name/phone/avatar */
 export async function updateMe(payload, token) {
-  const { data } = await api.patch("api/users/me", payload, withAuth({}, token));
-  return data; // PATCH /users/me validates min password length 6
+  return jsonFetch("/api/users/me", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders(token) },
+    body: JSON.stringify(payload),
+  });
 }
 
-/** DELETE /api/users/me — deletes user + related enrollments/bookings */
+/** DELETE /api/users/me — deletes user + related data */
 export async function deleteMe(token) {
-  const { data } = await api.delete("api/users/me", withAuth({}, token));
-  return data; // { message: 'User deleted successfully' }
+  return jsonFetch("/api/users/me", { method: "DELETE", headers: authHeaders(token) });
+}
+
+/** RN helper: upload file to Cloudinary (unsigned) */
+export async function uploadToCloudinary({ fileUri, uploadPreset, cloudName }) {
+  if (!fileUri) throw new Error("fileUri required");
+  if (!uploadPreset || !cloudName) throw new Error("cloudName & uploadPreset required");
+  
+  const form = new FormData();
+  form.append("file", { uri: fileUri, name: "avatar.jpg", type: "image/jpeg" });
+  form.append("upload_preset", uploadPreset);
+
+  const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+    method: "POST",
+    body: form,
+  });
+
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error?.message || "Cloudinary upload failed");
+  return data.secure_url;
 }
 
 /* ============================ ADDRESS =============================== */
@@ -170,10 +194,28 @@ export async function getMyReviews(token) {
   return data; // includes business { id, name } and orders by createdAt desc
 }
 
-/** POST /api/users/reviews — upsert by businessId */
-export async function createOrUpdateReview({ businessId, rating, comment }, token) {
-  const { data } = await api.post("api/users/reviews", { businessId, rating, comment }, withAuth({}, token));
-  return data; // creates or updates unique (userId,businessId) review
+/** POST /api/users/reviews — upsert by businessId or bookingId */
+export async function createOrUpdateReview({ businessId, bookingId, rating, comment, imageUrl }) {
+  const payload = { businessId, bookingId, rating, comment, imageUrl };
+
+  // Pull the latest access token straight from SecureStore
+  const token = await getAccessToken();
+  if (!token) throw new Error("Not signed in");
+
+  // Use absolute URL to avoid any baseURL confusion
+  const url = `${API_BASE_URL}/api/users/reviews`;
+
+  const res = await jsonFetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  return res;
 }
 
 /** DELETE /api/users/reviews?businessId=... */
@@ -183,7 +225,12 @@ export async function deleteReview(businessId, token) {
   return data; // { message: 'Review deleted' }
 }
 
+/* ========================= PASSWORD CHANGE =========================== */
 export async function changePassword({ currentPassword, newPassword }, token) {
-  const { data } = await api.post("/users/change-password", { currentPassword, newPassword }, withAuth({}, token));
+  const { data } = await api.post(
+    "api/users/change-password",
+    { currentPassword, newPassword },
+    withAuth({}, token)
+  );
   return data; // { message: 'Password updated' }
 }

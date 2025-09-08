@@ -1,465 +1,343 @@
-import React, { useState } from 'react';
-import { View, ScrollView, StyleSheet, TouchableOpacity, FlatList } from 'react-native';
-import {
-  Text,
-  Searchbar,
-  Surface,
-  Card,
-  Button,
-  IconButton,
-  Chip,
-  useTheme
-} from 'react-native-paper';
-import { useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { View, ScrollView, Image, TouchableOpacity, RefreshControl, Linking, Alert } from "react-native";
+import { Text, useTheme, ActivityIndicator, Button, Divider } from "react-native-paper";
+import { useLocalSearchParams, useRouter } from "expo-router";
 
-interface Service {
+import UICard from "../components/ui/Card";
+import { getBusiness } from "../../lib/api/modules/business";
+import { listServicesForBusiness } from "../../lib/api/modules/services";
+import { getBusinessReviews } from "../../lib/api/modules/business";
+
+type Service = {
   id: string;
   name: string;
-  provider: string;
   price: number;
-  image: string;
-  rating: number;
-  category: string;
-  location: string;
-}
+  duration: number;
+};
 
-interface Category {
+type Business = {
   id: string;
   name: string;
-  active: boolean;
-}
+  address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  logoUrl?: string | null;
+  description?: string | null;
+};
 
-export default function ExploreServicesScreen() {
+type ReviewsData = {
+  averageRating: number;
+  reviewCount: number;
+  reviews: Array<{
+    id: string;
+    rating: number;
+    comment?: string;
+    imageUrl?: string;
+    createdAt: string;
+    user: {
+      id: string;
+      name?: string;
+      avatarUrl?: string;
+    };
+  }>;
+};
+
+export default function BusinessServicesScreen() {
   const theme = useTheme();
   const router = useRouter();
-  
-  const [searchQuery, setSearchQuery] = useState('');
-  const [categories, setCategories] = useState<Category[]>([
-    { id: '1', name: 'All', active: true },
-    { id: '2', name: 'Hair', active: false },
-    { id: '3', name: 'Nails', active: false },
-    { id: '4', name: 'Spa', active: false },
-    { id: '5', name: 'Barber', active: false },
-    { id: '6', name: 'Massage', active: false },
-  ]);
+  const { businessId, name, address, logoUrl, lat, lon } =
+    useLocalSearchParams<{ businessId?: string; name?: string; address?: string; logoUrl?: string; lat?: string; lon?: string }>();
 
-  // Mock data for services
-  const services: Service[] = [
-    {
-      id: '1',
-      name: 'Hair Styling & Cut',
-      provider: 'Bella Beauty Salon',
-      price: 2500,
-      image: 'https://via.placeholder.com/200x150.png?text=Hair+Styling',
-      rating: 4.8,
-      category: 'Hair',
-      location: 'Westlands'
-    },
-    {
-      id: '2',
-      name: 'Classic Beard Trim',
-      provider: 'Gents Barber Shop',
-      price: 800,
-      image: 'https://via.placeholder.com/200x150.png?text=Beard+Trim',
-      rating: 4.6,
-      category: 'Barber',
-      location: 'CBD'
-    },
-    {
-      id: '3',
-      name: 'Gel Manicure',
-      provider: 'Nail Studio Pro',
-      price: 1500,
-      image: 'https://via.placeholder.com/200x150.png?text=Manicure',
-      rating: 4.9,
-      category: 'Nails',
-      location: 'Karen'
-    },
-    {
-      id: '4',
-      name: 'Full Body Massage',
-      provider: 'Spa Relax Center',
-      price: 4000,
-      image: 'https://via.placeholder.com/200x150.png?text=Massage',
-      rating: 4.7,
-      category: 'Massage',
-      location: 'Kilimani'
-    },
-    {
-      id: '5',
-      name: 'Facial Treatment',
-      provider: 'Beauty Haven',
-      price: 3000,
-      image: 'https://via.placeholder.com/200x150.png?text=Facial',
-      rating: 4.5,
-      category: 'Spa',
-      location: 'Westlands'
-    },
-    {
-      id: '6',
-      name: 'Bridal Makeup',
-      provider: 'Glam Studio',
-      price: 8000,
-      image: 'https://via.placeholder.com/200x150.png?text=Makeup',
-      rating: 4.9,
-      category: 'Makeup',
-      location: 'Karen'
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [business, setBusiness] = useState<Business | null>(() => {
+    // Seed from params for instant paint
+    if (!businessId) return null;
+    return {
+      id: String(businessId),
+      name: name || "Business",
+      address: address || undefined,
+      latitude: lat ? Number(lat) : undefined,
+      longitude: lon ? Number(lon) : undefined,
+      logoUrl: logoUrl || undefined,
+      description: undefined,
+    };
+  });
+  const [services, setServices] = useState<Service[]>([]);
+  const [reviewsData, setReviewsData] = useState<ReviewsData | null>(null);
+  const [loadingMoreReviews, setLoadingMoreReviews] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchAll = useCallback(async () => {
+    if (!businessId) {
+      setError("Missing businessId");
+      setLoading(false);
+      return;
     }
-  ];
+    try {
+      setError(null);
+      setLoading(true);
+      
+      // From cache if prefetched; otherwise fetch now
+      const [biz, svc, rev] = await Promise.all([
+        getBusiness(String(businessId)),
+        listServicesForBusiness({ businessId: String(businessId) }),
+        getBusinessReviews(String(businessId), { limit: 3 }),
+      ]);
 
-  const popularServices = services.slice(0, 4);
-  const allServices = services;
+      setBusiness(biz);
+      setServices(Array.isArray(svc) ? svc : []);
+      setReviewsData(rev);
+    } catch (e: any) {
+      console.log("Failed loading business/services", e);
+      setError(e?.message || "Failed to load");
+      // Don't clear business state if we had optimistic data
+      setServices([]);
+      setReviewsData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [businessId]);
 
-  const handleServicePress = (service: Service) => {
-   router.push({
-  pathname: '/service/[id]' as const,
-  params: { id: service.id },
-});
-  };
+  useEffect(() => {
+    fetchAll();
+  }, [fetchAll]);
 
-  const handleCategoryPress = (categoryId: string) => {
-    setCategories(prev => 
-      prev.map(cat => ({
-        ...cat,
-        active: cat.id === categoryId
-      }))
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchAll();
+    setRefreshing(false);
+  }, [fetchAll]);
+
+  const onServicePress = useCallback((svc: Service) => {
+    if (!business) return;
+    router.push({
+      pathname: "/booking/service",
+      params: {
+        serviceId: String(svc.id),
+        businessId: String(business.id),
+        serviceName: svc.name,
+        servicePrice: String(svc.price ?? ""),
+        businessName: business.name ?? "Business",
+      },
+    } as any);
+  }, [router, business]);
+
+  const openInMaps = useCallback(async () => {
+    if (!business?.latitude || !business?.longitude) return;
+
+    const coordinates = `${business.latitude},${business.longitude}`;
+    const label = encodeURIComponent(business.name || 'Business Location');
+    
+    // Try Google Maps first (most common)
+    const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${coordinates}&query_place_id=${label}`;
+    
+    // Fallback URLs for different platforms
+    const appleMapsUrl = `http://maps.apple.com/?q=${label}&ll=${coordinates}`;
+    const fallbackUrl = `https://maps.google.com/maps?q=${coordinates}`;
+
+    try {
+      // Check if Google Maps URL can be opened
+      const canOpenGoogle = await Linking.canOpenURL(googleMapsUrl);
+      if (canOpenGoogle) {
+        await Linking.openURL(googleMapsUrl);
+        return;
+      }
+
+      // Try Apple Maps (iOS)
+      const canOpenApple = await Linking.canOpenURL(appleMapsUrl);
+      if (canOpenApple) {
+        await Linking.openURL(appleMapsUrl);
+        return;
+      }
+
+      // Fallback to web version
+      await Linking.openURL(fallbackUrl);
+    } catch (error) {
+      console.error('Error opening maps:', error);
+      Alert.alert(
+        "Error",
+        "Unable to open maps. Please check if you have a maps app installed.",
+        [{ text: "OK", style: "default" }]
+      );
+    }
+  }, [business]);
+
+  const loadAllReviews = useCallback(async () => {
+    if (!business?.id || !reviewsData) return;
+    
+    setLoadingMoreReviews(true);
+    try {
+      const allReviews = await getBusinessReviews(String(business.id), { 
+        limit: Math.max(25, reviewsData.reviewCount), 
+        page: 1 
+      });
+      setReviewsData(allReviews);
+    } catch (error) {
+      console.error('Failed to load all reviews:', error);
+      Alert.alert("Error", "Failed to load all reviews. Please try again.");
+    } finally {
+      setLoadingMoreReviews(false);
+    }
+  }, [business?.id, reviewsData]);
+
+  const mapsAvailable = useMemo(() => {
+    return !!(business?.latitude && business?.longitude);
+  }, [business]);
+
+  const hasMoreReviews = useMemo(() => {
+    return reviewsData && reviewsData.reviewCount > (reviewsData.reviews?.length || 0);
+  }, [reviewsData]);
+
+  // Show global loader only if we can't paint header yet
+  if (loading && !refreshing && !business) {
+    return (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: theme.colors.background }}>
+        <ActivityIndicator />
+        <Text style={{ marginTop: 8, color: theme.colors.onSurfaceVariant }}>Loading business…</Text>
+      </View>
     );
-  };
+  }
 
-  const handleLocationPress = () => {
-    router.push('/location-selector');
-  };
+  if (error && !business) {
+    return (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 16 }}>
+        <Text style={{ color: theme.colors.error, textAlign: "center" }}>{error}</Text>
+        <Button mode="contained" style={{ marginTop: 12 }} onPress={fetchAll}>Retry</Button>
+      </View>
+    );
+  }
 
-  const handleDatePress = () => {
-    router.push('/date-selector');
-  };
-
-  const handleFilterPress = () => {
-    router.push('/filters');
-  };
-
-  const renderServiceCard = ({ item }: { item: Service }) => (
-    <TouchableOpacity 
-      style={styles.serviceCard}
-      onPress={() => handleServicePress(item)}
-    >
-      <Card style={styles.card} mode="elevated">
-        <Card.Cover 
-          source={{ uri: item.image }} 
-          style={styles.serviceImage}
-        />
-        <Card.Content style={styles.serviceContent}>
-          <Text style={styles.serviceName} numberOfLines={2}>{item.name}</Text>
-          <Text style={styles.serviceProvider} numberOfLines={1}>{item.provider}</Text>
-          <Text style={styles.serviceLocation}>📍 {item.location}</Text>
-          <View style={styles.serviceFooter}>
-            <Text style={styles.servicePrice}>KSh {item.price.toLocaleString()}</Text>
-            <Text style={styles.serviceRating}>⭐ {item.rating}</Text>
-          </View>
-        </Card.Content>
-      </Card>
-    </TouchableOpacity>
-  );
-
-  const renderCategoryChip = ({ item }: { item: Category }) => (
-    <Chip
-      selected={item.active}
-      onPress={() => handleCategoryPress(item.id)}
-      style={[
-        styles.categoryChip,
-        item.active && styles.activeCategoryChip
-      ]}
-      textStyle={[
-        styles.categoryChipText,
-        item.active && styles.activeCategoryChipText
-      ]}
-    >
-      {item.name}
-    </Chip>
-  );
+  if (!business) return null;
 
   return (
-    <Surface style={styles.container}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {/* Header Controls */}
-        <View style={styles.header}>
-          {/* View Toggle */}
-          <View style={styles.viewToggle}>
-            <Button
-  mode="outlined"
-  onPress={() => router.push('/explore')} // points to index.tsx
-  style={styles.toggleButton}
-  labelStyle={styles.toggleButtonText}
->
-  Institutions
-</Button>
-            <Button
-              mode="contained"
-              style={[styles.toggleButton, styles.activeToggle]}
-              labelStyle={styles.toggleButtonText}
-            >
-              Services
-            </Button>
-          </View>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: theme.colors.background }}
+      contentContainerStyle={{ paddingBottom: 24 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+    >
+      {/* Header / hero */}
+      <Image
+        source={{ uri: business.logoUrl || "https://via.placeholder.com/1200x300.png?text=Business" }}
+        style={{ width: "100%", height: 180 }}
+      />
+      <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+        <Text variant="headlineSmall" style={{ fontWeight: "800", color: theme.colors.primary }}>
+          {business.name}
+        </Text>
+        {!!business.address && (
+          <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant, marginTop: 4 }}>
+            📍 {business.address}
+          </Text>
+        )}
+        {!!business.description && (
+          <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant, marginTop: 6 }}>
+            {business.description}
+          </Text>
+        )}
+        {mapsAvailable && (
+          <TouchableOpacity onPress={openInMaps}>
+            <Text variant="bodySmall" style={{ color: theme.colors.primary, marginTop: 8 }}>
+              View on Maps →
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
 
-          {/* Search and Filter Row */}
-          <View style={styles.searchRow}>
-            <Searchbar
-              placeholder="Search services..."
-              onChangeText={setSearchQuery}
-              value={searchQuery}
-              style={styles.searchBar}
-              inputStyle={styles.searchInput}
-              iconColor="#333"
-            />
-            <IconButton
-              icon="tune"
-              size={24}
-              iconColor="#333"
-              style={styles.filterButton}
-              onPress={handleFilterPress}
-            />
-          </View>
+      <Divider style={{ marginTop: 16 }} />
 
-          {/* Location and Date Row */}
-          <View style={styles.controlsRow}>
-            <TouchableOpacity style={styles.locationButton} onPress={handleLocationPress}>
-              <Text style={styles.locationIcon}>📍</Text>
-              <Text style={styles.locationText}>Nairobi, Kenya</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity style={styles.dateButton} onPress={handleDatePress}>
-              <Text style={styles.dateIcon}>📅</Text>
-              <Text style={styles.dateText}>when?</Text>
-            </TouchableOpacity>
-          </View>
+      {/* Services list */}
+      <Text style={{ marginTop: 16, marginBottom: 8, paddingHorizontal: 16, fontWeight: "800", fontSize: 18 }}>
+        Services
+      </Text>
+      
+      {/* Show loading indicator only for services if we have business data */}
+      {loading && !refreshing && services.length === 0 && (
+        <View style={{ alignItems: "center", paddingVertical: 16 }}>
+          <ActivityIndicator />
+          <Text style={{ marginTop: 6, color: theme.colors.onSurfaceVariant }}>Loading services…</Text>
         </View>
+      )}
 
-        {/* Category Filter */}
-        <View style={styles.categorySection}>
-          <FlatList
-            data={categories}
-            renderItem={renderCategoryChip}
-            keyExtractor={(item) => item.id}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.categoryContainer}
-          />
-        </View>
+      <View style={{ paddingHorizontal: 16, gap: 12 }}>
+        {services.length === 0 && !loading ? (
+          <Text style={{ color: theme.colors.onSurfaceVariant }}>No services published yet.</Text>
+        ) : services.map((svc) => (
+          <TouchableOpacity key={svc.id} onPress={() => onServicePress(svc)}>
+            <UICard>
+              <View style={{ padding: 12 }}>
+                <Text variant="titleSmall" style={{ fontWeight: "700" }}>{svc.name}</Text>
+                <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant, marginTop: 2 }}>
+                  {typeof svc.price === "number" ? `KSh ${svc.price.toLocaleString()}` : "—"}
+                  {typeof svc.duration === "number" ? ` · ${svc.duration} mins` : ""}
+                </Text>
+              </View>
+            </UICard>
+          </TouchableOpacity>
+        ))}
+      </View>
 
-        {/* Featured Services */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>service name</Text>
+      {/* Reviews section */}
+      {reviewsData && (
+        <>
+          <Text style={{ marginTop: 16, marginBottom: 8, paddingHorizontal: 16, fontWeight: "800", fontSize: 18 }}>
+            Reviews{reviewsData.reviewCount > 0 
+              ? ` · ⭐ ${reviewsData.averageRating.toFixed(1)} (${reviewsData.reviewCount})` 
+              : " · No rating"}
+          </Text>
+          <View style={{ paddingHorizontal: 16, gap: 12 }}>
+            {reviewsData.reviews.length === 0 ? (
+              <Text style={{ color: theme.colors.onSurfaceVariant }}>No reviews yet. Be the first to review!</Text>
+            ) : (
+              <>
+                {reviewsData.reviews.map((r) => (
+                  <UICard key={r.id}>
+                    <View style={{ padding: 12 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <Image 
+                          source={{ uri: r.user?.avatarUrl || "https://via.placeholder.com/40" }} 
+                          style={{ width: 32, height: 32, borderRadius: 16 }} 
+                        />
+                        <Text style={{ fontWeight: "700", flex: 1 }}>{r.user?.name || "Customer"}</Text>
+                        <Text style={{ color: theme.colors.primary }}>⭐ {r.rating}/5</Text>
+                      </View>
+                      {!!r.comment && <Text style={{ marginTop: 8, lineHeight: 20 }}>{r.comment}</Text>}
+                      {!!r.imageUrl && (
+                        <Image 
+                          source={{ uri: r.imageUrl }} 
+                          style={{ width: "100%", height: 140, marginTop: 8, borderRadius: 8 }} 
+                        />
+                      )}
+                      <Text style={{ marginTop: 6, color: theme.colors.onSurfaceVariant, fontSize: 12 }}>
+                        {new Date(r.createdAt).toLocaleDateString()}
+                      </Text>
+                    </View>
+                  </UICard>
+                ))}
+                
+                {hasMoreReviews && (
+                  <Button
+                    mode="text"
+                    onPress={loadAllReviews}
+                    loading={loadingMoreReviews}
+                    disabled={loadingMoreReviews}
+                    style={{ marginTop: 8 }}
+                  >
+                    {loadingMoreReviews ? "Loading..." : `View all ${reviewsData.reviewCount} reviews →`}
+                  </Button>
+                )}
+              </>
+            )}
           </View>
-          <FlatList
-            data={popularServices.slice(0, 2)}
-            renderItem={renderServiceCard}
-            keyExtractor={(item) => item.id}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.servicesContainer}
-          />
-        </View>
+        </>
+      )}
 
-        {/* Popular Services */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>popular in your area: results(5)</Text>
-          </View>
-          <FlatList
-            data={allServices}
-            renderItem={renderServiceCard}
-            keyExtractor={(item) => item.id}
-            numColumns={2}
-            columnWrapperStyle={styles.serviceRow}
-            contentContainerStyle={styles.gridContainer}
-          />
-        </View>
-
-        {/* Bottom Spacing */}
-        <View style={styles.bottomSpacing} />
-      </ScrollView>
-    </Surface>
+      <View style={{ height: 24 }} />
+      <View style={{ paddingHorizontal: 16 }}>
+        <Button mode="outlined" onPress={() => router.back()} icon="arrow-left">
+          Back
+        </Button>
+      </View>
+    </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#ff1493', // Bright pink background
-  },
-  scrollView: {
-    flex: 1,
-  },
-  header: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 8,
-  },
-  viewToggle: {
-    flexDirection: 'row',
-    marginBottom: 16,
-    gap: 12,
-  },
-  toggleButton: {
-    flex: 1,
-    borderColor: '#333',
-    borderRadius: 25,
-  },
-  activeToggle: {
-    backgroundColor: 'rgba(0, 0, 0, 0.1)',
-  },
-  toggleButtonText: {
-    color: '#333',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  searchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-    gap: 8,
-  },
-  searchBar: {
-    flex: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderRadius: 25,
-  },
-  searchInput: {
-    color: '#333',
-  },
-  filterButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-  },
-  controlsRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  locationButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 25,
-    borderWidth: 2,
-    borderColor: '#333',
-  },
-  locationIcon: {
-    fontSize: 16,
-    marginRight: 8,
-  },
-  locationText: {
-    color: '#333',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  dateButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 25,
-    borderWidth: 2,
-    borderColor: '#333',
-  },
-  dateIcon: {
-    fontSize: 16,
-    marginRight: 8,
-  },
-  dateText: {
-    color: '#333',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  categorySection: {
-    marginBottom: 16,
-  },
-  categoryContainer: {
-    paddingHorizontal: 16,
-  },
-  categoryChip: {
-    marginRight: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderColor: '#333',
-  },
-  activeCategoryChip: {
-    backgroundColor: 'rgba(0, 0, 0, 0.1)',
-  },
-  categoryChipText: {
-    color: '#333',
-  },
-  activeCategoryChipText: {
-    color: '#333',
-    fontWeight: 'bold',
-  },
-  section: {
-    marginBottom: 24,
-  },
-  sectionHeader: {
-    paddingHorizontal: 16,
-    marginBottom: 12,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  servicesContainer: {
-    paddingHorizontal: 16,
-  },
-  gridContainer: {
-    paddingHorizontal: 16,
-  },
-  serviceRow: {
-    justifyContent: 'space-between',
-  },
-  serviceCard: {
-    width: '48%',
-    marginBottom: 16,
-  },
-  card: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-  },
-  serviceImage: {
-    height: 120,
-  },
-  serviceContent: {
-    padding: 12,
-  },
-  serviceName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 4,
-  },
-  serviceProvider: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 4,
-  },
-  serviceLocation: {
-    fontSize: 12,
-    color: '#333',
-    marginBottom: 8,
-  },
-  serviceFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  servicePrice: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  serviceRating: {
-    fontSize: 14,
-    color: '#333',
-  },
-  bottomSpacing: {
-    height: 100,
-  },
-});

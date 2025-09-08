@@ -45,6 +45,10 @@ export interface SessionUser {
     | "CUSTOMER";
   accountType?: "consumer" | "business";
   business?: BusinessProfile;
+  name?: string;
+  phone?: string;
+  avatarUrl?: string;
+  createdAt?: string;
 }
 
 interface SessionContextType {
@@ -55,6 +59,7 @@ interface SessionContextType {
   signOut: () => Promise<void>;
   setUser: (user: SessionUser | null) => void;
   updateBusiness: (updates: Partial<BusinessProfile>) => void;
+  logout?: () => Promise<void>; // deprecated
 }
 
 // Safe default (throws if used outside provider)

@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { View, ScrollView, Image, StyleSheet, TouchableOpacity, Alert, RefreshControl } from "react-native";
 import { Text, SegmentedButtons, useTheme, ActivityIndicator } from "react-native-paper";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import * as Location from "expo-location";
 
 import SearchBar from "../components/ui/SearchBar";
@@ -10,7 +10,7 @@ import Chip from "../components/ui/Chip";
 import UICard from "../components/ui/Card";
 
 import { searchNearby } from "../../lib/api/modules/search";
-import { search as searchBusinesses } from "../../lib/api/modules/business";
+import { getBusinessReviewSummary } from "../../lib/api/modules/business";
 
 type Mode = "institutions" | "services";
 
@@ -19,7 +19,13 @@ type ServiceItem = {
   name: string;
   price?: number;
   duration?: number;
-  business?: { id: string; name: string; address?: string; latitude?: number; longitude?: number };
+  business?: { 
+    id: string; 
+    name: string; 
+    address?: string; 
+    latitude?: number; 
+    longitude?: number; 
+  };
   distanceMeters?: number;
   imageUrl?: string;
 };
@@ -41,11 +47,24 @@ type LocationState = {
   permissionDenied: boolean;
 };
 
+type Filters = {
+  lat?: number; 
+  lon?: number;
+  date?: string;
+  time?: "anytime" | "morning" | "afternoon" | "evening";
+  startAt?: string;
+  category?: string;
+  kind?: "both" | "services" | "businesses";
+};
+
 const NAIROBI_CENTER = { lat: -1.286389, lng: 36.817223 };
 const FALLBACK_LIMIT = 5;
+const SEARCH_THROTTLE_MS = 300;
+const SEARCH_DEBOUNCE_MS = 500;
+const API_TIMEOUT_MS = 2000;
 
-// --- Normalization helpers ---
-const uniqById = <T extends { id: string }>(arr: T[]) =>
+// --- Utility functions ---
+const uniqById = <T extends { id: string }>(arr: T[]): T[] =>
   Array.from(new Map(arr.map(x => [x.id, x])).values());
 
 const normalizeServiceResults = (arr: any[]): ServiceItem[] =>
@@ -93,10 +112,19 @@ const normalizeBusinessResults = (arr: any[]): BusinessItem[] =>
     logoUrl: b.logoUrl,
   }));
 
+const sortByDistance = <T extends { distanceMeters?: number }>(arr: T[]): T[] =>
+  arr.sort((a, b) => {
+    const da = a.distanceMeters ?? Number.POSITIVE_INFINITY;
+    const db = b.distanceMeters ?? Number.POSITIVE_INFINITY;
+    return da - db;
+  });
+
 export default function ExploreScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const params = useLocalSearchParams();
   const searchTimeoutRef = useRef<number | null>(null);
+  const lastSearchRef = useRef(0);
 
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<Mode>("services");
@@ -113,13 +141,36 @@ export default function ExploreScreen() {
     refreshing: false,
     services: [] as ServiceItem[],
     usedFallback: false,
-    lastSearchTime: 0,
   });
 
   const [bizState, setBizState] = useState({
     loading: false,
     businesses: [] as BusinessItem[],
   });
+
+  const [suggested, setSuggested] = useState<{ 
+    businesses: BusinessItem[]; 
+    services: ServiceItem[] 
+  } | null>(null);
+
+  // Rating map for businesses
+  const [ratingMap, setRatingMap] = useState<Record<string, { avg: number; count: number }>>({});
+
+  // Parse filters from URL params
+  const filters = useMemo((): Filters => {
+    const f: Filters = {};
+    if (typeof params.lat === "string") f.lat = parseFloat(params.lat);
+    if (typeof params.lon === "string") f.lon = parseFloat(params.lon);
+    if (typeof params.date === "string") f.date = params.date;
+    if (typeof params.time === "string") f.time = params.time as Filters["time"];
+    if (typeof params.startAt === "string") f.startAt = params.startAt;
+    if (typeof params.category === "string") f.category = params.category;
+    if (typeof params.kind === "string") f.kind = params.kind as Filters["kind"];
+    return f;
+  }, [params.lat, params.lon, params.date, params.time, params.startAt, params.category, params.kind]);
+
+  // Stable key for effects
+  const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
 
   // Request location permission and get coordinates
   const requestLocation = useCallback(async () => {
@@ -135,7 +186,13 @@ export default function ExploreScreen() {
         }));
         return;
       }
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      
+      const loc = await Location.getCurrentPositionAsync({ 
+        accuracy: Location.Accuracy.Balanced,
+        timeInterval: 10000,
+        distanceInterval: 100,
+      });
+      
       setLocation(prev => ({
         ...prev,
         coords: { lat: loc.coords.latitude, lng: loc.coords.longitude },
@@ -145,18 +202,24 @@ export default function ExploreScreen() {
       }));
     } catch (error) {
       console.error("Location error:", error);
-      setLocation(prev => ({ ...prev, loading: false, error: "Failed to get location" }));
+      setLocation(prev => ({ 
+        ...prev, 
+        loading: false, 
+        error: "Failed to get location" 
+      }));
     }
   }, []);
 
-  // Search for services (debounced) with normalization
+  // Main search function
   const runSearch = useCallback(async (opts?: {
     forceFallback?: boolean;
     isRefresh?: boolean;
     searchQuery?: string;
   }): Promise<void> => {
     const now = Date.now();
-    if (!opts?.isRefresh && now - searchState.lastSearchTime < 300) return;
+    if (!opts?.isRefresh && now - lastSearchRef.current < SEARCH_THROTTLE_MS) {
+      return;
+    }
 
     const isRefresh = opts?.isRefresh || false;
     const searchQuery = opts?.searchQuery ?? query;
@@ -165,100 +228,94 @@ export default function ExploreScreen() {
       ...prev,
       loading: !isRefresh,
       refreshing: isRefresh,
-      lastSearchTime: now,
     }));
+    
+    lastSearchRef.current = now;
 
     try {
       const canUseDevice = location.coords && !opts?.forceFallback;
       const searchCoords = canUseDevice ? location.coords! : NAIROBI_CENTER;
 
-      const params = {
+      // Prefer filter overrides over device location/time
+      const useLat = Number.isFinite(filters.lat!) ? filters.lat! : searchCoords.lat;
+      const useLon = Number.isFinite(filters.lon!) ? filters.lon! : searchCoords.lng;
+      const useTime = filters.startAt ? "anytime" : (filters.time || "anytime");
+
+      const res = await searchNearby({
         service: searchQuery || "",
-        lat: searchCoords.lat,
-        lon: searchCoords.lng,
-        time: "anytime" as const,
-      };
+        lat: useLat,
+        lon: useLon,
+        date: filters.date,
+        time: useTime,
+        startAt: filters.startAt,
+        category: filters.category,
+        kind: filters.kind || "both",
+        limit: 24,
+      }, { timeoutMs: API_TIMEOUT_MS });
 
-      const res = await searchNearby(params);
-      const raw = Array.isArray(res?.results) ? res.results : [];
+      const rawServices = Array.isArray(res?.services) ? res.services : [];
+      const rawBusinesses = Array.isArray(res?.businesses) ? res.businesses : [];
+
+      // Normalize and sort by distance
+      const services = sortByDistance(uniqById(normalizeServiceResults(rawServices)));
+      const businesses = sortByDistance(uniqById(normalizeBusinessResults(rawBusinesses)));
+
+      const usingFilteredLocation = Number.isFinite(filters.lat!);
+      const shouldLimitResults = !canUseDevice && !usingFilteredLocation;
       
-      // ✅ Normalize and dedupe services
-      const services = uniqById(normalizeServiceResults(raw)).sort((a, b) => {
-        const da = a.distanceMeters ?? Number.POSITIVE_INFINITY;
-        const db = b.distanceMeters ?? Number.POSITIVE_INFINITY;
-        return da - db;
-      });
-
-      const finalList = canUseDevice ? services : services.slice(0, FALLBACK_LIMIT);
+      const finalServices = shouldLimitResults ? services.slice(0, FALLBACK_LIMIT) : services;
+      const finalBusinesses = shouldLimitResults ? businesses.slice(0, FALLBACK_LIMIT) : businesses;
 
       setSearchState(prev => ({
         ...prev,
-        services: finalList,
-        usedFallback: !canUseDevice,
+        services: finalServices,
+        usedFallback: shouldLimitResults,
         loading: false,
         refreshing: false,
       }));
+      
+      setBizState({ 
+        loading: false, 
+        businesses: finalBusinesses 
+      });
+
+      // Set suggestions only when no query
+      if (!searchQuery && res?.suggested) {
+        setSuggested({
+          businesses: normalizeBusinessResults(res.suggested.businesses || []).slice(0, 5),
+          services: normalizeServiceResults(res.suggested.services || []).slice(0, 5),
+        });
+      } else {
+        setSuggested(null);
+      }
     } catch (error: any) {
+      // Handle aborted fetches quietly
+      if (error?.name === 'AbortError' || error?.message === 'ABORTED') {
+        setSearchState(prev => ({ ...prev, loading: false, refreshing: false }));
+        return;
+      }
+      
       console.error("Search error:", error);
       Alert.alert("Search Error", error?.message || "Failed to load services");
-      setSearchState(prev => ({ ...prev, services: [], loading: false, refreshing: false }));
-    }
-  }, [location.coords, query, searchState.lastSearchTime]);
-
-  // Search for businesses (nearby) with normalization
-  const runBusinessSearch = useCallback(async () => {
-    setBizState(prev => ({ ...prev, loading: true }));
-    try {
-      const base = location.coords ?? NAIROBI_CENTER;
-      const res = await searchBusinesses({ 
-        q: "", 
-        lat: base.lat, 
-        lng: base.lng,
-        date: "",
-        dayPart: ""
-      });
       
-      const items = Array.isArray(res?.businesses)
-        ? res.businesses
-        : Array.isArray(res?.results)
-        ? res.results
-        : [];
-      
-      // ✅ Normalize and dedupe businesses
-      const businesses = uniqById(normalizeBusinessResults(items)).sort((a, b) => {
-        const da = a.distanceMeters ?? Number.POSITIVE_INFINITY;
-        const db = b.distanceMeters ?? Number.POSITIVE_INFINITY;
-        return da - db;
-      });
-
-      setBizState({
-        loading: false,
-        businesses: location.coords ? businesses : businesses.slice(0, FALLBACK_LIMIT),
-      });
-    } catch (e) {
-      console.log("Business search error:", e);
+      setSearchState(prev => ({ 
+        ...prev, 
+        services: [], 
+        loading: false, 
+        refreshing: false 
+      }));
       setBizState({ loading: false, businesses: [] });
+      setSuggested(null);
     }
-  }, [location.coords]);
+  }, [location.coords, query, filters]);
 
-  // Initial location request
-  useEffect(() => { requestLocation(); }, [requestLocation]);
-
-  // Initial searches
-  useEffect(() => { runSearch(); runBusinessSearch(); }, []); // on mount
-
-  // Refresh when coordinates arrive
-  useEffect(() => {
-    if (location.coords) { runSearch(); runBusinessSearch(); }
-  }, [location.coords, runSearch, runBusinessSearch]);
-
-  // Debounced input
+  // Event handlers
   const handleSearchChange = useCallback((text: string) => {
     setQuery(text);
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
     searchTimeoutRef.current = setTimeout(() => {
       runSearch({ searchQuery: text });
-    }, 500);
+    }, SEARCH_DEBOUNCE_MS);
   }, [runSearch]);
 
   const handleSearchSubmit = useCallback(() => {
@@ -268,24 +325,11 @@ export default function ExploreScreen() {
 
   const handleRefresh = useCallback(() => {
     runSearch({ isRefresh: true });
-    runBusinessSearch();
-  }, [runSearch, runBusinessSearch]);
+  }, [runSearch]);
 
-  useEffect(() => () => { if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current); }, []);
-
-  const headerNote = useMemo(() => {
-    if (location.loading) return "Detecting your location…";
-    if (location.error && !location.permissionDenied) return "Location unavailable, showing popular services";
-    if (searchState.usedFallback) return "Enable location for personalized results nearby";
-    if (location.coords) return "Showing results near you";
-    return "Showing popular results";
-  }, [location, searchState.usedFallback]);
-
-  // ✅ Updated to navigate directly to booking flow
-const handleServicePress = useCallback((item: ServiceItem) => {
+  const handleServicePress = useCallback((item: ServiceItem) => {
     console.log('Service pressed:', item);
     
-    // Extract business ID with fallback logic
     const businessId = item.business?.id || `biz-${item.id}`;
     
     console.log('Navigation params:', {
@@ -297,7 +341,7 @@ const handleServicePress = useCallback((item: ServiceItem) => {
     });
     
     router.push({
-      pathname: "/booking/service", // First go to service details screen
+      pathname: "/booking/service",
       params: {
         serviceId: String(item.id),
         businessId: String(businessId),
@@ -309,14 +353,20 @@ const handleServicePress = useCallback((item: ServiceItem) => {
   }, [router]);
 
   const handleBusinessPress = useCallback((biz: BusinessItem) => {
-    router.push({ pathname: "/explore/explore-services", params: { businessId: biz.id } } as any);
+    router.push({ 
+      pathname: "/explore/explore-services", 
+      params: { businessId: biz.id } 
+    } as any);
   }, [router]);
 
   const handleChipPress = useCallback((action: string) => {
     switch (action) {
       case "location":
-        if (location.permissionDenied) requestLocation();
-        else runSearch({ forceFallback: !location.coords });
+        if (location.permissionDenied) {
+          requestLocation();
+        } else {
+          runSearch({ forceFallback: !location.coords });
+        }
         break;
       case "time":
         router.push("/date-selector" as any);
@@ -325,6 +375,74 @@ const handleServicePress = useCallback((item: ServiceItem) => {
         runSearch();
     }
   }, [location, runSearch, requestLocation, router]);
+
+  const handleClearFilters = useCallback(() => {
+    router.replace({ pathname: "/(tabs)/explore" } as any);
+  }, [router]);
+
+  // Effects
+  useEffect(() => { 
+    requestLocation(); 
+  }, [requestLocation]);
+
+  useEffect(() => { 
+    runSearch(); 
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const hasFilters = Object.keys(filters).length > 0;
+    if (location.coords || hasFilters) {
+      runSearch({ isRefresh: true });
+    }
+  }, [location.coords, filtersKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load rating summaries when businesses change
+  useEffect(() => {
+    (async () => {
+      if (bizState.businesses.length === 0) return;
+      
+      const entries = await Promise.all(
+        bizState.businesses.slice(0, 10).map(async (b) => {
+          try {
+            const s = await getBusinessReviewSummary(b.id);
+            return [b.id, { avg: Math.round((s.averageRating || 0) * 10) / 10, count: s.reviewCount || 0 }];
+          } catch {
+            return [b.id, { avg: 0, count: 0 }];
+          }
+        })
+      );
+      setRatingMap(Object.fromEntries(entries));
+    })();
+  }, [bizState.businesses]);
+
+  useEffect(() => {
+    return () => { 
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current); 
+    };
+  }, []);
+
+  // Computed values
+  const headerNote = useMemo(() => {
+    if (location.loading) return "Detecting your location...";
+    
+    if (Object.keys(filters).length > 0) {
+      const parts = [];
+      if (filters.category) parts.push(`${filters.category}`);
+      if (filters.startAt) parts.push("exact time slot");
+      else if (filters.time && filters.time !== "anytime") parts.push(`${filters.time}`);
+      if (filters.kind && filters.kind !== "both") parts.push(`${filters.kind} only`);
+      return parts.length > 0 ? `Filtered results: ${parts.join(", ")}` : "Using custom filters";
+    }
+    
+    if (location.error && !location.permissionDenied) {
+      return "Location unavailable, showing popular services";
+    }
+    if (searchState.usedFallback) return "Enable location for personalized results nearby";
+    if (location.coords) return "Showing results near you";
+    return "Showing popular results";
+  }, [location, searchState.usedFallback, filters]);
+
+  const hasActiveFilters = Object.keys(filters).length > 0;
 
   return (
     <ScrollView
@@ -335,7 +453,7 @@ const handleServicePress = useCallback((item: ServiceItem) => {
       <View style={{ height: 12 }} />
 
       <SearchBar
-        placeholder="Search services (e.g., haircut, massage)"
+        placeholder="Search businesses & services"
         value={query}
         onChangeText={handleSearchChange}
         onPressFilters={() => router.push("/filters" as any)}
@@ -354,36 +472,73 @@ const handleServicePress = useCallback((item: ServiceItem) => {
         />
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hScroll}>
+      <ScrollView 
+        horizontal 
+        showsHorizontalScrollIndicator={false} 
+        contentContainerStyle={styles.hScroll}
+      >
         <Chip onPress={() => handleChipPress("location")}>
-          {location.loading ? "Locating..." : searchState.usedFallback ? "Enable location" : "Near me"}
+          {location.loading 
+            ? "Locating..." 
+            : searchState.usedFallback 
+            ? "Enable location" 
+            : "Near me"}
         </Chip>
         <Chip onPress={() => handleChipPress("time")}>When?</Chip>
         <Chip onPress={() => runSearch()}>Open now</Chip>
         <Chip onPress={() => runSearch()}>Offers</Chip>
       </ScrollView>
 
-      <Text style={{ marginTop: 4, paddingHorizontal: 16, color: theme.colors.onSurfaceVariant, fontSize: 14 }}>
+      <Text style={[styles.headerNote, { color: theme.colors.onSurfaceVariant }]}>
         {headerNote}
       </Text>
 
-      {/* Nearby businesses (always show this row) */}
+      {/* Clear filters button */}
+      {hasActiveFilters && (
+        <View style={{ paddingHorizontal: 16, marginTop: 8 }}>
+          <TouchableOpacity
+            onPress={handleClearFilters}
+            style={[styles.clearFiltersBtn, { backgroundColor: theme.colors.surfaceVariant }]}
+          >
+            <Text style={[styles.clearFiltersText, { color: theme.colors.onSurfaceVariant }]}>
+              Clear filters
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Nearby businesses with ratings */}
       {!bizState.loading && bizState.businesses.length > 0 && (
         <>
-          <Text style={{ marginTop: 16, marginBottom: 8, paddingHorizontal: 16, fontWeight: "800", fontSize: 18 }}>
-            Nearby businesses
-          </Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hScroll}>
+          <Text style={styles.sectionTitle}>Nearby businesses</Text>
+          <ScrollView 
+            horizontal 
+            showsHorizontalScrollIndicator={false} 
+            contentContainerStyle={styles.hScroll}
+          >
             {bizState.businesses.slice(0, 10).map((b) => (
               <TouchableOpacity key={b.id} onPress={() => handleBusinessPress(b)}>
-                <UICard style={{ width: 220, overflow: "hidden" }}>
+                <UICard style={styles.businessCard}>
                   <Image
-                    source={{ uri: b.logoUrl || "https://via.placeholder.com/220x120.png?text=Business" }}
-                    style={{ width: "100%", height: 120 }}
+                    source={{ 
+                      uri: b.logoUrl || "https://via.placeholder.com/220x120.png?text=Business" 
+                    }}
+                    style={styles.businessCardImage}
                   />
-                  <View style={{ padding: 12 }}>
-                    <Text variant="titleSmall" style={{ fontWeight: "700" }} numberOfLines={1}>{b.name}</Text>
-                    <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }} numberOfLines={1}>
+                  <View style={styles.businessCardContent}>
+                    <Text variant="titleSmall" style={styles.businessCardTitle} numberOfLines={1}>
+                      {b.name}
+                    </Text>
+                    <Text style={{ color: theme.colors.onSurfaceVariant, fontSize: 14, marginTop: 2 }}>
+                      {ratingMap[b.id]?.count > 0
+                        ? `★ ${ratingMap[b.id].avg} · ${ratingMap[b.id].count} reviews`
+                        : "No rating"}
+                    </Text>
+                    <Text 
+                      variant="bodySmall" 
+                      style={{ color: theme.colors.onSurfaceVariant }} 
+                      numberOfLines={1}
+                    >
                       {b.address || "—"}
                     </Text>
                   </View>
@@ -394,8 +549,87 @@ const handleServicePress = useCallback((item: ServiceItem) => {
         </>
       )}
 
+      {/* Suggestions (only when user hasn't typed) */}
+      {query.length === 0 && suggested && (
+        <>
+          {suggested.businesses.length > 0 && (
+            <>
+              <Text style={styles.sectionTitle}>Suggested businesses</Text>
+              <ScrollView 
+                horizontal 
+                showsHorizontalScrollIndicator={false} 
+                contentContainerStyle={styles.hScroll}
+              >
+                {suggested.businesses.map((b) => (
+                  <TouchableOpacity key={`sugg-biz-${b.id}`} onPress={() => handleBusinessPress(b)}>
+                    <UICard style={styles.suggestionCard}>
+                      <Image
+                        source={{ 
+                          uri: b.logoUrl || "https://via.placeholder.com/220x120.png?text=Business" 
+                        }}
+                        style={styles.suggestionCardImage}
+                      />
+                      <View style={styles.suggestionCardContent}>
+                        <Text variant="titleSmall" style={styles.suggestionCardTitle} numberOfLines={1}>
+                          {b.name}
+                        </Text>
+                        <Text 
+                          variant="bodySmall" 
+                          style={{ color: theme.colors.onSurfaceVariant }} 
+                          numberOfLines={1}
+                        >
+                          {b.address || "—"}
+                        </Text>
+                      </View>
+                    </UICard>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </>
+          )}
+
+          {suggested.services.length > 0 && (
+            <>
+              <Text style={styles.sectionTitle}>Suggested services</Text>
+              <ScrollView 
+                horizontal 
+                showsHorizontalScrollIndicator={false} 
+                contentContainerStyle={styles.hScroll}
+              >
+                {suggested.services.map((item) => (
+                  <TouchableOpacity key={`sugg-svc-${item.id}`} onPress={() => handleServicePress(item)}>
+                    <UICard style={styles.serviceCard}>
+                      <Image
+                        source={{ 
+                          uri: item.imageUrl || "https://via.placeholder.com/200x120.png?text=Service" 
+                        }}
+                        style={styles.serviceCardImage}
+                      />
+                      <View style={styles.serviceCardContent}>
+                        <Text variant="titleSmall" style={styles.serviceCardTitle} numberOfLines={2}>
+                          {item.name}
+                        </Text>
+                        <Text 
+                          variant="bodySmall" 
+                          style={{ color: theme.colors.onSurfaceVariant }} 
+                          numberOfLines={1}
+                        >
+                          {item.business?.name && `${item.business.name} · `}
+                          {typeof item.price === "number" && `KSh ${item.price.toLocaleString()}`}
+                        </Text>
+                      </View>
+                    </UICard>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </>
+          )}
+        </>
+      )}
+
+      {/* Main content based on mode */}
       {mode === "institutions" ? (
-        <View style={{ paddingHorizontal: 16, gap: 12, marginTop: 16 }}>
+        <View style={styles.institutionsPlaceholder}>
           <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
             Institution browsing coming soon. Switch to "Services" to explore available services.
           </Text>
@@ -403,60 +637,86 @@ const handleServicePress = useCallback((item: ServiceItem) => {
       ) : (
         <>
           {searchState.loading && !searchState.refreshing ? (
-            <View style={{ marginTop: 32, alignItems: "center" }}>
+            <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" />
-              <Text style={{ marginTop: 8, color: theme.colors.onSurfaceVariant }}>Finding services...</Text>
+              <Text style={[styles.loadingText, { color: theme.colors.onSurfaceVariant }]}>
+                Finding services...
+              </Text>
             </View>
           ) : (
-            <View style={{ paddingHorizontal: 16, gap: 12, marginTop: 8 }}>
+            <View style={styles.servicesContainer}>
               {searchState.services.map((item) => (
                 <TouchableOpacity key={item.id} onPress={() => handleServicePress(item)}>
-                  <UICard>
+                  <UICard style={styles.serviceListCard}>
                     <Image
-                      source={{ uri: item.imageUrl || "https://via.placeholder.com/600x160.png?text=Service" }}
-                      style={{ width: "100%", height: 140 }}
+                      source={{ 
+                        uri: item.imageUrl || "https://via.placeholder.com/600x160.png?text=Service" 
+                      }}
+                      style={styles.serviceListCardImage}
                     />
-                    <View style={{ padding: 12 }}>
-                      <Text variant="titleSmall" style={{ fontWeight: "700" }}>{item.name}</Text>
-                      <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
+                    <View style={styles.serviceListCardContent}>
+                      <Text variant="titleSmall" style={styles.serviceListCardTitle}>
+                        {item.name}
+                      </Text>
+                      <Text 
+                        variant="bodySmall" 
+                        style={{ color: theme.colors.onSurfaceVariant }}
+                      >
                         {item.business?.name && `${item.business.name} · `}
                         {typeof item.price === "number" && `KSh ${item.price.toLocaleString()}`}
                         {typeof item.duration === "number" && ` · ${item.duration} mins`}
-                        {typeof item.distanceMeters === "number" && ` · ${(item.distanceMeters / 1000).toFixed(1)} km`}
+                        {typeof item.distanceMeters === "number" && 
+                          ` · ${(item.distanceMeters / 1000).toFixed(1)} km`}
                       </Text>
                     </View>
                   </UICard>
                 </TouchableOpacity>
               ))}
+              
               {searchState.services.length === 0 && (
-                <View style={{ marginTop: 32, alignItems: "center", paddingHorizontal: 16 }}>
-                  <Text style={{ color: theme.colors.onSurfaceVariant, textAlign: "center", fontSize: 16 }}>
+                <View style={styles.noResultsContainer}>
+                  <Text style={[styles.noResultsTitle, { color: theme.colors.onSurfaceVariant }]}>
                     No services found
                   </Text>
-                  <Text style={{ color: theme.colors.onSurfaceVariant, textAlign: "center", marginTop: 4, fontSize: 14 }}>
-                    Try adjusting your search or {location.permissionDenied ? "enable location access" : "check your connection"}
+                  <Text style={[styles.noResultsSubtitle, { color: theme.colors.onSurfaceVariant }]}>
+                    Try adjusting your search or {location.permissionDenied 
+                      ? "enable location access" 
+                      : "check your connection"}
                   </Text>
                 </View>
               )}
             </View>
           )}
 
+          {/* Popular in your area section */}
           {!searchState.loading && searchState.services.length > 0 && (
             <>
-              <Text style={{ marginTop: 24, marginBottom: 8, paddingHorizontal: 16, fontWeight: "800", fontSize: 18 }}>
+              <Text style={styles.sectionTitle}>
                 Popular in your area ({searchState.services.length})
               </Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hScroll}>
+              <ScrollView 
+                horizontal 
+                showsHorizontalScrollIndicator={false} 
+                contentContainerStyle={styles.hScroll}
+              >
                 {searchState.services.slice(0, 6).map((item) => (
                   <TouchableOpacity key={`popular-${item.id}`} onPress={() => handleServicePress(item)}>
-                    <UICard style={{ width: 200, overflow: "hidden" }}>
+                    <UICard style={styles.popularCard}>
                       <Image
-                        source={{ uri: item.imageUrl || "https://via.placeholder.com/200x120.png?text=Popular" }}
-                        style={{ width: "100%", height: 120 }}
+                        source={{ 
+                          uri: item.imageUrl || "https://via.placeholder.com/200x120.png?text=Popular" 
+                        }}
+                        style={styles.popularCardImage}
                       />
-                      <View style={{ padding: 12 }}>
-                        <Text variant="titleSmall" style={{ fontWeight: "700" }} numberOfLines={2}>{item.name}</Text>
-                        <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }} numberOfLines={1}>
+                      <View style={styles.popularCardContent}>
+                        <Text variant="titleSmall" style={styles.popularCardTitle} numberOfLines={2}>
+                          {item.name}
+                        </Text>
+                        <Text 
+                          variant="bodySmall" 
+                          style={{ color: theme.colors.onSurfaceVariant }} 
+                          numberOfLines={1}
+                        >
                           {item.business?.name && `${item.business.name} · `}
                           {typeof item.price === "number" && `KSh ${item.price.toLocaleString()}`}
                         </Text>
@@ -474,5 +734,130 @@ const handleServicePress = useCallback((item: ServiceItem) => {
 }
 
 const styles = StyleSheet.create({
-  hScroll: { paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
+  hScroll: { 
+    paddingHorizontal: 16, 
+    paddingVertical: 12, 
+    gap: 10 
+  },
+  headerNote: {
+    marginTop: 4,
+    paddingHorizontal: 16,
+    fontSize: 14,
+  },
+  clearFiltersBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    alignSelf: "flex-start",
+  },
+  clearFiltersText: {
+    fontSize: 12,
+  },
+  sectionTitle: {
+    marginTop: 16,
+    marginBottom: 8,
+    paddingHorizontal: 16,
+    fontWeight: "800",
+    fontSize: 18,
+  },
+  businessCard: {
+    width: 220,
+    overflow: "hidden",
+  },
+  businessCardImage: {
+    width: "100%",
+    height: 120,
+  },
+  businessCardContent: {
+    padding: 12,
+  },
+  businessCardTitle: {
+    fontWeight: "700",
+  },
+  suggestionCard: {
+    width: 220,
+    overflow: "hidden",
+  },
+  suggestionCardImage: {
+    width: "100%",
+    height: 120,
+  },
+  suggestionCardContent: {
+    padding: 12,
+  },
+  suggestionCardTitle: {
+    fontWeight: "700",
+  },
+  serviceCard: {
+    width: 200,
+    overflow: "hidden",
+  },
+  serviceCardImage: {
+    width: "100%",
+    height: 120,
+  },
+  serviceCardContent: {
+    padding: 12,
+  },
+  serviceCardTitle: {
+    fontWeight: "700",
+  },
+  institutionsPlaceholder: {
+    paddingHorizontal: 16,
+    gap: 12,
+    marginTop: 16,
+  },
+  loadingContainer: {
+    marginTop: 32,
+    alignItems: "center",
+  },
+  loadingText: {
+    marginTop: 8,
+  },
+  servicesContainer: {
+    paddingHorizontal: 16,
+    gap: 12,
+    marginTop: 8,
+  },
+  serviceListCard: {
+    overflow: "hidden",
+  },
+  serviceListCardImage: {
+    width: "100%",
+    height: 140,
+  },
+  serviceListCardContent: {
+    padding: 12,
+  },
+  serviceListCardTitle: {
+    fontWeight: "700",
+  },
+  noResultsContainer: {
+    marginTop: 32,
+    alignItems: "center",
+    paddingHorizontal: 16,
+  },
+  noResultsTitle: {
+    textAlign: "center",
+    fontSize: 16,
+  },
+  noResultsSubtitle: {
+    textAlign: "center",
+    marginTop: 4,
+    fontSize: 14,
+  },
+  popularCard: {
+    width: 200,
+    overflow: "hidden",
+  },
+  popularCardImage: {
+    width: "100%",
+    height: 120,
+  },
+  popularCardContent: {
+    padding: 12,
+  },
+  popularCardTitle: {
+    fontWeight: "700",
+  },
 });

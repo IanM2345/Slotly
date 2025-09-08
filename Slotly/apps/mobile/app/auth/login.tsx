@@ -132,7 +132,7 @@ export default function LoginScreen() {
   };
 
    const handleForgotPassword = () => router.push("../forgot-password");
-   const handleCreateAccount = () => router.push("../signup");
+   const handleCreateAccount = () => router.push("/auth/signup");
    const handleBack = () => router.back();
 
   // Don't render the form if we're redirecting

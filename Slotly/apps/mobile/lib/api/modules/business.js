@@ -1,6 +1,29 @@
 // apps/mobile/lib/api/modules/business.js
 import { jsonFetch, formDataFetch } from "./_fetch";
 
+// Simple in-memory cache with TTL
+const _bizCache = new Map(); // id -> { v, t }
+const TTL = 5 * 60 * 1000; // 5 minutes
+
+export async function getBusiness(id, opts = {}) {
+  if (!id) throw new Error('id required');
+  
+  // Check cache first
+  const now = Date.now();
+  const cached = _bizCache.get(id);
+  if (cached && now - cached.t < TTL) return cached.v;
+
+  // Fetch and cache
+  const data = await jsonFetch(`/api/businesses/${id}`, { method: 'GET', ...opts });
+  _bizCache.set(id, { v: data, t: now });
+  return data;
+}
+
+export function prefetchBusiness(id) {
+  if (!id) return;
+  getBusiness(id).catch(() => {}); // Fire and forget
+}
+
 /**
  * @typedef {Object} CreateBusinessVerificationPayload
  * @property {string} businessId
@@ -103,18 +126,23 @@ export async function search({ q, lat, lng, date, dayPart }) {
 }
 
 /**
- * Get a single business by ID (public view)
- * @param {string} id - Business ID
- */
-export async function getBusiness(id) {
-  return jsonFetch(`/api/businesses/${id}`);
-}
-
-/**
  * Get all businesses (public listing)
  */
 export async function getAllBusinesses() {
   return jsonFetch("/api/businesses");
+}
+
+// ================== Reviews (public) ==================
+export async function getBusinessReviewSummary(businessId) {
+  if (!businessId) throw new Error("businessId required");
+  const params = new URLSearchParams({ businessId, limit: "0" });
+  return jsonFetch(`/api/businesses/reviews?${params.toString()}`); // returns avg, count
+}
+
+export async function getBusinessReviews(businessId, { page = 1, limit = 3 } = {}) {
+  if (!businessId) throw new Error("businessId required");
+  const params = new URLSearchParams({ businessId, page: String(page), limit: String(limit) });
+  return jsonFetch(`/api/businesses/reviews?${params.toString()}`);
 }
 
 // ================== Manager endpoints (authenticated) ==================

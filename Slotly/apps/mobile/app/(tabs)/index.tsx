@@ -1,6 +1,6 @@
 // apps/mobile/app/(tabs)/index.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { View, ScrollView, StyleSheet, TouchableOpacity, RefreshControl } from "react-native";
+import { View, ScrollView, StyleSheet, TouchableOpacity, RefreshControl, Image } from "react-native";
 import { Text, useTheme, ActivityIndicator } from "react-native-paper";
 import { useRouter, useFocusEffect } from "expo-router";
 import * as Location from "expo-location";
@@ -9,8 +9,10 @@ import SectionHeader from "../components/ui/SectionHeader";
 import UICard from "../components/ui/Card";
 
 import { useSession } from "../../context/SessionContext";
-import { listBookings } from "../../lib/api/modules/users";
+import { getMe, listBookings } from "../../lib/api/modules/users";
 import { search as searchBusinesses } from "../../lib/api/modules/business";
+import { prefetchBusiness } from "../../lib/api/modules/business";
+import { prefetchServicesForBusiness } from "../../lib/api/modules/services";
 
 // ---- Types ----
 type SessionUser = {
@@ -19,6 +21,7 @@ type SessionUser = {
   name?: string | null;
   phone?: string | null;
   role: string;
+  avatarUrl?: string | null;
 };
 
 type BookingItemUI = {
@@ -99,15 +102,17 @@ const uniqById = <T extends { id: string }>(arr: T[]) =>
 export default function HomeScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { token, user } = useSession() as { 
+  const { token, user, setUser } = useSession() as { 
     token: string | null; 
     user: SessionUser | null;
+    setUser?: (user: SessionUser) => void;
   };
 
   const [refreshing, setRefreshing] = useState(false);
 
   // Profile initials from session
   const initials = useMemo(() => getInitials(user?.name, user?.email), [user]);
+  const avatarUrl = user?.avatarUrl || null;
 
   // Recent bookings (live data)
   const [loadingBookings, setLoadingBookings] = useState(true);
@@ -244,6 +249,12 @@ export default function HomeScreen() {
   // ----- Real-time polling while screen is focused -----
   useFocusEffect(
     useCallback(() => {
+      // Hydrate latest user profile (keeps avatar/name up to date)
+      if (token) {
+        getMe(token)
+          .then((me) => setUser?.(me))
+          .catch(() => {});
+      }
       // Fetch immediately on focus
       fetchBookings();
       
@@ -259,7 +270,7 @@ export default function HomeScreen() {
           pollRef.current = null;
         }
       };
-    }, [fetchBookings])
+    }, [fetchBookings, token, setUser])
   );
 
   // ----- Pull to refresh -----
@@ -282,6 +293,25 @@ export default function HomeScreen() {
     ],
     []
   );
+
+  // Handle business press with prefetching
+  const handleBusinessPress = useCallback((item: BusinessItem) => {
+    // Prefetch business details and services before navigation
+    prefetchBusiness(item.id);
+    prefetchServicesForBusiness(item.id);
+
+    router.push({
+      pathname: "/explore/explore-services",
+      params: {
+        businessId: item.id,
+        name: item.name || "",
+        address: item.address || "",
+        logoUrl: item.logoUrl || "",
+        lat: String(item.latitude ?? ""),
+        lon: String(item.longitude ?? "")
+      }
+    } as any);
+  }, [router]);
 
   return (
     <ScrollView
@@ -311,15 +341,22 @@ export default function HomeScreen() {
           {/* Tap to go to profile */}
           <TouchableOpacity
             onPress={() => router.push("/(tabs)/profile" as any)}
-            style={[styles.profileIcon, { backgroundColor: theme.colors.primary }]}
+            style={styles.profileButton}
           >
-            <Text style={{ 
-              color: "white", 
-              fontSize: 14, 
-              fontWeight: "bold" 
-            }}>
-              {initials}
-            </Text>
+            {avatarUrl ? (
+              <View style={styles.profileImageWrapper}>
+                <Image
+                  source={{ uri: avatarUrl }}
+                  style={styles.profileImageSmall}
+                />
+              </View>
+            ) : (
+              <View style={[styles.profileInitials, { backgroundColor: theme.colors.primary }]}>
+                <Text style={{ color: "white", fontSize: 14, fontWeight: "bold" }}>
+                  {initials}
+                </Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
       </View>
@@ -467,10 +504,7 @@ export default function HomeScreen() {
           {nearYou.map((item) => (
             <TouchableOpacity
               key={item.id}
-              onPress={() => router.push({ 
-                pathname: "/explore/explore-services", 
-                params: { businessId: item.id } 
-              } as any)}
+              onPress={() => handleBusinessPress(item)}
             >
               <UICard style={[styles.nearYouCard, { 
                 backgroundColor: "#f0f7ff",
@@ -525,12 +559,25 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  profileIcon: {
+  profileButton: { alignItems: "center", justifyContent: "center" },
+  profileInitials: {
     width: 30,
     height: 30,
     borderRadius: 15,
     justifyContent: "center",
     alignItems: "center",
+  },
+  profileImageWrapper: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    overflow: "hidden",
+    backgroundColor: "#eee",
+  },
+  profileImageSmall: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 15,
   },
   heroBanner: {
     marginHorizontal: 16,

@@ -177,10 +177,6 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>Personal Information</Text>
 
-          <TouchableRipple onPress={() => handleNavigation("/settings/account-details")} rippleColor="rgba(0,0,0,0.1)">
-            <List.Item title="Account Details" titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} style={styles.listItem} />
-          </TouchableRipple>
-
           <TouchableRipple onPress={() => handleNavigation("/settings/payment-details")} rippleColor="rgba(0,0,0,0.1)">
             <List.Item title="Payment Details" titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} style={styles.listItem} />
           </TouchableRipple>

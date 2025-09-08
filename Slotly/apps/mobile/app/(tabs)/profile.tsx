@@ -1,26 +1,23 @@
 // apps/mobile/app/(tabs)/profile.tsx
-import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { View, ScrollView, Platform, Share, TouchableOpacity, RefreshControl } from "react-native";
+import React, { useEffect, useState, useCallback } from "react";
+import { View, ScrollView, Alert, RefreshControl, Platform, Share, TouchableOpacity } from "react-native";
 import {
   Text,
   Avatar,
   Button,
   Card,
   Divider,
-  IconButton,
   useTheme,
+  ActivityIndicator,
+  IconButton,
   Chip,
   Snackbar,
-  ActivityIndicator,
 } from "react-native-paper";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
+import { getMe, deleteMe, listBookings } from "../../lib/api/modules/users";
 import { useSession } from "../../context/SessionContext";
-
-import ListRow from "../components/ui/ListRow";
 import UICard from "../components/ui/Card";
-
-import { getMe, listBookings } from "../../lib/api/modules/users";
-import { getCurrentUser } from "../../lib/api/modules/auth"; // <-- pulls /api/auth/me (has createdAt)
+import ListRow from "../components/ui/ListRow";
 
 type ApiBooking = {
   id: string;
@@ -29,16 +26,6 @@ type ApiBooking = {
   service?: { id: string; name: string; duration?: number; price?: number; imageUrl?: string };
   business?: { id: string; name: string; address?: string; logoUrl?: string; latitude?: number; longitude?: number };
   staff?: { id: string; name?: string };
-};
-
-type UserLite = {
-  id?: string;
-  userId?: string;
-  name?: string;
-  email?: string;
-  phone?: string;
-  createdAt?: string;
-  profileImage?: string;
 };
 
 type ChipItem = { 
@@ -57,83 +44,72 @@ const PHL = {
 export default function ProfileScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { user: sessionUser, token } = useSession(); // <-- token for users API
+  const { token, user: sessionUser, setUser, logout } = useSession();
 
-  const [user, setUser] = useState<UserLite | null>(sessionUser ?? null);
+  const [user, setUserLocal] = useState(sessionUser || null);
   const [bookings, setBookings] = useState<ApiBooking[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!sessionUser);
   const [refreshing, setRefreshing] = useState(false);
   const [snack, setSnack] = useState<{ visible: boolean; msg: string }>({ visible: false, msg: "" });
 
-  const resolvedUserId = useMemo(() => user?.userId || user?.id || "", [user]);
-
-  // Load user + bookings
   const load = useCallback(async () => {
-    setLoading(true);
     try {
-      // 1) Prefer current authenticated user (from /api/auth/me) — includes createdAt & name
-      const authUser = await getCurrentUser().catch(() => null);
-
-      // 2) Also fetch /api/users/me as a supplement; pass token so it's always authorized
-      const usersMe = await getMe(token).catch(() => null);
-
-      // 3) Merge sources (authUser has createdAt; usersMe may have phone/role; session has whatever is cached)
-      const merged: UserLite = {
-        ...(sessionUser ?? {}),
-        ...(usersMe ?? {}),
-        ...(authUser ?? {}),
-      };
-
-      setUser(merged);
-
-      // Bookings of current user (server infers user by token)
-      const data = await listBookings(token).catch(() => null);
-      const rows: ApiBooking[] = Array.isArray(data)
-        ? data
-        : Array.isArray(data?.upcomingBookings) || Array.isArray(data?.pastBookings)
-        ? [
-            ...(Array.isArray(data.upcomingBookings) ? data.upcomingBookings : []),
-            ...(Array.isArray(data.pastBookings) ? data.pastBookings : []),
-          ]
-        : [];
-
-      rows.sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
-      setBookings(rows);
-    } catch (error) {
-      console.error("Failed to load profile data:", error);
+      // Load fresh profile data
+      const me = await getMe(token);
+      setUserLocal(me);
+      setUser?.(me); // Keep global cache hot (Home avatar will update instantly)
+      
+      // Load bookings for stats
+      const bookingData = await listBookings(token);
+      const allBookings = [
+        ...(Array.isArray(bookingData?.upcomingBookings) ? bookingData.upcomingBookings : []),
+        ...(Array.isArray(bookingData?.pastBookings) ? bookingData.pastBookings : []),
+      ];
+      setBookings(allBookings);
+    } catch (e) {
+      // Fix: Properly type the error and handle the message
+      const errorMessage = e instanceof Error ? e.message : 'Unknown error occurred';
+      console.log("Failed to load profile data", errorMessage);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  }, [sessionUser, token]);
+  }, [token, setUser]);
 
+  useEffect(() => { 
+    load(); 
+  }, [load]);
+
+  // When this screen is focused again (e.g., after saving in Edit Profile), reload.
+  useFocusEffect(
+    React.useCallback(() => {
+      load();
+    }, [load])
+  );
+
+  // If the session user changes (Edit Profile calls setUser), reflect it right away.
   useEffect(() => {
+    if (sessionUser) setUserLocal(sessionUser);
+  }, [sessionUser]);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
     load();
   }, [load]);
 
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      await load();
-    } finally {
-      setRefreshing(false);
-    }
-  }, [load]);
-
-  // Derived: join date from createdAt
-  const joinDate = useMemo(() => {
-    const created = user?.createdAt;
-    if (!created) return "—";
-    const d = new Date(created);
-    // e.g. "January 2024"
-    return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
-  }, [user?.createdAt]);
-
+  // Derived data
+  const joinDate = user?.createdAt 
+    ? new Date(user.createdAt).toLocaleDateString(undefined, { month: "long", year: "numeric" })
+    : "—";
+  
   const totalBookings = bookings.length;
+  const resolvedUserId = user?.userId || user?.id || "";
 
-  // Derived: favourites (services booked >= 2 times)
-  const favouriteServices: ChipItem[] = useMemo(() => {
+  // Favourite services (booked 2+ times)
+  const favouriteServices: ChipItem[] = React.useMemo(() => {
     if (!bookings.length) return [];
     const counts = new Map<string, { name: string; image?: string; businessId?: string; lastSeenAt: number; n: number }>();
+    
     for (const bk of bookings) {
       const svc = bk.service;
       if (!svc?.id) continue;
@@ -152,7 +128,8 @@ export default function ProfileScreen() {
         prev.n += 1;
       }
     }
-    const favs = [...counts.entries()]
+    
+    return [...counts.entries()]
       .filter(([, v]) => v.n >= 2)
       .map(([serviceId, v]) => ({ 
         id: serviceId, 
@@ -162,14 +139,14 @@ export default function ProfileScreen() {
         businessId: v.businessId 
       }))
       .sort((a, b) => (counts.get(b.id)!.lastSeenAt - counts.get(a.id)!.lastSeenAt));
-    return favs;
   }, [bookings]);
 
-  // Derived: frequently visited (five most recent UNIQUE businesses)
-  const frequentBusinesses: ChipItem[] = useMemo(() => {
+  // Frequently visited businesses (5 most recent unique)
+  const frequentBusinesses: ChipItem[] = React.useMemo(() => {
     if (!bookings.length) return [];
     const seen = new Set<string>();
     const uniq: ChipItem[] = [];
+    
     for (const bk of bookings) {
       const biz = bk.business;
       if (!biz?.id || seen.has(biz.id)) continue;
@@ -184,6 +161,27 @@ export default function ProfileScreen() {
     }
     return uniq;
   }, [bookings]);
+
+  const onDelete = useCallback(() => {
+    Alert.alert("Delete account", "This will permanently delete your profile and bookings. Continue?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await deleteMe(token);
+            await logout?.();
+            router.replace("/auth/signup" as any);
+          } catch (e) {
+            // Fix: Properly handle error type
+            const errorMessage = e instanceof Error ? e.message : "Unknown error occurred";
+            Alert.alert("Delete failed", errorMessage || "Try again later");
+          }
+        },
+      },
+    ]);
+  }, [token, router, logout]);
 
   const copyOrShareUserId = async () => {
     if (!resolvedUserId) return;
@@ -221,11 +219,20 @@ export default function ProfileScreen() {
 
   if (loading && !refreshing) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
         <ActivityIndicator />
         <Text style={{ marginTop: 8, color: theme.colors.onSurfaceVariant }}>
-          Loading your profile…
+          Loading profile…
         </Text>
+      </View>
+    );
+  }
+
+  if (!user) {
+    return (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 16 }}>
+        <Text>No profile data</Text>
+        <Button onPress={() => router.replace("/auth/signup" as any)}>Go to Sign up</Button>
       </View>
     );
   }
@@ -249,18 +256,15 @@ export default function ProfileScreen() {
         <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 16 }}>
           <Avatar.Image 
             size={80} 
-            source={{ uri: user?.profileImage || "https://via.placeholder.com/150x150.png?text=ME" }} 
+            source={{ uri: user?.avatarUrl || "https://via.placeholder.com/150x150.png?text=ME" }} 
           />
           <View style={{ marginLeft: 16, flex: 1 }}>
-            {/* Hello + Name inline */}
             <Text variant="headlineSmall" style={{ marginBottom: 2 }}>
               Hello,{" "}
               <Text style={{ fontWeight: "800", color: theme.colors.primary }}>
                 {displayName}
               </Text>
             </Text>
-
-            {/* Member since from createdAt */}
             <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
               Member since {joinDate}
             </Text>
@@ -291,7 +295,7 @@ export default function ProfileScreen() {
           </View>
         </Card>
 
-        {/* Contact stats */}
+        {/* Contact & stats */}
         <Card mode="outlined" style={{ marginTop: 12 }}>
           <Card.Content>
             <ListRow label="Email" value={user?.email || "—"} />
@@ -337,25 +341,23 @@ export default function ProfileScreen() {
         </Button>
       </View>
 
-      {/* Edit Profile CTA */}
-      <Button 
-        style={{ marginHorizontal: 16 }} 
-        mode="contained" 
-        onPress={() => router.push("/edit-profile" as any)}
-      >
-        Edit Profile
-      </Button>
+      {/* Main actions */}
+      <View style={{ paddingHorizontal: 16, gap: 8, marginBottom: 20 }}>
+        <Button mode="contained" onPress={() => router.push("/edit-profile" as any)}>
+          Edit profile
+        </Button>
+        <Button mode="outlined" onPress={onDelete} textColor={theme.colors.error}>
+          Delete account
+        </Button>
+      </View>
 
       <Snackbar 
         visible={snack.visible} 
         onDismiss={() => setSnack({ visible: false, msg: "" })} 
         duration={2200} 
-        style={{ marginHorizontal: 16, marginTop: 10 }}
       >
         {snack.msg}
       </Snackbar>
-
-      <View style={{ height: 80 }} />
     </ScrollView>
   );
 }

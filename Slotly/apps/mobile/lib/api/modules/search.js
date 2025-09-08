@@ -4,8 +4,8 @@
  * Client for /api/search (Slotly).
  *
  * Backend contract (from your route):
- *   GET    /api/search?service=&lat=&lon=&date=&time=&userId=&category=
- *           -> { results: [...], recentSearches: [...] }
+ *   GET    /api/search?service=&lat=&lon=&date=&time=&userId=&category=&kind=&limit=&startAt=
+ *           -> { services: [...], businesses: [...], suggested?: {...}, recentSearches: [...] }
  *   DELETE /api/search?userId=
  *           -> { message: 'Search history cleared' }
  */
@@ -56,6 +56,14 @@ async function http(path, { method = 'GET', headers = {}, timeout = DEFAULT_TIME
     }
 
     return data;
+  } catch (e) {
+    // Mark aborts as a specific error so the UI can detect them
+    if (e.name === 'AbortError') {
+      const err = new Error('ABORTED');
+      err.name = 'AbortError';
+      throw err;
+    }
+    throw e;
   } finally {
     clearTimeout(t);
   }
@@ -69,12 +77,15 @@ async function http(path, { method = 'GET', headers = {}, timeout = DEFAULT_TIME
  *   lon: number;
  *   date?: string;   // YYYY-MM-DD (defaults server-side)
  *   time?: 'morning'|'afternoon'|'evening'|'anytime';
+ *   startAt?: string; // ISO string when using exact time
  *   userId?: string; // Mongo ObjectId (optional)
  *   category?: string;
+ *   kind?: 'both'|'services'|'businesses';
+ *   limit?: number;
  * }} params
- * @returns {Promise<{results: Array, recentSearches: Array}>}
+ * @returns {Promise<{services: Array, businesses: Array, suggested?: {services:Array, businesses:Array}, recentSearches: Array}>}
  */
-export async function searchNearby(params) {
+export async function searchNearby(params, { timeoutMs = 2000 } = {}) {
   if (typeof params?.lat !== 'number' || typeof params?.lon !== 'number') {
     throw new Error('lat and lon are required numbers');
   }
@@ -85,11 +96,14 @@ export async function searchNearby(params) {
     lon: params.lon,
     date: params.date,              // let server default if not provided
     time: (params.time || 'anytime').toLowerCase(),
+    startAt: params.startAt,        // ISO string when using exact time
     userId: params.userId,
     category: params.category,
+    kind: (params.kind || 'both').toLowerCase(),
+    limit: params.limit || 24,
   })}`;
 
-  return http(path, { method: 'GET' });
+  return http(path, { method: 'GET', timeout: timeoutMs });
 }
 
 /**
@@ -108,13 +122,13 @@ export async function clearRecentSearches(userId) {
  * --------------------------*/
 
 /**
- * useSearchNearby — debounced search hook for RN/React
+ * useSearchNearby – debounced search hook for RN/React
  * Example:
  *   const { data, loading, error, search } = useSearchNearby();
- *   useEffect(() => { search({ service, lat, lon, time, userId, category }); }, [deps]);
+ *   useEffect(() => { search({ service, lat, lon, time, userId, category, kind, limit }); }, [deps]);
  */
 export function useSearchNearby({ debounceMs = 350 } = {}) {
-  // if you’re not in React, you can delete this section
+  // if you're not in React, you can delete this section
   const React = require('react');
   const { useRef, useState, useCallback } = React;
 
@@ -123,16 +137,21 @@ export function useSearchNearby({ debounceMs = 350 } = {}) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const search = useCallback((params) => {
+  const search = useCallback((params, options = {}) => {
     if (timer.current) clearTimeout(timer.current);
     setLoading(true);
     setError(null);
 
     timer.current = setTimeout(async () => {
       try {
-        const res = await searchNearby(params);
+        const res = await searchNearby(params, options);
         setData(res);
       } catch (e) {
+        // Handle aborted fetches quietly
+        if (e?.name === 'AbortError' || e?.message === 'ABORTED') {
+          setLoading(false);
+          return;
+        }
         setError(e);
       } finally {
         setLoading(false);

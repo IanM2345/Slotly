@@ -27,6 +27,11 @@ export default function ChangePasswordScreen() {
   });
   const [errors, setErrors] = useState<Partial<PasswordData>>({});
   const [snack, setSnack] = useState<{ visible: boolean; msg: string }>({ visible: false, msg: '' });
+  
+  // Password visibility states
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const canSubmit = useMemo(() => {
     const { currentPassword, newPassword, confirmPassword } = passwordData;
@@ -40,7 +45,10 @@ export default function ChangePasswordScreen() {
     );
   }, [passwordData, loading]);
 
-  const handleBack = () => router.back();
+  const handleBack = () => {
+    // Always navigate to edit-profile specifically
+    router.push('/edit-profile');
+  };
 
   const updatePasswordData = (field: keyof PasswordData, value: string) => {
     setPasswordData(prev => ({ ...prev, [field]: value }));
@@ -75,7 +83,8 @@ export default function ChangePasswordScreen() {
         token
       );
       setSnack({ visible: true, msg: 'Password updated' });
-      setTimeout(() => router.back(), 900);
+      // Navigate to edit-profile after success
+      setTimeout(() => router.push('/edit-profile'), 900);
     } catch (err: any) {
       const msg = err?.response?.data?.message || 'Failed to update password';
       // surface server-side specific errors
@@ -93,7 +102,13 @@ export default function ChangePasswordScreen() {
   return (
     <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <View style={styles.header}>
-        <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={handleBack} style={styles.backButton} />
+        <IconButton 
+          icon="arrow-left" 
+          size={24} 
+          iconColor={theme.colors.onSurface} 
+          onPress={handleBack} 
+          style={styles.backButton} 
+        />
         <Text style={[styles.headerTitle, { color: theme.colors.onSurface }]}>Change Password</Text>
       </View>
 
@@ -108,9 +123,14 @@ export default function ChangePasswordScreen() {
             outlineColor={theme.colors.outline}
             activeOutlineColor={theme.colors.primary}
             textColor={theme.colors.onSurface}
-            secureTextEntry
+            secureTextEntry={!showCurrentPassword}
             error={!!errors.currentPassword}
-            right={<TextInput.Icon icon="eye-off" onPress={() => { /* implement toggle if you like */ }} />}
+            right={
+              <TextInput.Icon 
+                icon={showCurrentPassword ? "eye-off" : "eye"} 
+                onPress={() => setShowCurrentPassword(!showCurrentPassword)} 
+              />
+            }
           />
           {!!errors.currentPassword && <Text style={styles.errorText}>{errors.currentPassword}</Text>}
 
@@ -123,9 +143,14 @@ export default function ChangePasswordScreen() {
             outlineColor={theme.colors.outline}
             activeOutlineColor={theme.colors.primary}
             textColor={theme.colors.onSurface}
-            secureTextEntry
+            secureTextEntry={!showNewPassword}
             error={!!errors.newPassword}
-            right={<TextInput.Icon icon="eye-off" onPress={() => { /* toggle */ }} />}
+            right={
+              <TextInput.Icon 
+                icon={showNewPassword ? "eye-off" : "eye"} 
+                onPress={() => setShowNewPassword(!showNewPassword)} 
+              />
+            }
           />
           {!!errors.newPassword && <Text style={styles.errorText}>{errors.newPassword}</Text>}
 
@@ -138,9 +163,14 @@ export default function ChangePasswordScreen() {
             outlineColor={theme.colors.outline}
             activeOutlineColor={theme.colors.primary}
             textColor={theme.colors.onSurface}
-            secureTextEntry
+            secureTextEntry={!showConfirmPassword}
             error={!!errors.confirmPassword}
-            right={<TextInput.Icon icon="eye-off" onPress={() => { /* toggle */ }} />}
+            right={
+              <TextInput.Icon 
+                icon={showConfirmPassword ? "eye-off" : "eye"} 
+                onPress={() => setShowConfirmPassword(!showConfirmPassword)} 
+              />
+            }
           />
           {!!errors.confirmPassword && <Text style={styles.errorText}>{errors.confirmPassword}</Text>}
         </View>

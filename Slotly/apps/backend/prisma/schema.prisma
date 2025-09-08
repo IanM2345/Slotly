@@ -24,6 +24,8 @@ model User {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
+  avatarUrl String?
+
   otp          String?
   otpVerified  Boolean?  @default(false)
   otpExpiresAt DateTime?
@@ -222,6 +224,7 @@ model Review {
   businessId String   @db.ObjectId
   rating     Int
   comment    String?
+  imageUrl   String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   flagged    Boolean  @default(false)
@@ -230,6 +233,7 @@ model Review {
   user     User     @relation("UserReviews", fields: [userId], references: [id])
   business Business @relation("BusinessReviews", fields: [businessId], references: [id])
 
+  @@unique([userId, businessId])
   @@index([businessId])
   @@index([userId])
 }

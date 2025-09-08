@@ -1,14 +1,28 @@
 // apps/mobile/lib/api/modules/services.js
 import api from "../client";
 
-/**
- * List services for a business.
- * Backend: GET /api/services?businessId=...
- */
-export async function listServicesForBusiness({ businessId } = {}) {
-  if (!businessId) throw new Error("listServicesForBusiness: 'businessId' is required.");
+// Simple in-memory cache with TTL
+const _svcCache = new Map(); // businessId -> { v, t }
+const TTL = 5 * 60 * 1000; // 5 minutes
+
+export async function listServicesForBusiness({ businessId }, opts = {}) {
+  if (!businessId) throw new Error('businessId required');
+  
+  // Check cache first
+  const now = Date.now();
+  const cached = _svcCache.get(businessId);
+  if (cached && now - cached.t < TTL) return cached.v;
+
+  // Fetch and cache
   const { data } = await api.get("/api/services", { params: { businessId } });
-  return data;
+  const arr = Array.isArray(data) ? data : (data?.services ?? []);
+  _svcCache.set(businessId, { v: arr, t: now });
+  return arr;
+}
+
+export function prefetchServicesForBusiness(businessId) {
+  if (!businessId) return;
+  listServicesForBusiness({ businessId }).catch(() => {}); // Fire and forget
 }
 
 /**

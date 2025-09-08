@@ -1,151 +1,102 @@
-import { NextResponse } from "next/server";
-import { PrismaClient } from "@/generated/prisma";
-import { requireAuth, verifyToken } from "../../../../lib/token";
-import * as Sentry from "@sentry/nextjs";
-import bcrypt from "bcryptjs";
+import { NextResponse } from 'next/server';
+import { PrismaClient } from '@/generated/prisma';
+import * as Sentry from '@sentry/nextjs';
+import { verifyToken } from '@/middleware/auth';
 
 const prisma = globalThis._prisma ?? new PrismaClient();
-if (process.env.NODE_ENV !== "production") globalThis._prisma = prisma;
+if (process.env.NODE_ENV !== 'production') globalThis._prisma = prisma;
 
-export const dynamic = "force-dynamic";
+function extractUserId(decoded) {
+  return (
+    decoded.userId ?? decoded.id ?? decoded.sub ?? decoded._id ??
+    decoded.user_id ?? decoded.user?.id ?? decoded.user?.userId ?? null
+  );
+}
 
-export async function GET(req) {
+async function getAuthedUserId(request) {
+  const authHeader = request.headers.get('authorization') || request.headers.get('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) return null;
+  const token = authHeader.split(' ')[1];
+  const { valid, decoded } = await verifyToken(token);
+  if (!valid || !decoded) return null;
+  return extractUserId(decoded);
+}
+
+/** GET /api/users/me – returns current profile (preload-friendly) */
+export async function GET(request) {
   try {
-    // Fix: requireAuth returns { id, role, email } directly, not { decoded }
-    const { id } = await requireAuth(req); // throws with code on fail
+    const userId = await getAuthedUserId(request);
+    if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    // get user + business
-    const user = await prisma.user.findUnique({
-      where: { id }, // Fix: use id directly instead of decoded.id
-      select: { id: true, email: true, phone: true, role: true },
-    });
-
-    if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
-
-    const business = await prisma.business.findFirst({
-      where: { ownerId: user.id },
-      select: { id: true, name: true, plan: true, createdAt: true },
-    });
-
-    let verificationStatus = null;
-    let latestVerification = null;
-    if (business?.id) {
-      const latest = await prisma.businessVerification.findFirst({
-        where: { businessId: business.id },
-        orderBy: { createdAt: "desc" },
-        select: { id: true, status: true, createdAt: true },
-      });
-      verificationStatus = latest?.status ?? "PENDING";
-      latestVerification = latest
-        ? { id: latest.id, status: latest.status, createdAt: latest.createdAt }
-        : null;
-    }
-
-    return NextResponse.json(
-      {
-        id: user.id,
-        email: user.email ?? null,
-        phone: user.phone ?? null,
-        role: user.role,
-        business: business
-          ? {
-              ...business,
-              verificationStatus: String(verificationStatus || "PENDING").toLowerCase(),
-              hasVerification: !!latestVerification,
-              latestVerification,
-            }
-          : null,
+    const me = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true, email: true, phone: true, name: true, role: true,
+        avatarUrl: true, createdAt: true, updatedAt: true,
       },
-      { status: 200 }
-    );
+    });
+
+    if (!me) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    return NextResponse.json(me, { status: 200 });
   } catch (err) {
-    // Map auth failures to 401 instead of 500
-    if (err?.code === "NO_TOKEN" || err?.code === "INVALID_TOKEN" || err?.code === "EXPIRED_TOKEN") {
-      return NextResponse.json({ error: err.message, code: err.code }, { status: 401 });
-    }
-    console.error("GET /api/users/me error:", err);
-    Sentry.captureException?.(err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    Sentry.captureException(err);
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
 
+/** PATCH /api/users/me – update name/phone/avatar */
 export async function PATCH(request) {
   try {
-    const authHeader = request.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-    const token = authHeader.split(" ")[1];
-    
-    // Fix: verifyToken now returns decoded payload directly or throws
-    let decoded;
-    try {
-      decoded = verifyToken(token); // returns decoded or throws
-    } catch {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-    
-    if (decoded.role !== "CUSTOMER") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const userId = await getAuthedUserId(request);
+    if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const { name, phone, password } = await request.json();
-    if (!name && !phone && !password) {
-      return NextResponse.json({ error: "No fields to update" }, { status: 400 });
-    }
+    const body = await request.json();
+    const { name, phone, avatarUrl } = body;
 
-    const data = {};
-    if (name) data.name = name;
-    if (phone) data.phone = phone;
-    if (password) {
-      if (password.length < 6) {
-        return NextResponse.json({ error: "Password must be at least 6 characters long" }, { status: 400 });
-      }
-      data.password = await bcrypt.hash(password, 10);
-    }
-
-    const updatedUser = await prisma.user.update({
-      where: { id: decoded.id },
-      data,
-      select: { id: true, email: true, name: true, phone: true, role: true, createdAt: true },
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(name != null ? { name } : {}),
+        ...(phone != null ? { phone } : {}),
+        ...(avatarUrl != null ? { avatarUrl } : {}),
+      },
+      select: {
+        id: true, email: true, phone: true, name: true, role: true,
+        avatarUrl: true, createdAt: true, updatedAt: true,
+      },
     });
 
-    return NextResponse.json(updatedUser, { status: 200 });
-  } catch (error) {
-    console.error("Error updating user:", error);
-    Sentry.captureException?.(error);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+    return NextResponse.json(updated, { status: 200 });
+  } catch (err) {
+    Sentry.captureException(err);
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
 
+/** DELETE /api/users/me – hard delete + cascade-ish cleanup */
 export async function DELETE(request) {
   try {
-    const authHeader = request.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-    const token = authHeader.split(" ")[1];
-    
-    // Fix: verifyToken now returns decoded payload directly or throws
-    let decoded;
-    try {
-      decoded = verifyToken(token); // returns decoded or throws
-    } catch {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-    
-    if (decoded.role !== "CUSTOMER") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const userId = await getAuthedUserId(request);
+    if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    await prisma.staffEnrollment.deleteMany({ where: { userId: decoded.id } });
-    await prisma.booking.deleteMany({ where: { userId: decoded.id } });
-    await prisma.user.delete({ where: { id: decoded.id } });
+    await prisma.$transaction(async (tx) => {
+      await tx.booking.deleteMany({ where: { userId } });
+      await tx.refreshToken.deleteMany({ where: { userId } });
+      await tx.notification.deleteMany({ where: { userId } });
+      await tx.userCoupon.deleteMany({ where: { userId } });
+      await tx.review.deleteMany({ where: { userId } });
+      await tx.availability.deleteMany({ where: { staffId: userId } });
+      await tx.timeOffRequest.deleteMany({ where: { staffId: userId } });
+      await tx.staffEnrollment.deleteMany({ where: { userId } });
+      await tx.referral.deleteMany({ where: { OR: [{ referrerId: userId }, { referredUserId: userId }] } });
+      await tx.previewLog.deleteMany({ where: { userId } });
+      await tx.downloadLog.deleteMany({ where: { userId } });
+      await tx.user.delete({ where: { id: userId } });
+    });
 
-    return NextResponse.json({ message: "User deleted successfully" }, { status: 200 });
-  } catch (error) {
-    console.error("Error deleting user:", error);
-    Sentry.captureException?.(error);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+    return NextResponse.json({ message: 'Account deleted' }, { status: 200 });
+  } catch (err) {
+    Sentry.captureException(err);
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
