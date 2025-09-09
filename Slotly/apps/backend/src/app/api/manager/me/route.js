@@ -21,6 +21,83 @@ const DEFAULT_HOURS = {
   sunday: { ...DEFAULT_DAY },
 };
 
+// Helper function to handle base64 logo upload
+async function processLogoUpload(logoDataUrl) {
+  if (!logoDataUrl || !logoDataUrl.startsWith('data:image/')) {
+    return null;
+  }
+
+  try {
+    // Extract base64 data and mime type
+    const matches = logoDataUrl.match(/^data:image\/([a-zA-Z]+);base64,(.+)$/);
+    if (!matches || matches.length !== 3) {
+      throw new Error('Invalid data URL format');
+    }
+
+    const [, mimeType, base64Data] = matches;
+    const buffer = Buffer.from(base64Data, 'base64');
+    
+    // Validate file size (limit to 5MB)
+    if (buffer.length > 5 * 1024 * 1024) {
+      throw new Error('Logo file too large (max 5MB)');
+    }
+
+    // Generate unique filename
+    const timestamp = Date.now();
+    const randomString = Math.random().toString(36).substring(2, 15);
+    const filename = `logo-${timestamp}-${randomString}.${mimeType}`;
+    
+    // In a real app, you'd upload to cloud storage (AWS S3, Cloudinary, etc.)
+    // For now, we'll simulate by returning a placeholder URL
+    // Replace this with your actual upload logic:
+    
+    /*
+    Example with AWS S3:
+    
+    import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+    
+    const s3Client = new S3Client({ region: process.env.AWS_REGION });
+    const uploadParams = {
+      Bucket: process.env.S3_BUCKET,
+      Key: `logos/${filename}`,
+      Body: buffer,
+      ContentType: `image/${mimeType}`,
+      ACL: 'public-read'
+    };
+    
+    await s3Client.send(new PutObjectCommand(uploadParams));
+    return `https://${process.env.S3_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/logos/${filename}`;
+    */
+    
+    /*
+    Example with Cloudinary:
+    
+    import { v2 as cloudinary } from 'cloudinary';
+    
+    const result = await new Promise((resolve, reject) => {
+      cloudinary.uploader.upload(logoDataUrl, {
+        resource_type: 'image',
+        folder: 'business-logos',
+        public_id: filename.split('.')[0]
+      }, (error, result) => {
+        if (error) reject(error);
+        else resolve(result);
+      });
+    });
+    
+    return result.secure_url;
+    */
+    
+    // Placeholder implementation - replace with actual upload
+    console.log(`Would upload logo: ${filename}, size: ${buffer.length} bytes`);
+    return `https://example-cdn.com/logos/${filename}`;
+    
+  } catch (error) {
+    console.error('Logo upload failed:', error);
+    throw new Error(`Logo upload failed: ${error.message}`);
+  }
+}
+
 export async function GET(request) {
   try {
     const authHeader = request.headers.get("authorization");
@@ -124,18 +201,44 @@ export async function PUT(request) {
     Sentry.setUser({ id: userId, role: decoded.role });
 
     const payload = await request.json();
-    const { logoUrl, name, description, address, latitude, longitude, hours, phone, email } = payload || {};
+    const { 
+      logoUrl, 
+      logoDataUrl, // NEW: handle base64 upload
+      name, 
+      description, 
+      address, 
+      latitude, 
+      longitude, 
+      hours, 
+      phone, 
+      email 
+    } = payload || {};
 
     const existing = await prisma.business.findFirst({ where: { ownerId: userId } });
     if (!existing) {
       return NextResponse.json({ error: "Business not found" }, { status: 404 });
     }
 
+    // Handle logo upload if logoDataUrl is provided
+    let finalLogoUrl = logoUrl;
+    if (logoDataUrl) {
+      try {
+        const uploadedUrl = await processLogoUpload(logoDataUrl);
+        if (uploadedUrl) {
+          finalLogoUrl = uploadedUrl;
+        }
+      } catch (uploadError) {
+        return NextResponse.json({ 
+          error: `Logo upload failed: ${uploadError.message}` 
+        }, { status: 400 });
+      }
+    }
+
     // Update Business
     const updatedBusiness = await prisma.business.update({
       where: { id: existing.id },
       data: {
-        ...(logoUrl !== undefined ? { logoUrl } : {}),
+        ...(finalLogoUrl !== undefined ? { logoUrl: finalLogoUrl } : {}),
         ...(name !== undefined ? { name } : {}),
         ...(description !== undefined ? { description } : {}),
         ...(address !== undefined ? { address } : {}),

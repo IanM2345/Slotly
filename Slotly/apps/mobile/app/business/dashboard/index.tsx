@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useMemo } from "react";
-import { ScrollView, StyleSheet, View, RefreshControl, useWindowDimensions } from "react-native";
+import { ScrollView, StyleSheet, View, RefreshControl, useWindowDimensions, Image } from "react-native";
 import { Button, Card, Chip, Divider, IconButton, Surface, Text, useTheme } from "react-native-paper";
 import { Link, type Href, useRouter } from "expo-router";
 import { useSession } from "../../../context/SessionContext";
@@ -43,7 +43,7 @@ export default function BusinessOverview() {
   const { width } = useWindowDimensions();
   const oneCol = width < 980;
 
-  const { token } = useSession();
+  const { token, user } = useSession();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -55,6 +55,14 @@ export default function BusinessOverview() {
   const [profile, setProfile] = useState<any>(null);
   const [reviews, setReviews] = useState<any[]>([]);
 
+  // Get business logo from user context or profile
+  const bizLogo = useMemo(() => {
+    return (user?.business as any)?.logoUrl || 
+           (user as any)?.business?.logoUrl || 
+           profile?.logoUrl || 
+           null;
+  }, [user, profile]);
+
   const todayISO = useMemo(() => {
     const d = new Date();
     const yyyy = d.getFullYear();
@@ -65,7 +73,7 @@ export default function BusinessOverview() {
 
   const fetchAll = useCallback(async () => {
     if (!token) {
-      console.warn("[BusinessOverview] Missing auth token – skipping dashboard fetch.");
+      console.warn("[BusinessOverview] Missing auth token — skipping dashboard fetch.");
       setLoading(false);
       return;
     }
@@ -102,7 +110,7 @@ export default function BusinessOverview() {
 
       if (perfRes.status === "fulfilled" && perfRes.value) {
         // Expect either { analytics: { bookings: {YYYY-MM-DD}, revenue: {YYYY-MM-DD} } }
-        // or any shape with today buckets – be defensive:
+        // or any shape with today buckets — be defensive:
         const a = (perfRes.value as any).analytics ?? perfRes.value ?? {};
         const b = typeof a.bookings === "object" ? a.bookings : {};
         const r = typeof a.revenue === "object" ? a.revenue : {};
@@ -258,9 +266,21 @@ export default function BusinessOverview() {
             onPress={() => router.replace("/settings")}  // always go to Settings
             style={{ margin: 0 }}
           />
-          <Text variant="headlineLarge" style={[styles.h1, { color: "#0F4BAC" }]}>
-            Dashboard Overview
-          </Text>
+          
+          {/* Business Logo and Name Header */}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginLeft: 8 }}>
+            {bizLogo ? (
+              <Image source={{ uri: bizLogo }} style={{ width: 48, height: 48, borderRadius: 24 }} />
+            ) : (
+              <Text style={{ fontSize: 28 }}>🏷️</Text>
+            )}
+            <View>
+              <Text style={[styles.h1, { color: "#0F4BAC" }]}>
+                {user?.business?.businessName || profile?.name || user?.name || "Your business"}
+              </Text>
+              {!!bizLogo && <Text style={{ color: "#6B7280" }}>Logo set</Text>}
+            </View>
+          </View>
         </View>
 
         <View style={{ flexDirection: "row" }}>
@@ -307,15 +327,14 @@ export default function BusinessOverview() {
         />
       </View>
 
-      {/* QUICK LINKS */}
+      {/* QUICK LINKS - REMOVED COUPONS AND BILLING */}
       <View style={styles.quickLinks}>
         <QuickLink href="/business/dashboard/analytics" label="Analytics" icon="chart-box" />
         <QuickLink href="/business/dashboard/team" label="Staff" icon="account-group" />
         <QuickLink href="/business/dashboard/bookings/manage" label="Bookings" icon="calendar" />
         <QuickLink href="/business/dashboard/services" label="Services" icon="briefcase" />
-        <QuickLink href="/business/dashboard/coupons" label="Coupons" icon="ticket-percent" />
         <QuickLink href="/business/dashboard/reports" label="Reports" icon="file-chart" />
-        <QuickLink href="/business/dashboard/billing" label="Billing" icon="credit-card" />
+        <QuickLink href="/business/dashboard/profile" label="Profile" icon="store" />
       </View>
 
       {/* UPCOMING LIST */}
@@ -338,40 +357,6 @@ export default function BusinessOverview() {
             </Text>
           )}
         </View>
-      </Surface>
-
-      {/* Billing Section */}
-      <Surface elevation={1} style={[styles.sectionCard, { backgroundColor: theme.colors.surface }]}>
-        <Text variant="titleLarge" style={{ fontWeight: "800", color: "#0F4BAC" }}>Billing</Text>
-        <Divider style={{ marginVertical: 8 }} />
-        {billing ? (
-          <>
-            <Text>Plan: <Text style={styles.bold}>{billing.planLabel}</Text></Text>
-            {!!billing.renewalDate && (
-              <Text>Renews: {new Date(billing.renewalDate).toDateString()}</Text>
-            )}
-            {!billing.renewalDate && billing.plan !== 'LEVEL_1' && (
-              <Text style={{ color: theme.colors.onSurfaceVariant, marginTop: 4 }}>
-                Subscription details loading...
-              </Text>
-            )}
-            {billing.plan === 'LEVEL_1' && (
-              <Text style={{ color: theme.colors.onSurfaceVariant, marginTop: 4 }}>
-                Free plan - No renewal required
-              </Text>
-            )}
-            {!!billing.payments?.length && (
-              <View style={{ marginTop: 8 }}>
-                <Text style={styles.bold}>Recent payments</Text>
-                {billing.payments.slice(0, 3).map((p: any) => (
-                  <Text key={p.id}>KSh {Math.round((p.amount ?? 0) / 100).toLocaleString()} – {new Date(p.createdAt).toDateString()}</Text>
-                ))}
-              </View>
-            )}
-          </>
-        ) : (
-          <Text>{loading ? "Loading…" : "No billing data"}</Text>
-        )}
       </Surface>
 
       {/* Business Profile Section */}
@@ -503,7 +488,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 8,
   },
-  h1: { fontWeight: "900", letterSpacing: 0.2 },
+  h1: { fontWeight: "900", letterSpacing: 0.2, fontSize: 24 },
   metricsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
   metricCard: {
     flexBasis: "48%",
