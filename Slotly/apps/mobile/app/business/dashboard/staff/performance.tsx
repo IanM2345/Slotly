@@ -1,566 +1,376 @@
-"use client"
+// apps/mobile/app/business/dashboard/staff/performance.tsx
+"use client";
 
-import { useState, useEffect } from "react"
-import { ScrollView, View, StyleSheet, Dimensions } from "react-native"
-import { Text, Surface, TextInput, useTheme, IconButton, Button } from "react-native-paper"
-import { SafeAreaView } from "react-native-safe-area-context"
-import { useLocalSearchParams } from "expo-router"
-import { useToast } from "./_layout"
-import { staffApi } from "../../../../../mobile/lib/api/modules/staff"
-import type { PerformanceMetrics } from "../../../../lib/staff/types"
-import Svg, { Line, Circle, Rect, Text as SvgText, Path } from 'react-native-svg'
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { ScrollView, StyleSheet, View, Dimensions } from "react-native";
+import {
+  ActivityIndicator,
+  Banner,
+  Button,
+  IconButton,
+  Surface,
+  Text,
+  useTheme,
+} from "react-native-paper";
+import { useRouter, useLocalSearchParams } from "expo-router";
+import { SafeAreaView } from "react-native-safe-area-context";
 
-const { width } = Dimensions.get('window')
+// Same import depth as your staff/index.tsx
+import { staffApi } from "../../../../lib/api/modules/staff";
 
-// Sample data structure - you'll replace this with real API data
-interface ChartDataPoint {
-  date: string
-  bookings: number
-  earnings: number
-  rating: number
-  cancellations: number
-}
+// Victory (same style you use in analytics.tsx)
+import Svg from "react-native-svg";
+import {
+  VictoryAxis,
+  VictoryBar,
+  VictoryChart,
+  VictoryGroup,
+  VictoryLabel,
+  VictoryLegend,
+  VictoryLine,
+  VictoryTheme,
+} from "victory-native";
+
+type SeriesPoint = { x: string; y: number };
+
+type PerfData = {
+  completedBookings: number;
+  cancellations: number;
+  averageRating: number;
+  commissionEarned: number;
+  totalBookings?: number;
+  totalRevenue?: number;
+  performanceScore?: number;
+  series: {
+    bookings: SeriesPoint[];
+    earnings: SeriesPoint[];
+    cancellations: SeriesPoint[];
+  };
+  topServices: { serviceId: string; name: string; count: number }[];
+};
+
+const { width: SCREEN_W } = Dimensions.get("window");
+const CHART_W = Math.max(320, SCREEN_W - 32); // some padding both sides
 
 export default function StaffPerformanceScreen() {
+  const router = useRouter();
+  const theme = useTheme();
   const { businessId: businessIdParam } = useLocalSearchParams<{ businessId?: string }>();
-  const businessId = typeof businessIdParam === "string" ? businessIdParam : undefined;
-  
-  const theme = useTheme()
-  const { notify } = useToast()
+  const [businessId, setBusinessId] = useState<string | undefined>(
+    typeof businessIdParam === "string" ? businessIdParam : undefined
+  );
 
-  const [metrics, setMetrics] = useState<PerformanceMetrics>({
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<PerfData>({
     completedBookings: 0,
     cancellations: 0,
     averageRating: 0,
     commissionEarned: 0,
-  })
+    series: { bookings: [], earnings: [], cancellations: [] },
+    topServices: [],
+  });
 
-  const [chartData, setChartData] = useState<ChartDataPoint[]>([])
-  const [chartType, setChartType] = useState<'line' | 'bar'>('line')
-  const [loading, setLoading] = useState(false)
-
-  const [dateRange, setDateRange] = useState({
-    from: "",
-    to: "",
-  })
-
+  // Resolve active business if query param not passed
   useEffect(() => {
-    loadMetrics()
-    loadChartData()
-  }, [businessId])
+    let mounted = true;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        let activeBizId = businessId;
+        if (!activeBizId) {
+          const me = await staffApi.getStaffMe().catch(() => null);
+          activeBizId = me?.activeBusiness?.id || me?.businesses?.[0]?.id || undefined;
+          if (mounted) setBusinessId(activeBizId);
+        }
 
-  const loadMetrics = async () => {
-    try {
-      const data = await staffApi.getPerformanceMetrics({ businessId })
-      setMetrics(data)
-    } catch (error) {
-      notify("Failed to load performance data")
-    }
-  }
+        const metrics = await staffApi.getPerformanceMetrics({ businessId: activeBizId });
+        if (!mounted) return;
 
-  const loadChartData = async () => {
-    setLoading(true)
-    try {
-      // Replace this with actual API call to get chart data
-      // const data = await staffApi.getPerformanceChartData({ businessId, from: dateRange.from, to: dateRange.to })
-      
-      // Sample data for demonstration
-      const sampleData: ChartDataPoint[] = [
-        { date: 'Jan', bookings: 12, earnings: 15000, rating: 4.2, cancellations: 2 },
-        { date: 'Feb', bookings: 18, earnings: 22500, rating: 4.5, cancellations: 1 },
-        { date: 'Mar', bookings: 15, earnings: 18750, rating: 4.3, cancellations: 3 },
-        { date: 'Apr', bookings: 22, earnings: 27500, rating: 4.7, cancellations: 2 },
-        { date: 'May', bookings: 25, earnings: 31250, rating: 4.6, cancellations: 1 },
-        { date: 'Jun', bookings: 20, earnings: 25000, rating: 4.4, cancellations: 4 },
-        { date: 'Jul', bookings: 28, earnings: 35000, rating: 4.8, cancellations: 2 },
-        { date: 'Aug', bookings: 24, earnings: 30000, rating: 4.5, cancellations: 3 },
-      ]
-      
-      setChartData(sampleData)
-    } catch (error) {
-      notify("Failed to load chart data")
-    } finally {
-      setLoading(false)
-    }
-  }
+        setData({
+          completedBookings: metrics.completedBookings,
+          cancellations: metrics.cancellations,
+          averageRating: metrics.averageRating,
+          commissionEarned: metrics.commissionEarned,
+          totalBookings: metrics.totalBookings,
+          totalRevenue: metrics.totalRevenue,
+          performanceScore: metrics.performanceScore,
+          series: metrics.series,
+          topServices: metrics.topServices,
+        });
+      } catch (e: any) {
+        if (!mounted) return;
+        setError(e?.message || "Failed to load performance metrics");
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
 
-  const handleDateRangeUpdate = () => {
-    if (dateRange.from && dateRange.to) {
-      loadChartData()
-    } else {
-      notify("Please select both start and end dates")
-    }
-  }
+    return () => {
+      mounted = false;
+    };
+  }, [businessId]);
 
-  const MetricCard = ({
-    title,
-    value,
-    icon,
-    iconColor,
-  }: {
-    title: string
-    value: string | number
-    icon: string
-    iconColor: string
-  }) => (
-    <Surface style={styles.metricCard} elevation={1}>
-      <View style={styles.metricContent}>
-        <View style={styles.metricInfo}>
-          <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
-            {title}
-          </Text>
-          <Text variant="headlineMedium" style={[styles.metricValue, { color: theme.colors.onBackground }]}>
-            {value}
-          </Text>
-        </View>
-        <IconButton icon={icon} size={24} iconColor={iconColor} style={styles.metricIcon} />
-      </View>
-    </Surface>
-  )
+  const empty = useMemo(() => {
+    const s = data.series;
+    return !s.bookings?.length && !s.earnings?.length && !s.cancellations?.length;
+  }, [data.series]);
 
-  // Simple SVG Chart Component
-  const SimpleChart = ({ data, type }: { data: ChartDataPoint[], type: 'line' | 'bar' }) => {
-    if (!data || data.length === 0) return null
+  const bookingsVsCancelBars = useMemo(() => {
+    const xKeys = Array.from(
+      new Set([...(data.series.bookings || []), ...(data.series.cancellations || [])].map((d) => d.x))
+    ).sort();
+    const barsA = xKeys.map((x) => ({ x, y: (data.series.bookings || []).find((p) => p.x === x)?.y || 0 }));
+    const barsB = xKeys.map((x) => ({ x, y: (data.series.cancellations || []).find((p) => p.x === x)?.y || 0 }));
+    return { x: xKeys, a: barsA, b: barsB };
+  }, [data.series]);
 
-    const chartWidth = width - 80
-    const chartHeight = 200
-    const padding = 40
+  const earningsLine = useMemo(() => data.series.earnings || [], [data.series]);
 
-    const maxBookings = Math.max(...data.map(d => d.bookings))
-    const maxRating = 5 // Rating is always out of 5
-    const maxCancellations = Math.max(...data.map(d => d.cancellations))
-
-    const getX = (index: number) => (index * (chartWidth - padding * 2)) / (data.length - 1) + padding
-    const getBookingsY = (value: number) => chartHeight - padding - ((value / maxBookings) * (chartHeight - padding * 2))
-    const getRatingY = (value: number) => chartHeight - padding - ((value / maxRating) * (chartHeight - padding * 2))
-    const getCancellationsY = (value: number) => chartHeight - padding - ((value / maxCancellations) * (chartHeight - padding * 2))
-
-    if (type === 'line') {
-      // Create path for bookings line
-      const bookingsPath = data.map((point, index) => {
-        const x = getX(index)
-        const y = getBookingsY(point.bookings)
-        return `${index === 0 ? 'M' : 'L'} ${x} ${y}`
-      }).join(' ')
-
-      // Create path for rating line
-      const ratingsPath = data.map((point, index) => {
-        const x = getX(index)
-        const y = getRatingY(point.rating)
-        return `${index === 0 ? 'M' : 'L'} ${x} ${y}`
-      }).join(' ')
-
-      return (
-        <View style={styles.chartContainer}>
-          <Svg width={chartWidth} height={chartHeight}>
-            {/* Grid lines */}
-            {[0, 25, 50, 75, 100].map(percent => {
-              const y = chartHeight - padding - (percent / 100) * (chartHeight - padding * 2)
-              return (
-                <Line
-                  key={percent}
-                  x1={padding}
-                  y1={y}
-                  x2={chartWidth - padding}
-                  y2={y}
-                  stroke={theme.colors.outline}
-                  strokeOpacity={0.2}
-                  strokeDasharray="2,2"
-                />
-              )
-            })}
-
-            {/* Bookings Line */}
-            <Path
-              d={bookingsPath}
-              stroke="#4CAF50"
-              strokeWidth={3}
-              fill="none"
-            />
-
-            {/* Rating Line */}
-            <Path
-              d={ratingsPath}
-              stroke="#FFC107"
-              strokeWidth={3}
-              fill="none"
-            />
-
-            {/* Data points */}
-            {data.map((point, index) => (
-              <View key={index}>
-                {/* Bookings points */}
-                <Circle
-                  cx={getX(index)}
-                  cy={getBookingsY(point.bookings)}
-                  r={4}
-                  fill="#4CAF50"
-                />
-                {/* Rating points */}
-                <Circle
-                  cx={getX(index)}
-                  cy={getRatingY(point.rating)}
-                  r={4}
-                  fill="#FFC107"
-                />
-              </View>
-            ))}
-
-            {/* X-axis labels */}
-            {data.map((point, index) => (
-              <SvgText
-                key={index}
-                x={getX(index)}
-                y={chartHeight - 10}
-                fontSize="12"
-                fill={theme.colors.onSurfaceVariant}
-                textAnchor="middle"
-              >
-                {point.date}
-              </SvgText>
-            ))}
-          </Svg>
-
-          {/* Legend */}
-          <View style={styles.chartLegend}>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendColor, { backgroundColor: '#4CAF50' }]} />
-              <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-                Bookings
-              </Text>
-            </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendColor, { backgroundColor: '#FFC107' }]} />
-              <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-                Rating
-              </Text>
-            </View>
-          </View>
-        </View>
-      )
-    }
-
-    // Bar Chart
-    const barWidth = (chartWidth - padding * 2) / data.length * 0.7
-
-    return (
-      <View style={styles.chartContainer}>
-        <Svg width={chartWidth} height={chartHeight}>
-          {/* Grid lines */}
-          {[0, 25, 50, 75, 100].map(percent => {
-            const y = chartHeight - padding - (percent / 100) * (chartHeight - padding * 2)
-            return (
-              <Line
-                key={percent}
-                x1={padding}
-                y1={y}
-                x2={chartWidth - padding}
-                y2={y}
-                stroke={theme.colors.outline}
-                strokeOpacity={0.2}
-                strokeDasharray="2,2"
-              />
-            )
-          })}
-
-          {/* Bars */}
-          {data.map((point, index) => {
-            const x = getX(index) - barWidth / 4
-            const bookingsHeight = (point.bookings / maxBookings) * (chartHeight - padding * 2)
-            const cancellationsHeight = (point.cancellations / maxCancellations) * (chartHeight - padding * 2)
-
-            return (
-              <View key={index}>
-                {/* Bookings Bar */}
-                <Rect
-                  x={x - barWidth / 4}
-                  y={chartHeight - padding - bookingsHeight}
-                  width={barWidth / 2 - 2}
-                  height={bookingsHeight}
-                  fill="#4CAF50"
-                  rx={2}
-                />
-                {/* Cancellations Bar */}
-                <Rect
-                  x={x + barWidth / 4}
-                  y={chartHeight - padding - cancellationsHeight}
-                  width={barWidth / 2 - 2}
-                  height={cancellationsHeight}
-                  fill="#F44336"
-                  rx={2}
-                />
-              </View>
-            )
-          })}
-
-          {/* X-axis labels */}
-          {data.map((point, index) => (
-            <SvgText
-              key={index}
-              x={getX(index)}
-              y={chartHeight - 10}
-              fontSize="12"
-              fill={theme.colors.onSurfaceVariant}
-              textAnchor="middle"
-            >
-              {point.date}
-            </SvgText>
-          ))}
-        </Svg>
-
-        {/* Legend */}
-        <View style={styles.chartLegend}>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendColor, { backgroundColor: '#4CAF50' }]} />
-            <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-              Bookings
-            </Text>
-          </View>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendColor, { backgroundColor: '#F44336' }]} />
-            <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-              Cancellations
-            </Text>
-          </View>
-        </View>
-      </View>
-    )
-  }
-
-  const renderChart = () => {
-    if (loading) {
-      return (
-        <Surface style={styles.chartPlaceholder} elevation={0}>
-          <IconButton icon="loading" size={32} iconColor={theme.colors.onSurfaceVariant} />
-          <Text variant="bodyLarge" style={[styles.chartText, { color: theme.colors.onSurfaceVariant }]}>
-            Loading chart data...
-          </Text>
-        </Surface>
-      )
-    }
-
-    if (chartData.length === 0) {
-      return (
-        <Surface style={styles.chartPlaceholder} elevation={0}>
-          <IconButton icon="chart-line" size={32} iconColor={theme.colors.onSurfaceVariant} />
-          <Text variant="bodyLarge" style={[styles.chartText, { color: theme.colors.onSurfaceVariant }]}>
-            No data available for selected period
-          </Text>
-        </Surface>
-      )
-    }
-
-    return <SimpleChart data={chartData} type={chartType} />
-  }
+  const TopServiceRow = ({ name, count }: { name: string; count: number }) => (
+    <View style={styles.topRow}>
+      <Text style={[styles.topName, { color: theme.colors.onSurface }]}>{name}</Text>
+      <Text style={{ color: theme.colors.onSurfaceVariant }}>{count}</Text>
+    </View>
+  );
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <View style={styles.header}>
-          <IconButton icon="menu" size={24} iconColor={theme.colors.onBackground} style={styles.menuButton} />
-          <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onBackground }]}>
-            Performance
-          </Text>
-        </View>
-
-        {/* Metrics Grid */}
-        <View style={styles.metricsGrid}>
-          <MetricCard title="Completed Bookings" value={metrics.completedBookings} icon="target" iconColor="#4CAF50" />
-          <MetricCard title="Cancellations" value={metrics.cancellations} icon="close-circle" iconColor="#F44336" />
-          <MetricCard title="Average Rating" value={metrics.averageRating.toFixed(1)} icon="star" iconColor="#FFC107" />
-          <MetricCard
-            title="Commission Earned"
-            value={`KSh ${metrics.commissionEarned.toLocaleString()}`}
-            icon="currency-usd"
-            iconColor="#4CAF50"
+          <IconButton
+            icon="arrow-left"
+            size={24}
+            onPress={() => router.back()}
+            iconColor={theme.colors.onSurface}
           />
+          <Text style={styles.title}>Performance</Text>
         </View>
 
-        {/* Performance Trends */}
-        <Surface style={styles.trendsCard} elevation={1}>
-          <View style={styles.sectionHeader}>
-            <Text variant="titleLarge" style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>
-              Performance Trends
-            </Text>
-            
-            {/* Chart Type Toggle */}
-            <View style={styles.chartToggle}>
-              <IconButton
-                icon="chart-line"
-                size={20}
-                iconColor={chartType === 'line' ? theme.colors.primary : theme.colors.onSurfaceVariant}
-                style={[styles.toggleButton, chartType === 'line' && { backgroundColor: theme.colors.primaryContainer }]}
-                onPress={() => setChartType('line')}
+        {/* Loading / Error */}
+        {loading ? (
+          <View style={styles.loading}>
+            <ActivityIndicator />
+            <Text style={{ marginTop: 8, color: theme.colors.onSurfaceVariant }}>Loading…</Text>
+          </View>
+        ) : error ? (
+          <Banner visible icon="alert" style={{ marginHorizontal: 16 }}>
+            {error}
+          </Banner>
+        ) : (
+          <>
+            {/* Metric cards */}
+            <View style={styles.metricsGrid}>
+              <Metric
+                title="Completed"
+                value={String(data.completedBookings)}
+                icon="check-circle"
+                tint="#22c55e"
               />
-              <IconButton
-                icon="chart-bar"
-                size={20}
-                iconColor={chartType === 'bar' ? theme.colors.primary : theme.colors.onSurfaceVariant}
-                style={[styles.toggleButton, chartType === 'bar' && { backgroundColor: theme.colors.primaryContainer }]}
-                onPress={() => setChartType('bar')}
+              <Metric
+                title="Cancellations"
+                value={String(data.cancellations)}
+                icon="close-circle"
+                tint="#ef4444"
+              />
+              <Metric
+                title="Avg. Rating"
+                value={data.averageRating.toFixed(1)}
+                icon="star"
+                tint="#f59e0b"
+              />
+              <Metric
+                title="Commission"
+                value={`KSh ${Number(data.commissionEarned || 0).toLocaleString()}`}
+                icon="currency-usd"
+                tint="#16a34a"
               />
             </View>
-          </View>
 
-          <View style={styles.dateRangeRow}>
-            <TextInput
-              label="From (mm/dd/yyyy)"
-              value={dateRange.from}
-              onChangeText={(text) => setDateRange((prev) => ({ ...prev, from: text }))}
-              mode="outlined"
-              style={styles.dateInput}
-              right={<TextInput.Icon icon="calendar" />}
-            />
+            {/* Charts */}
+            <Surface style={styles.card} elevation={2}>
+              <Text style={styles.cardTitle}>Bookings vs Cancellations</Text>
+              {bookingsVsCancelBars.x.length === 0 ? (
+                <EmptyChart />
+              ) : (
+                <Svg width={CHART_W} height={260}>
+                  <VictoryChart
+                    width={CHART_W}
+                    height={260}
+                    standalone={false}
+                    theme={VictoryTheme.material}
+                    domainPadding={{ x: 28, y: 12 }}
+                  >
+                    <VictoryLegend
+                      x={16}
+                      y={0}
+                      orientation="horizontal"
+                      gutter={18}
+                      data={[
+                        { name: "Bookings", symbol: { type: "square" } },
+                        { name: "Cancellations", symbol: { type: "square" } },
+                      ]}
+                    />
+                    <VictoryAxis
+                      tickFormat={(t: string) => String(t).slice(5)} // show MM
+                      style={{ tickLabels: { angle: -30, fontSize: 9, padding: 18 } }}
+                    />
+                    <VictoryAxis dependentAxis />
+                    <VictoryGroup offset={10}>
+                      <VictoryBar
+                        data={bookingsVsCancelBars.a}
+                        labels={({ datum }: any) => (datum.y ? String(datum.y) : "")}
+                        labelComponent={<VictoryLabel dy={-6} style={{ fontSize: 8 }} />}
+                      />
+                      <VictoryBar
+                        data={bookingsVsCancelBars.b}
+                        labels={({ datum }: any) => (datum.y ? String(datum.y) : "")}
+                        labelComponent={<VictoryLabel dy={-6} style={{ fontSize: 8 }} />}
+                      />
+                    </VictoryGroup>
+                  </VictoryChart>
+                </Svg>
+              )}
+            </Surface>
 
-            <Text variant="bodyMedium" style={[styles.toText, { color: theme.colors.onSurfaceVariant }]}>
-              to
-            </Text>
+            <Surface style={styles.card} elevation={2}>
+              <Text style={styles.cardTitle}>Earnings (KES)</Text>
+              {earningsLine.length === 0 ? (
+                <EmptyChart />
+              ) : (
+                <Svg width={CHART_W} height={240}>
+                  <VictoryChart
+                    width={CHART_W}
+                    height={240}
+                    standalone={false}
+                    theme={VictoryTheme.material}
+                    domainPadding={{ x: 18, y: 12 }}
+                  >
+                    <VictoryAxis
+                      tickFormat={(t: string) => String(t).slice(5)}
+                      style={{ tickLabels: { angle: -30, fontSize: 9, padding: 18 } }}
+                    />
+                    <VictoryAxis
+                      dependentAxis
+                      tickFormat={(t: number) => (t >= 1000 ? `${Math.round(t / 1000)}k` : String(t))}
+                    />
+                    <VictoryLine
+                      interpolation="monotoneX"
+                      data={earningsLine}
+                      labels={({ datum }: any) => (datum.y ? `KSh ${datum.y}` : "")}
+                      labelComponent={<VictoryLabel dy={-8} style={{ fontSize: 9 }} />}
+                    />
+                  </VictoryChart>
+                </Svg>
+              )}
+            </Surface>
 
-            <TextInput
-              label="To (mm/dd/yyyy)"
-              value={dateRange.to}
-              onChangeText={(text) => setDateRange((prev) => ({ ...prev, to: text }))}
-              mode="outlined"
-              style={styles.dateInput}
-              right={<TextInput.Icon icon="calendar" />}
-            />
-          </View>
+            {/* Top Services */}
+            <Surface style={styles.card} elevation={2}>
+              <Text style={styles.cardTitle}>Top Services</Text>
+              {data.topServices.length === 0 ? (
+                <Text style={{ color: theme.colors.onSurfaceVariant }}>No completed bookings yet.</Text>
+              ) : (
+                <View style={{ marginTop: 8 }}>
+                  {data.topServices.map((s) => (
+                    <TopServiceRow key={s.serviceId} name={s.name} count={s.count} />
+                  ))}
+                </View>
+              )}
+            </Surface>
 
-          <Button 
-            mode="contained" 
-            onPress={handleDateRangeUpdate}
-            style={styles.updateButton}
-            disabled={loading}
-          >
-            Update Chart
-          </Button>
-
-          {/* Chart */}
-          {renderChart()}
-        </Surface>
+            {/* (Optional) Refresh */}
+            <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 28 }}>
+              <Button mode="outlined" onPress={() => setBusinessId((id) => id /* re-trigger useEffect */)}>
+                Refresh
+              </Button>
+            </View>
+          </>
+        )}
       </ScrollView>
     </SafeAreaView>
-  )
+  );
+}
+
+function Metric({
+  title,
+  value,
+  icon,
+  tint,
+}: {
+  title: string;
+  value: string | number;
+  icon: string;
+  tint: string;
+}) {
+  const theme = useTheme();
+  return (
+    <Surface style={styles.metric} elevation={1}>
+      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+        <View>
+          <Text style={{ color: theme.colors.onSurfaceVariant, marginBottom: 2 }}>{title}</Text>
+          <Text style={{ fontSize: 20, fontWeight: "700", color: theme.colors.onSurface }}>{value}</Text>
+        </View>
+        <IconButton icon={icon} size={22} iconColor={tint} />
+      </View>
+    </Surface>
+  );
+}
+
+function EmptyChart() {
+  const theme = useTheme();
+  return (
+    <View style={{ height: 120, alignItems: "center", justifyContent: "center" }}>
+      <IconButton icon="chart-line" size={28} iconColor={theme.colors.onSurfaceVariant} />
+      <Text style={{ color: theme.colors.onSurfaceVariant }}>No data available</Text>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
-  },
+  container: { flex: 1 },
+  content: { paddingBottom: 32 },
   header: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 24,
+    paddingHorizontal: 8,
+    paddingTop: 56,
+    paddingBottom: 12,
   },
-  menuButton: {
-    marginRight: 8,
-  },
-  title: {
-    fontWeight: "700",
-  },
+  title: { fontSize: 22, fontWeight: "700", marginLeft: 6 },
+  loading: { alignItems: "center", paddingTop: 40, paddingBottom: 20 },
+
   metricsGrid: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 12,
-    marginBottom: 24,
   },
-  metricCard: {
-    borderRadius: 16,
-    backgroundColor: "#FFFFFF",
-    flex: 1,
-    minWidth: "45%",
-  },
-  metricContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: 20,
-  },
-  metricInfo: {
-    flex: 1,
-  },
-  metricValue: {
-    fontWeight: "700",
-    marginTop: 4,
-  },
-  metricIcon: {
-    margin: 0,
-  },
-  trendsCard: {
-    borderRadius: 20,
-    backgroundColor: "#FFFFFF",
-    padding: 24,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  sectionTitle: {
-    fontWeight: "600",
-    flex: 1,
-  },
-  chartToggle: {
-    flexDirection: 'row',
-    backgroundColor: '#F5F5F5',
-    borderRadius: 8,
-    padding: 2,
-  },
-  toggleButton: {
-    margin: 0,
-    borderRadius: 6,
-  },
-  dateRangeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  dateInput: {
-    flex: 1,
-  },
-  toText: {
-    marginHorizontal: 16,
-  },
-  updateButton: {
-    marginBottom: 24,
-  },
-  chartContainer: {
-    backgroundColor: '#FAFAFA',
+  metric: {
+    backgroundColor: "#fff",
     borderRadius: 12,
-    padding: 16,
-    marginTop: 8,
+    padding: 14,
+    width: (SCREEN_W - 16 * 2 - 12) / 2, // 2 columns with 12 gap
   },
-  chartPlaceholder: {
-    backgroundColor: "#F8F9FA",
-    borderRadius: 12,
-    padding: 48,
-    alignItems: "center",
-    justifyContent: "center",
-    minHeight: 200,
-  },
-  chartText: {
-    textAlign: "center",
-    marginTop: 8,
-  },
-  chartLegend: {
-    flexDirection: 'row',
-    justifyContent: 'center',
+
+  card: {
     marginTop: 16,
-    gap: 20,
+    marginHorizontal: 16,
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: "#fff",
   },
-  legendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  cardTitle: { fontSize: 16, fontWeight: "700", marginBottom: 10 },
+
+  topRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#E5E7EB",
   },
-  legendColor: {
-    width: 12,
-    height: 12,
-    borderRadius: 2,
-  },
-})
+  topName: { fontWeight: "600" },
+});

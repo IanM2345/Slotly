@@ -1,288 +1,232 @@
-"use client"
+"use client";
 
-import { useState, useEffect } from "react"
-import { ScrollView, View, StyleSheet } from "react-native"
-import { Text, Surface, TextInput, Button, useTheme, Avatar, IconButton, HelperText } from "react-native-paper"
-import { useRouter } from "expo-router"
-import { SafeAreaView } from "react-native-safe-area-context"
-import { useLocalSearchParams } from "expo-router"
-import { useToast } from "./_layout"
-import { staffApi } from "../../../../../mobile/lib/api/modules/staff"
-import type { StaffProfile, PasswordChange } from "../../../../lib/staff/types"
+import React, { useEffect, useMemo, useState, useCallback } from "react";
+import {
+  View,
+  ScrollView,
+  StyleSheet,
+  RefreshControl,
+  Image,
+  TouchableOpacity,
+} from "react-native";
+import {
+  Text,
+  ActivityIndicator,
+  IconButton,
+  Surface,
+  Chip,
+  useTheme,
+} from "react-native-paper";
+import { useRouter } from "expo-router";
+
+// APIs
+import { staffMe, staffAssignedServices } from "../../../../lib/api/modules/staff";
+import { getMe as getUserMe } from "../../../../lib/api/modules/users";
+import { getTokens } from "../../../../lib/api/client";
+
+type AssignedService = {
+  id: string;
+  name: string;
+  price?: number;
+  duration?: number; // minutes
+};
 
 export default function StaffProfileScreen() {
-  const { businessId: businessIdParam } = useLocalSearchParams<{ businessId?: string }>();
-  const businessId = typeof businessIdParam === "string" ? businessIdParam : undefined;
-  
-  const theme = useTheme()
-  const router = useRouter()
-  const { notify } = useToast()
+  const theme = useTheme();
+  const router = useRouter();
 
-  const [loading, setLoading] = useState(false)
-  const [profile, setProfile] = useState<StaffProfile>({
-    id: "",
-    firstName: "",
-    lastName: "",
-    email: "",
-    phone: "",
-    avatarUri: undefined,
-  })
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const [passwordData, setPasswordData] = useState<PasswordChange>({
-    currentPassword: "",
-    newPassword: "",
-    confirmPassword: "",
-  })
+  // user/business
+  const [staffId, setStaffId] = useState<string>("");
+  const [name, setName] = useState<string>("");
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [businessName, setBusinessName] = useState<string>("");
+  const [businessLogo, setBusinessLogo] = useState<string | null>(null);
 
-  const [passwordErrors, setPasswordErrors] = useState<Partial<Record<keyof PasswordChange, string>>>({})
+  // services assigned
+  const [services, setServices] = useState<AssignedService[]>([]);
 
-  useEffect(() => {
-    loadProfile()
-  }, [businessId])
-
-  const loadProfile = async () => {
+  const load = useCallback(async () => {
+    setError(null);
     try {
-      // Profile endpoints typically don't need business scoping, but passing it just in case
-      const profileData = await staffApi.getProfile({ businessId })
-      setProfile(profileData)
-    } catch (error) {
-      notify("Failed to load profile")
-    }
-  }
+      // 1) Staff + business context
+      const me = await staffMe(); // token auto-attached by client
+      const user = me?.user || me?.staff || {};
+      const activeBiz = me?.activeBusiness || null;
 
-  const handleUploadPhoto = () => {
-    // Simulate photo upload
-    setProfile((prev) => ({
-      ...prev,
-      avatarUri: `mock-avatar-uri-${Date.now()}`,
-    }))
-  }
+      setStaffId(user?.id || "");
+      setName(user?.name || user?.firstName?.concat(user?.lastName ? ` ${user.lastName}` : "") || "—");
+      setBusinessName(activeBiz?.name || "—");
+      setBusinessLogo(activeBiz?.logoUrl || null);
 
-  const validatePassword = () => {
-    const errors: Partial<Record<keyof PasswordChange, string>> = {}
-
-    if (passwordData.newPassword && passwordData.newPassword !== passwordData.confirmPassword) {
-      errors.confirmPassword = "Passwords do not match"
-    }
-
-    setPasswordErrors(errors)
-    return Object.keys(errors).length === 0
-  }
-
-  const handleSaveChanges = async () => {
-    if (!validatePassword()) return
-
-    setLoading(true)
-    try {
-      await staffApi.updateProfile(profile, { businessId })
-
-      if (passwordData.currentPassword && passwordData.newPassword) {
-        await staffApi.changePassword(passwordData, { businessId })
+      // 2) Avatar from users.js (/api/users/me)
+      try {
+        const tks = (await getTokens?.()) || {};
+        const profile = await getUserMe(tks?.accessToken);
+        const a =
+          profile?.avatarUrl ??
+          profile?.avatarURI ??
+          profile?.avatarUri ??
+          null;
+        setAvatarUrl(a);
+        if (!name || name === "—") {
+          const fallbackName = profile?.name || (profile?.firstName && `${profile.firstName}${profile.lastName ? ` ${profile.lastName}` : ""}`);
+          if (fallbackName) setName(fallbackName);
+        }
+        if (!staffId && profile?.id) setStaffId(profile.id);
+      } catch (e) {
+        // soft fail for avatar/me
       }
 
-      notify("Profile updated successfully")
-    } catch (error) {
-      notify("Failed to update profile")
+      // 3) Assigned services
+      const svc = await staffAssignedServices();
+      setServices(Array.isArray(svc) ? svc : []);
+    } catch (e: any) {
+      setError(e?.message || "Failed to load profile");
     } finally {
-      setLoading(false)
+      setLoading(false);
+      setRefreshing(false);
     }
-  }
+  }, [name, staffId]);
 
-  const handleCancel = () => {
-    router.back()
-  }
+  useEffect(() => {
+    setLoading(true);
+    load();
+  }, [load]);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    load();
+  }, [load]);
+
+  const initials = useMemo(() => {
+    if (!name) return " ";
+    const parts = name.trim().split(/\s+/);
+    return (parts[0]?.[0] || "").concat(parts[1]?.[0] || "").toUpperCase();
+  }, [name]);
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={styles.header}>
-          <IconButton icon="menu" size={24} iconColor={theme.colors.onBackground} style={styles.menuButton} />
-          <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onBackground }]}>
-            Profile Settings
-          </Text>
+    <ScrollView
+      style={styles.container}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      contentContainerStyle={{ paddingBottom: 32 }}
+    >
+      <View style={styles.header}>
+        <IconButton icon="arrow-left" size={24} onPress={() => router.back()} />
+        <Text style={styles.title}>My Profile</Text>
+      </View>
+
+      {loading ? (
+        <View style={styles.loading}>
+          <ActivityIndicator />
+          <Text style={{ marginTop: 10, color: "#6B7280" }}>Loading…</Text>
         </View>
+      ) : (
+        <>
+          {error && (
+            <Surface style={styles.banner} elevation={1}>
+              <Text style={{ color: theme.colors.error }}>{error}</Text>
+            </Surface>
+          )}
 
-        <Surface style={styles.profileCard} elevation={1}>
-          <View style={styles.profileContent}>
-            {/* Avatar Section */}
-            <View style={styles.avatarSection}>
-              <Avatar.Icon
-                size={80}
-                icon="account"
-                style={[styles.avatar, { backgroundColor: theme.colors.surfaceVariant }]}
-              />
-              <Button
-                mode="contained"
-                onPress={handleUploadPhoto}
-                style={[styles.uploadButton, { backgroundColor: theme.colors.primary }]}
-                labelStyle={{ color: theme.colors.onPrimary }}
-              >
-                Upload Photo
-              </Button>
+          {/* Top card - avatar + name + staff id */}
+          <Surface style={styles.card} elevation={1}>
+            <View style={styles.row}>
+              <TouchableOpacity activeOpacity={0.9} style={styles.avatarWrap}>
+                {avatarUrl ? (
+                  <Image source={{ uri: avatarUrl }} style={styles.avatar} />
+                ) : (
+                  <View style={[styles.avatar, styles.avatarFallback]}>
+                    <Text style={{ color: "#fff", fontWeight: "700" }}>{initials}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+              <View style={{ flex: 1, marginLeft: 14 }}>
+                <Text style={styles.name}>{name || "—"}</Text>
+                <Text style={styles.meta}>Staff ID: <Text style={styles.metaBold}>{staffId || "—"}</Text></Text>
+              </View>
             </View>
+          </Surface>
 
-            {/* Profile Form */}
-            <TextInput
-              label="First Name"
-              value={profile.firstName}
-              onChangeText={(text) => setProfile((prev) => ({ ...prev, firstName: text }))}
-              mode="outlined"
-              style={styles.input}
-            />
-
-            <TextInput
-              label="Last Name"
-              value={profile.lastName}
-              onChangeText={(text) => setProfile((prev) => ({ ...prev, lastName: text }))}
-              mode="outlined"
-              style={styles.input}
-            />
-
-            <TextInput
-              label="Email"
-              value={profile.email}
-              onChangeText={(text) => setProfile((prev) => ({ ...prev, email: text }))}
-              mode="outlined"
-              keyboardType="email-address"
-              autoCapitalize="none"
-              style={styles.input}
-            />
-
-            <TextInput
-              label="Phone"
-              value={profile.phone}
-              onChangeText={(text) => setProfile((prev) => ({ ...prev, phone: text }))}
-              mode="outlined"
-              keyboardType="phone-pad"
-              style={styles.input}
-            />
-
-            {/* Change Password Section */}
-            <Text variant="titleMedium" style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>
-              Change Password
-            </Text>
-
-            <TextInput
-              label="Current Password"
-              value={passwordData.currentPassword}
-              onChangeText={(text) => setPasswordData((prev) => ({ ...prev, currentPassword: text }))}
-              mode="outlined"
-              secureTextEntry
-              style={styles.input}
-            />
-
-            <TextInput
-              label="New Password"
-              value={passwordData.newPassword}
-              onChangeText={(text) => setPasswordData((prev) => ({ ...prev, newPassword: text }))}
-              mode="outlined"
-              secureTextEntry
-              style={styles.input}
-            />
-
-            <TextInput
-              label="Confirm New Password"
-              value={passwordData.confirmPassword}
-              onChangeText={(text) => setPasswordData((prev) => ({ ...prev, confirmPassword: text }))}
-              mode="outlined"
-              secureTextEntry
-              style={styles.input}
-              error={!!passwordErrors.confirmPassword}
-            />
-            <HelperText type="error" visible={!!passwordErrors.confirmPassword}>
-              {passwordErrors.confirmPassword}
-            </HelperText>
-
-            {/* Action Buttons */}
-            <View style={styles.buttonRow}>
-              <Button
-                mode="contained"
-                onPress={handleSaveChanges}
-                loading={loading}
-                disabled={loading}
-                style={[styles.saveButton, { backgroundColor: "#FBC02D" }]}
-                labelStyle={{ color: theme.colors.onPrimary }}
-                contentStyle={styles.buttonContent}
-              >
-                Save Changes
-              </Button>
-
-              <Button
-                mode="outlined"
-                onPress={handleCancel}
-                style={[styles.cancelButton, { borderColor: theme.colors.outline }]}
-                labelStyle={{ color: theme.colors.onSurface }}
-                contentStyle={styles.buttonContent}
-              >
-                Cancel
-              </Button>
+          {/* Business */}
+          <Surface style={styles.card} elevation={1}>
+            <Text style={styles.sectionTitle}>Business</Text>
+            <View style={[styles.row, { marginTop: 12 }]}>
+              {businessLogo ? (
+                <Image source={{ uri: businessLogo }} style={styles.bizLogo} />
+              ) : (
+                <View style={[styles.bizLogo, styles.bizLogoFallback]}>
+                  <Text style={{ color: "#fff" }}>🏢</Text>
+                </View>
+              )}
+              <View style={{ marginLeft: 12 }}>
+                <Text style={styles.bizName}>{businessName || "—"}</Text>
+                <Text style={styles.meta}>Active workplace</Text>
+              </View>
             </View>
-          </View>
-        </Surface>
-      </ScrollView>
-    </SafeAreaView>
-  )
+          </Surface>
+
+          {/* Assigned services */}
+          <Surface style={styles.card} elevation={1}>
+            <Text style={styles.sectionTitle}>Assigned Services</Text>
+            {services.length === 0 ? (
+              <Text style={styles.emptyNote}>No services assigned yet.</Text>
+            ) : (
+              <View style={styles.chipsWrap}>
+                {services.map((s) => (
+                  <Chip key={s.id} style={styles.chip} compact>
+                    {s.name}
+                  </Chip>
+                ))}
+              </View>
+            )}
+          </Surface>
+        </>
+      )}
+    </ScrollView>
+  );
 }
 
+const AVATAR_SIZE = 72;
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  scrollContent: {
+  container: { flex: 1, backgroundColor: "#F8FAFC" },
+  header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingTop: 60, paddingBottom: 16 },
+  title: { fontSize: 22, fontWeight: "700", color: "#1559C1" },
+
+  loading: { alignItems: "center", paddingTop: 60 },
+
+  banner: { backgroundColor: "#FFF", marginHorizontal: 16, padding: 12, borderRadius: 10, marginBottom: 8 },
+
+  card: {
+    backgroundColor: "#fff",
+    marginHorizontal: 16,
+    marginTop: 12,
     padding: 16,
+    borderRadius: 12,
   },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 24,
-  },
-  menuButton: {
-    marginRight: 8,
-  },
-  title: {
-    fontWeight: "700",
-  },
-  profileCard: {
-    borderRadius: 20,
-    backgroundColor: "#FFFFFF",
-  },
-  profileContent: {
-    padding: 24,
-  },
-  avatarSection: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 32,
-  },
-  avatar: {
-    marginRight: 16,
-  },
-  uploadButton: {
-    borderRadius: 20,
-  },
-  input: {
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontWeight: "600",
-    marginTop: 24,
-    marginBottom: 16,
-  },
-  buttonRow: {
-    flexDirection: "row",
-    gap: 12,
-    marginTop: 32,
-  },
-  saveButton: {
-    flex: 1,
-    borderRadius: 25,
-  },
-  cancelButton: {
-    flex: 1,
-    borderRadius: 25,
-  },
-  buttonContent: {
-    paddingVertical: 8,
-  },
-})
+
+  row: { flexDirection: "row", alignItems: "center" },
+
+  avatarWrap: { width: AVATAR_SIZE, height: AVATAR_SIZE, borderRadius: AVATAR_SIZE / 2, overflow: "hidden" },
+  avatar: { width: "100%", height: "100%", borderRadius: AVATAR_SIZE / 2 },
+  avatarFallback: { backgroundColor: "#0EA5E9", alignItems: "center", justifyContent: "center" },
+
+  name: { fontSize: 18, fontWeight: "700", color: "#111827" },
+  meta: { color: "#6B7280", marginTop: 2 },
+  metaBold: { color: "#111827", fontWeight: "600" },
+
+  sectionTitle: { fontWeight: "700", color: "#111827" },
+
+  bizLogo: { width: 44, height: 44, borderRadius: 8 },
+  bizLogoFallback: { backgroundColor: "#93C5FD", alignItems: "center", justifyContent: "center" },
+  bizName: { fontSize: 16, fontWeight: "600", color: "#111827" },
+
+  chipsWrap: { flexDirection: "row", flexWrap: "wrap", marginTop: 10 },
+  chip: { marginRight: 8, marginBottom: 8 },
+
+  emptyNote: { marginTop: 10, color: "#6B7280" },
+});

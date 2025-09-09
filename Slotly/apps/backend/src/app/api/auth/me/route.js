@@ -6,7 +6,7 @@ import { requireAuth } from "@/lib/token";
 
 export const dynamic = "force-dynamic";
 
-// ✅ Prisma singleton (avoid multiple connections in dev)
+
 const prisma = globalThis._prisma ?? new PrismaClient();
 if (process.env.NODE_ENV !== "production") globalThis._prisma = prisma;
 

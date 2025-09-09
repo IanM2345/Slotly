@@ -1,66 +1,47 @@
-// app/index.tsx - Fixed routing logic without global lock
-import { useEffect } from 'react';
-import { useRouter, usePathname } from 'expo-router';
-import { ActivityIndicator, View, Text } from 'react-native';
+// app/index.tsx
+import { Redirect, usePathname, useRootNavigationState } from 'expo-router';
+import { View, ActivityIndicator, Text } from 'react-native';
 import { useSession } from '../context/SessionContext';
 
 export default function IndexPage() {
   const { token, user, ready } = useSession();
-  const router = useRouter();
   const pathname = usePathname();
+  const navState = useRootNavigationState();           // wait for router to be ready
+  const isRouterReady = !!navState?.key;
 
-  useEffect(() => {
-    if (!ready) return;
+  if (!ready || !isRouterReady) {
+    return (
+      <View style={{ flex:1, justifyContent:'center', alignItems:'center', backgroundColor:'#fff' }}>
+        <ActivityIndicator size="large" />
+        <Text style={{ marginTop: 16, fontSize: 16, color: '#666' }}>Loading...</Text>
+      </View>
+    );
+  }
 
-    console.log("🔄 Index routing check:", { 
-      ready, 
-      hasToken: !!token, 
-      role: user?.role,
-      verificationStatus: user?.business?.verificationStatus,
-      pathname
-    });
+  const role = String(user?.role || '').toUpperCase();
+  const verification = String(user?.business?.verificationStatus || '').toLowerCase();
 
-    const role = String(user?.role || '').toUpperCase();
-    
-    // Determine destination based on auth state and role
-    const dest =
-      !token
-        ? '/auth/login'
-        : ['ADMIN', 'SUPER_ADMIN', 'CREATOR'].includes(role)
-        ? '/admin'
-        : role === 'STAFF'
-        ? '/business/dashboard/staff'
-        : role === 'BUSINESS_OWNER'
-        ? (['approved', 'active', 'verified', 'pending'].includes(String(user?.business?.verificationStatus || '').toLowerCase())
-           ? '/business/dashboard'
-           : user?.business?.verificationStatus === 'rejected'
-           ? '/(tabs)/profile'
-           : '/business/onboarding')
-        : '/(tabs)';
+  const dest =
+    !token ? '/auth/login'
+    : ['ADMIN', 'SUPER_ADMIN', 'CREATOR'].includes(role) ? '/admin'
+    : role === 'STAFF' ? '/business/dashboard/staff'
+    : role === 'BUSINESS_OWNER'
+      ? (['approved', 'active', 'verified', 'pending'].includes(verification)
+          ? '/business/dashboard'
+          : user?.business?.verificationStatus === 'rejected'
+            ? '/(tabs)/profile'
+            : '/business/onboarding')
+      : '/(tabs)';
 
-    console.log(`→ Should route ${role || 'CUSTOMER'} to: ${dest}`);
+  // No-op if we’re already where we want to be.
+  if (pathname === dest || pathname?.startsWith(dest)) {
+    return (
+      <View style={{ flex:1, justifyContent:'center', alignItems:'center', backgroundColor:'#fff' }}>
+        <ActivityIndicator size="large" />
+        <Text style={{ marginTop: 16, fontSize: 16, color: '#666' }}>Loading…</Text>
+      </View>
+    );
+  }
 
-    // Only redirect if we're not already at the destination
-    if (pathname !== dest) {
-      router.replace(dest as any);
-    }
-  }, [ready, token, user?.role, user?.business?.verificationStatus, pathname, router]);
-
-  return (
-    <View style={{
-      flex: 1,
-      justifyContent: 'center',
-      alignItems: 'center',
-      backgroundColor: '#fff'
-    }}>
-      <ActivityIndicator size="large" color="#0066CC" />
-      <Text style={{
-        marginTop: 16,
-        fontSize: 16,
-        color: '#666'
-      }}>
-        Loading...
-      </Text>
-    </View>
-  );
+  return <Redirect href={dest as any} />;
 }

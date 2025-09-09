@@ -1,6 +1,5 @@
 // apps/mobile/app/business/dashboard/staff/index.tsx
 "use client";
-import type { RelativePathString } from "expo-router";
 
 import React, { useEffect, useMemo, useState } from "react";
 import { ScrollView, StyleSheet, View } from "react-native";
@@ -17,15 +16,42 @@ import {
   Text,
   useTheme,
 } from "react-native-paper";
+import { staffApi } from "../../../../lib/api/modules/staff";
 
-// ✅ Fixed import path - removed extra "mobile/" segment
-import { staffApi } from "../../../../lib/api/modules/staff"
-import type {
-  StaffProfile,
-  PerformanceMetrics,
-  Appointment,
-  Notification,
-} from "../../../../lib/staff/types";
+type Booking = {
+  id: string;
+  startTime: string | Date;
+  endTime: string | Date;
+  status:
+    | "PENDING"
+    | "CONFIRMED"
+    | "CANCELLED"
+    | "COMPLETED"
+    | "NO_SHOW"
+    | "RESCHEDULED";
+  serviceId?: string;
+  serviceName?: string;
+  servicePrice?: number | null;
+  serviceDuration?: number | null;
+  customer?: { id: string; name: string; avatarUrl?: string | null } | null;
+};
+
+type AssignedService = {
+  id: string;
+  name: string;
+  price: number;
+  duration: number;
+  businessId: string;
+};
+
+const STATUS_TABS = [
+  { key: "UPCOMING", label: "Upcoming" },
+  { key: "CONFIRMED", label: "Confirmed" },
+  { key: "NO_SHOW", label: "No-show" },
+  { key: "CANCELLED", label: "Cancelled" },
+] as const;
+
+type StatusKey = (typeof STATUS_TABS)[number]["key"];
 
 export default function StaffHubScreen() {
   const theme = useTheme();
@@ -33,52 +59,75 @@ export default function StaffHubScreen() {
 
   const [loading, setLoading] = useState(true);
   const [businessId, setBusinessId] = useState<string | null>(null);
-  const [businesses, setBusinesses] = useState<Array<{ id: string; name: string }>>([]);
 
-  const [profile, setProfile] = useState<StaffProfile | null>(null);
-  const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
-  const [schedule, setSchedule] = useState<Appointment[]>([]);
-  const [notes, setNotes] = useState<Notification[]>([]);
+  // services + filters
+  const [services, setServices] = useState<AssignedService[]>([]);
+  const [selectedServiceId, setSelectedServiceId] = useState<string | null>(
+    null
+  );
+  const [statusKey, setStatusKey] = useState<StatusKey>("UPCOMING");
 
-  // ✅ Fixed useEffect with Promise.allSettled and proper error handling
+  // data cards + lists
+  const [metrics, setMetrics] = useState<any>(null);
+  const [notes, setNotes] = useState<any[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>([]);
+
+  // counts per status (so chips show live numbers)
+  const [counts, setCounts] = useState<Record<StatusKey, number>>({
+    UPCOMING: 0,
+    CONFIRMED: 0,
+    NO_SHOW: 0,
+    CANCELLED: 0,
+  });
+
+  // Startup: determine business scope, load metrics / services / notifications / initial bookings + counts
   useEffect(() => {
     let mounted = true;
     (async () => {
       setLoading(true);
       try {
-        // 1) resolve business scope first
         const ctx = await staffApi.getStaffMe().catch(() => null);
-        const initialBizId =
-          ctx?.activeBusiness?.id || ctx?.businesses?.[0]?.id || null;
+        const bizId = ctx?.activeBusiness?.id || ctx?.businesses?.[0]?.id || null;
+        if (!mounted) return;
+
+        setBusinessId(bizId);
+
+        const [m, notif, svc] = await Promise.all([
+          staffApi.getPerformanceMetrics({ businessId: bizId }).catch(() => null),
+          staffApi.getNotifications({ businessId: bizId }).catch(() => []),
+          staffApi.getAssignedServices({ businessId: bizId }).catch(() => []),
+        ]);
 
         if (!mounted) return;
-        setBusinesses(ctx?.businesses || []);
-        setBusinessId(initialBizId);
+        setMetrics(m);
+        setNotes(Array.isArray(notif) ? notif : []);
+        setServices(Array.isArray(svc) ? svc : []);
 
-        // 2) load scoped data (never hang even if one call fails)
-        const results = await Promise.allSettled([
-          staffApi.getProfile({ businessId: initialBizId }),
-          staffApi.getPerformanceMetrics({ businessId: initialBizId }),
-          staffApi.getSchedule({ businessId: initialBizId }),
-          staffApi.getNotifications({ businessId: initialBizId }),
+        // initial bookings (UPCOMING, all services)
+        const [upcoming, confirmed, noShow, cancelled] = await Promise.all([
+          staffApi
+            .getBookingsByStatus({ businessId: bizId, status: "UPCOMING" })
+            .catch(() => []),
+          staffApi
+            .getBookingsByStatus({ businessId: bizId, status: "CONFIRMED" })
+            .catch(() => []),
+          staffApi
+            .getBookingsByStatus({ businessId: bizId, status: "NO_SHOW" })
+            .catch(() => []),
+          staffApi
+            .getBookingsByStatus({ businessId: bizId, status: "CANCELLED" })
+            .catch(() => []),
         ]);
 
         if (!mounted) return;
 
-        const [p, m, s, n] = results.map((r) =>
-          r.status === "fulfilled" ? r.value : undefined
-        );
-
-        setProfile(p ?? null);
-        setMetrics(m ?? { 
-          completedBookings: 0, 
-          cancellations: 0, 
-          averageRating: null, 
-          commissionEarned: 0, 
-          totalRevenue: 0 
+        setBookings(upcoming);
+        setCounts({
+          UPCOMING: upcoming.length,
+          CONFIRMED: confirmed.length,
+          NO_SHOW: noShow.length,
+          CANCELLED: cancelled.length,
         });
-        setSchedule(Array.isArray(s) ? s : []);
-        setNotes(Array.isArray(n) ? n : []);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -88,187 +137,116 @@ export default function StaffHubScreen() {
     };
   }, []);
 
+  // When filters change, refetch both the visible list and the counts (counts respect selectedServiceId)
+  useEffect(() => {
+    if (!businessId) return;
+
+    (async () => {
+      // visible list
+      const list = await staffApi
+        .getBookingsByStatus({
+          businessId,
+          status: statusKey,
+          serviceId: selectedServiceId || undefined,
+        })
+        .catch(() => []);
+      setBookings(list);
+
+      // counts for all tabs (parallel)
+      const [upcoming, confirmed, noShow, cancelled] = await Promise.all([
+        staffApi
+          .getBookingsByStatus({
+            businessId,
+            status: "UPCOMING",
+            serviceId: selectedServiceId || undefined,
+          })
+          .catch(() => []),
+        staffApi
+          .getBookingsByStatus({
+            businessId,
+            status: "CONFIRMED",
+            serviceId: selectedServiceId || undefined,
+          })
+          .catch(() => []),
+        staffApi
+          .getBookingsByStatus({
+            businessId,
+            status: "NO_SHOW",
+            serviceId: selectedServiceId || undefined,
+          })
+          .catch(() => []),
+        staffApi
+          .getBookingsByStatus({
+            businessId,
+            status: "CANCELLED",
+            serviceId: selectedServiceId || undefined,
+          })
+          .catch(() => []),
+      ]);
+
+      setCounts({
+        UPCOMING: upcoming.length,
+        CONFIRMED: confirmed.length,
+        NO_SHOW: noShow.length,
+        CANCELLED: cancelled.length,
+      });
+    })();
+  }, [businessId, statusKey, selectedServiceId]);
+
   const unreadCount = useMemo(
-    () => notes.filter((n) => !n.isRead).length,
+    () => notes.filter((n: any) => !n.isRead).length,
     [notes]
   );
 
-  const statusColor = (status: Appointment["status"]) => {
-    switch (status) {
-      case "confirmed":
-        return theme.colors.primary; // blue
-      case "pending":
-        return "#FBC02D"; // yellow
-      case "completed":
-        return "#2E7D32"; // green
-      case "cancelled":
-      default:
-        return theme.colors.error; // red
-    }
+  const fmtTime = (d: string | Date) => {
+    const date = typeof d === "string" ? new Date(d) : d;
+    const hh = date.getHours().toString().padStart(2, "0");
+    const mm = date.getMinutes().toString().padStart(2, "0");
+    return `${hh}:${mm}`;
   };
 
-  // ✅ Business switching with Promise.allSettled
-  const handleBusinessSwitch = async (businessId: string) => {
-    setBusinessId(businessId);
-    setLoading(true);
-    try {
-      const results = await Promise.allSettled([
-        staffApi.getProfile({ businessId }),
-        staffApi.getPerformanceMetrics({ businessId }),
-        staffApi.getSchedule({ businessId }),
-        staffApi.getNotifications({ businessId }),
-      ]);
-
-      const [p, m, s, n] = results.map((r) =>
-        r.status === "fulfilled" ? r.value : undefined
-      );
-
-      setProfile(p ?? null);
-      setMetrics(m ?? { 
-        completedBookings: 0, 
-        cancellations: 0, 
-        averageRating: null, 
-        commissionEarned: 0, 
-        totalRevenue: 0 
-      });
-      setSchedule(Array.isArray(s) ? s : []);
-      setNotes(Array.isArray(n) ? n : []);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Navigation to settings
-  const navigateToSettings = () => {
-    router.push("/settings" as any);
-  };
+  const gotoSettings = () => router.replace("/settings");
+  const gotoPerformance = () =>
+    router.push({
+      pathname: "/business/dashboard/staff/performance",
+      params: { businessId: businessId || "" },
+    } as any);
+  const gotoProfile = () =>
+    router.push({
+      pathname: "/business/dashboard/staff/profile",
+      params: { businessId: businessId || "" },
+    } as any);
+  const gotoSchedule = () =>
+    router.push({
+      pathname: "/business/dashboard/staff/schedule",
+      params: { businessId: businessId || "" },
+    } as any);
+  const gotoNotifications = () =>
+    router.push({
+      pathname: "/business/dashboard/staff/notifications",
+      params: { businessId: businessId || "" },
+    } as any);
 
   return (
     <ScrollView
-      style={{ flex: 1, backgroundColor: theme.colors.background }}
-      contentContainerStyle={styles.container}
-      showsVerticalScrollIndicator={false}
+      style={styles.container}
+      contentContainerStyle={{ paddingBottom: 32 }}
     >
-      {/* Header with Settings Button */}
-      <View style={styles.headerRow}>
-        <Text variant="headlineSmall" style={{ fontWeight: "700" }}>
-          Staff Dashboard
-        </Text>
-        
-        <View style={styles.headerActions}>
-          {/* Business picker (chips) */}
-          {businesses?.length > 1 ? (
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginRight: 8 }}>
-              {businesses.map((b) => (
-                <Chip
-                  key={b.id}
-                  compact
-                  selected={businessId === b.id}
-                  onPress={() => handleBusinessSwitch(b.id)}
-                >
-                  {b.name}
-                </Chip>
-              ))}
-            </View>
-          ) : null}
-          
-          {/* Settings Icon Button */}
-          <IconButton
-            icon="cog"
-            size={24}
-            onPress={navigateToSettings}
-            style={{ margin: 0 }}
-          />
-        </View>
+      <View style={styles.header}>
+        <IconButton icon="arrow-left" size={24} onPress={gotoSettings} />
+        <Text style={styles.title}>Staff Dashboard</Text>
       </View>
 
       {loading ? (
-        <View style={{ paddingVertical: 40, alignItems: "center" }}>
+        <View style={styles.loading}>
           <ActivityIndicator />
+          <Text style={{ marginTop: 10, color: "#6B7280" }}>Loading…</Text>
         </View>
       ) : (
         <>
-          {/* Welcome / Quick info */}
-          <Surface
-            elevation={1}
-            style={[styles.card, { backgroundColor: theme.colors.surface }]}
-          >
-            <Text variant="titleMedium" style={{ marginBottom: 4 }}>
-              Welcome{profile?.firstName ? `, ${profile.firstName}` : ""} 👋
-            </Text>
-            <Text style={{ color: theme.colors.onSurfaceVariant }}>
-              Manage your profile, schedule, availability, and see performance
-              at a glance.
-            </Text>
-          </Surface>
-
-          {/* Quick Actions */}
-          <View style={styles.grid2}>
-            <Card
-              style={styles.action}
-              onPress={() =>
-                router.push({
-                  pathname: "/business/dashboard/staff/profile",
-                  params: { businessId: businessId || "" },
-                } as any)
-              }
-            >
-              <Card.Title
-                title="Profile Settings"
-                left={(p) => <List.Icon {...p} icon="account" />}
-              />
-            </Card>
-            <Card
-              style={styles.action}
-              onPress={() =>
-                router.push({
-                  pathname: "/business/dashboard/staff/availability",
-                  params: { businessId: businessId || "" },
-                } as any)
-              }
-            >
-              <Card.Title
-                title="Availability & Time-off"
-                left={(p) => <List.Icon {...p} icon="calendar-clock" />}
-              />
-            </Card>
-            <Card
-              style={styles.action}
-              onPress={() =>
-                router.push({
-                  pathname: "/business/dashboard/staff/schedule",
-                  params: { businessId: businessId || "" },
-                } as any)
-              }
-            >
-              <Card.Title
-                title="My Schedule"
-                left={(p) => <List.Icon {...p} icon="calendar" />}
-              />
-            </Card>
-            <Card
-              style={styles.action}
-              onPress={() =>
-                router.push({
-                  pathname: "/business/dashboard/staff/performance",
-                  params: { businessId: businessId || "" },
-                } as any)
-              }
-            >
-              <Card.Title
-                title="Performance"
-                left={(p) => <List.Icon {...p} icon="chart-line" />}
-              />
-            </Card>
-            <Card
-              style={styles.action}
-              onPress={() =>
-                router.push({
-                  pathname: "/business/dashboard/staff/notifications",
-                  params: { businessId: businessId || "" },
-                } as any)
-              }
-            >
+          {/* Quick actions */}
+          <View style={[styles.row, { paddingHorizontal: 12 }]}>
+            <Card style={styles.action} onPress={gotoNotifications}>
               <Card.Title
                 title="Notifications"
                 left={(p) => <List.Icon {...p} icon="bell" />}
@@ -281,18 +259,28 @@ export default function StaffHubScreen() {
                 }
               />
             </Card>
-            
-
+            <Card style={styles.action} onPress={gotoProfile}>
+              <Card.Title
+                title="Profile"
+                left={(p) => <List.Icon {...p} icon="account" />}
+              />
+            </Card>
           </View>
 
-          {/* At a Glance Metrics */}
+          {/* Performance snapshot (clickable) */}
           <Surface
             elevation={1}
             style={[styles.card, { backgroundColor: theme.colors.surface }]}
           >
-            <Text variant="titleMedium" style={{ marginBottom: 8 }}>
-              Performance (at a glance)
-            </Text>
+            <Button
+              mode="text"
+              onPress={gotoPerformance}
+              contentStyle={{ justifyContent: "flex-start" }}
+              icon="chart-areaspline"
+            >
+              View Performance
+            </Button>
+
             <View style={styles.grid2}>
               <Card style={styles.metric}>
                 <Card.Content>
@@ -300,13 +288,17 @@ export default function StaffHubScreen() {
                     <Text variant="titleSmall" style={styles.muted}>
                       Completed
                     </Text>
-                    <List.Icon icon="target" />
+                    <List.Icon icon="check-circle" />
                   </View>
-                  <Text variant="headlineSmall" style={{ fontWeight: "700" }}>
+                  <Text
+                    variant="headlineSmall"
+                    style={{ fontWeight: "700" }}
+                  >
                     {metrics?.completedBookings ?? 0}
                   </Text>
                 </Card.Content>
               </Card>
+
               <Card style={styles.metric}>
                 <Card.Content>
                   <View style={styles.metricRow}>
@@ -315,11 +307,15 @@ export default function StaffHubScreen() {
                     </Text>
                     <List.Icon icon="close-circle" color={theme.colors.error} />
                   </View>
-                  <Text variant="headlineSmall" style={{ fontWeight: "700" }}>
+                  <Text
+                    variant="headlineSmall"
+                    style={{ fontWeight: "700" }}
+                  >
                     {metrics?.cancellations ?? 0}
                   </Text>
                 </Card.Content>
               </Card>
+
               <Card style={styles.metric}>
                 <Card.Content>
                   <View style={styles.metricRow}>
@@ -328,11 +324,15 @@ export default function StaffHubScreen() {
                     </Text>
                     <List.Icon icon="star" />
                   </View>
-                  <Text variant="headlineSmall" style={{ fontWeight: "700" }}>
+                  <Text
+                    variant="headlineSmall"
+                    style={{ fontWeight: "700" }}
+                  >
                     {(metrics?.averageRating ?? 0).toFixed(1)}
                   </Text>
                 </Card.Content>
               </Card>
+
               <Card style={styles.metric}>
                 <Card.Content>
                   <View style={styles.metricRow}>
@@ -341,7 +341,10 @@ export default function StaffHubScreen() {
                     </Text>
                     <List.Icon icon="currency-usd" />
                   </View>
-                  <Text variant="headlineSmall" style={{ fontWeight: "700" }}>
+                  <Text
+                    variant="headlineSmall"
+                    style={{ fontWeight: "700" }}
+                  >
                     KSh {(metrics?.commissionEarned ?? 0).toLocaleString()}
                   </Text>
                 </Card.Content>
@@ -349,96 +352,102 @@ export default function StaffHubScreen() {
             </View>
           </Surface>
 
-          {/* Today's Schedule (preview) */}
+          {/* Assigned Services */}
           <Surface
             elevation={1}
             style={[styles.card, { backgroundColor: theme.colors.surface }]}
           >
             <View style={styles.sectionHeader}>
-              <Text variant="titleMedium">Today</Text>
-              <Button
-                mode="text"
-                onPress={() =>
-                  router.push({
-                    pathname: "/business/dashboard/staff/schedule",
-                    params: { businessId: businessId || "" },
-                  } as any)
-                }
+              <Text variant="titleMedium">Assigned services</Text>
+              <Button mode="text" onPress={gotoSchedule}>
+                Open Schedule
+              </Button>
+            </View>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              <Chip
+                selected={!selectedServiceId}
+                onPress={() => setSelectedServiceId(null)}
+                compact
               >
+                All
+              </Chip>
+              {services.map((s) => (
+                <Chip
+                  key={s.id}
+                  selected={selectedServiceId === s.id}
+                  onPress={() =>
+                    setSelectedServiceId((prev) => (prev === s.id ? null : s.id))
+                  }
+                  compact
+                >
+                  {s.name}
+                </Chip>
+              ))}
+            </View>
+          </Surface>
+
+          {/* Bookings (filterable) */}
+          <Surface
+            elevation={1}
+            style={[styles.card, { backgroundColor: theme.colors.surface }]}
+          >
+            <View style={styles.sectionHeader}>
+              <Text variant="titleMedium">Bookings</Text>
+              <Button mode="text" onPress={gotoSchedule}>
                 View all
               </Button>
             </View>
-            <Divider />
-            {schedule.slice(0, 4).map((item) => (
-              <List.Item
-                key={item.id}
-                title={item.clientName}
-                description={`${item.service} • ${item.duration}`}
-                left={() => (
-                  <View
-                    style={{
-                      width: 72,
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <Text style={{ fontWeight: "700" }}>{item.time}</Text>
-                  </View>
-                )}
-                right={() => (
-                  <Chip
-                    compact
-                    style={{
-                      alignSelf: "center",
-                      backgroundColor: statusColor(item.status),
-                    }}
-                    textStyle={{ color: "#fff" }}
-                  >
-                    {item.status}
-                  </Chip>
-                )}
-              />
-            ))}
-            {schedule.length === 0 && (
-              <Text style={{ marginTop: 12, color: theme.colors.onSurfaceVariant }}>
-                No appointments scheduled.
-              </Text>
-            )}
-          </Surface>
 
-          {/* Notifications (preview) */}
-          <Surface
-            elevation={1}
-            style={[styles.card, { backgroundColor: theme.colors.surface }]}
-          >
-            <View style={styles.sectionHeader}>
-              <Text variant="titleMedium">Notifications</Text>
-              <Button
-                mode="text"
-                onPress={() =>
-                  router.push({
-                    pathname: "/business/dashboard/staff/notifications",
-                    params: { businessId: businessId || "" },
-                  } as any)
-                }
-              >
-                Open
-              </Button>
+            <View
+              style={{
+                flexDirection: "row",
+                flexWrap: "wrap",
+                gap: 8,
+                marginBottom: 8,
+              }}
+            >
+              {STATUS_TABS.map((t) => (
+                <Chip
+                  key={t.key}
+                  selected={statusKey === t.key}
+                  onPress={() => setStatusKey(t.key)}
+                  compact
+                >
+                  {t.label}
+                  {typeof counts[t.key] === "number" ? ` • ${counts[t.key]}` : ""}
+                </Chip>
+              ))}
             </View>
+
             <Divider />
-            {notes.slice(0, 3).map((n) => (
-              <List.Item
-                key={n.id}
-                title={n.title}
-                left={(p) => (
-                  <List.Icon {...p} icon={n.isRead ? "bell-outline" : "bell"} />
-                )}
-              />
-            ))}
-            {notes.length === 0 && (
-              <Text style={{ marginTop: 12, color: theme.colors.onSurfaceVariant }}>
-                You're all caught up.
+
+            {bookings.length === 0 ? (
+              <Text
+                style={{ marginTop: 12, color: theme.colors.onSurfaceVariant }}
+              >
+                No bookings found.
               </Text>
+            ) : (
+              bookings.map((b) => (
+                <List.Item
+                  key={b.id}
+                  title={`${b.customer?.name ?? "Customer"} • ${
+                    b.serviceName ?? "Service"
+                  }`}
+                  description={`${fmtTime(b.startTime)} – ${fmtTime(
+                    b.endTime
+                  )} ${
+                    b.serviceDuration ? `• ${b.serviceDuration} min` : ""
+                  }`}
+                  right={() => (
+                    <Chip compact style={{ alignSelf: "center" }}>
+                      {b.status === "NO_SHOW"
+                        ? "No-show"
+                        : b.status.toLowerCase()}
+                    </Chip>
+                  )}
+                />
+              ))
             )}
           </Surface>
         </>
@@ -448,30 +457,30 @@ export default function StaffHubScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 16, gap: 12 },
-  headerRow: {
+  container: { flex: 1, backgroundColor: "#F8FAFC" },
+  header: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    flexWrap: "wrap",
-    gap: 12,
+    paddingHorizontal: 8,
+    paddingTop: 60,
+    paddingBottom: 20,
   },
-  headerActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    flexWrap: "wrap",
-  },
-  card: { borderRadius: 20, padding: 12 },
+  title: { fontSize: 24, fontWeight: "bold", color: "#1559C1" },
+
+  loading: { alignItems: "center", paddingTop: 60 },
+
+  row: { flexDirection: "row", gap: 12 },
+  action: { flex: 1, margin: 4 },
+
+  card: { marginHorizontal: 12, marginTop: 12, padding: 12, borderRadius: 12 },
   grid2: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
-  action: { flexBasis: "48%", borderRadius: 16 },
-  metric: { flexBasis: "48%", borderRadius: 16 },
+  metric: { flexBasis: "47%", flexGrow: 1 },
   metricRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 6,
+    justifyContent: "space-between",
   },
-  muted: { color: "#6b7280" },
+  muted: { color: "#6B7280" },
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",

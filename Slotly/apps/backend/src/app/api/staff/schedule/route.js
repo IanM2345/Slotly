@@ -1,168 +1,93 @@
-// File: apps/backend/src/app/api/staff/schedule/route.js
-// Staff booking schedule and appointments endpoint
-
-import * as Sentry from '@sentry/nextjs';
-import { PrismaClient } from '@/generated/prisma';
-import { NextResponse } from 'next/server';
-import { getStaffContext } from '../route';
-import { startOfDay, endOfDay } from 'date-fns';
+// apps/backend/src/app/api/staff/schedule/route.js
+import { NextResponse } from "next/server";
+import * as Sentry from "@sentry/nextjs";
+import { PrismaClient } from "@/generated/prisma";
+import { verifyToken } from "@/middleware/auth";
 
 const prisma = new PrismaClient();
 
-export async function GET(request) {
+function toBool(v) { return String(v).toLowerCase() === "true"; }
+
+async function getStaffFromToken(request) {
   try {
-    const ctx = await getStaffContext(request);
-    if (ctx?.error) return ctx.response;
+    const auth = request.headers.get("authorization") || request.headers.get("Authorization");
+    if (!auth?.startsWith("Bearer ")) return { error: "Unauthorized", status: 401 };
 
-    const url = new URL(request.url);
-    const upcoming = url.searchParams.get('upcoming') === 'true';
-    const dateParam = url.searchParams.get('date'); // YYYY-MM-DD
-    const status = url.searchParams.get('status');  // EXACT status if provided
-    const limit = parseInt(url.searchParams.get('limit') || '50');
-    const offset = parseInt(url.searchParams.get('offset') || '0');
-
-    const where = {
-      staffId: ctx.userId,
-      businessId: ctx.business.id,
-    };
-
-    if (upcoming) {
-      where.startTime = { gte: new Date() };
+    const token = auth.split(" ")[1];
+    const { valid, decoded } = await verifyToken(token);
+    if (!valid || (decoded.role !== "STAFF" && decoded.role !== "BUSINESS_OWNER")) {
+      return { error: "Forbidden", status: 403 };
     }
-
-    if (status) {
-      where.status = status.toUpperCase();
-    }
-
-    if (dateParam) {
-      const targetDate = new Date(dateParam);
-      where.startTime = {
-        gte: startOfDay(targetDate),
-        lte: endOfDay(targetDate)
-      };
-    }
-
-    const [bookings, totalCount] = await Promise.all([
-      prisma.booking.findMany({
-        where,
-        orderBy: { startTime: 'asc' },
-        take: limit,
-        skip: offset,
-        include: {
-          user: { select: { id: true, name: true, phone: true, email: true } },
-          service: { 
-            select: { 
-              id: true, 
-              name: true, 
-              duration: true, 
-              price: true, 
-              category: true 
-            } 
-          },
-          business: {
-            select: { id: true, name: true, logoUrl: true }
-          }
-        },
-      }),
-      prisma.booking.count({ where })
-    ]);
-
-    // Calculate schedule statistics
-    const today = new Date();
-    const todayStart = startOfDay(today);
-    const todayEnd = endOfDay(today);
-
-    const todayBookings = await prisma.booking.count({
-      where: {
-        staffId: ctx.userId,
-        businessId: ctx.business.id,
-        startTime: { gte: todayStart, lte: todayEnd }
-      }
-    });
-
-    const upcomingBookings = await prisma.booking.count({
-      where: {
-        staffId: ctx.userId,
-        businessId: ctx.business.id,
-        startTime: { gt: new Date() },
-        status: { in: ['PENDING', 'CONFIRMED'] }
-      }
-    });
-
-    const stats = {
-      today: todayBookings,
-      upcoming: upcomingBookings,
-      total: totalCount,
-      loaded: bookings.length
-    };
-
-    return NextResponse.json({ 
-      bookings: bookings || [],
-      stats,
-      business: ctx.business,
-      pagination: {
-        limit,
-        offset,
-        total: totalCount,
-        hasMore: offset + bookings.length < totalCount
-      }
-    });
+    Sentry.setUser({ id: decoded.userId, role: decoded.role });
+    return { userId: decoded.userId, role: decoded.role };
   } catch (err) {
-    Sentry.captureException?.(err);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    Sentry.captureException(err);
+    return { error: "Token validation error", status: 500 };
   }
 }
 
-// Mark booking as completed, no-show, etc.
-export async function PUT(request) {
+export async function GET(request) {
   try {
-    const ctx = await getStaffContext(request);
-    if (ctx?.error) return ctx.response;
+    const { userId, error, status } = await getStaffFromToken(request);
+    if (error) return NextResponse.json({ error }, { status });
 
     const { searchParams } = new URL(request.url);
-    const id = searchParams.get('id');
-    if (!id) return NextResponse.json({ error: 'Missing booking id' }, { status: 400 });
+    const businessId = searchParams.get("businessId") || undefined;
+    const serviceId  = searchParams.get("serviceId")  || undefined;
+    const statusStr  = (searchParams.get("status") || "").toUpperCase(); // PENDING/CONFIRMED/CANCELLED/NO_SHOW
+    const isUpcoming = toBool(searchParams.get("upcoming") || "false");
 
-    const payload = await request.json().catch(() => ({}));
-    const { status, notes } = payload;
+    /** base where: only this staff member, business-scoped */
+    const where = {
+      staffId: userId,
+      ...(businessId ? { businessId } : {}),
+      ...(serviceId ? { serviceId } : {}),
+    };
 
-    if (!status || !['COMPLETED', 'NO_SHOW', 'CANCELLED'].includes(status)) {
-      return NextResponse.json({ 
-        error: 'Invalid status. Must be COMPLETED, NO_SHOW, or CANCELLED' 
-      }, { status: 400 });
+    // status filter
+    if (statusStr && ["PENDING","CONFIRMED","CANCELLED","NO_SHOW","COMPLETED"].includes(statusStr)) {
+      where.status = statusStr;
     }
 
-    const updateData = { status };
-    
-    if (status === 'COMPLETED') {
-      updateData.completedAt = new Date();
-      updateData.markedById = ctx.userId;
-    } else if (status === 'NO_SHOW') {
-      updateData.noShowAt = new Date();
-      updateData.markedById = ctx.userId;
-    } else if (status === 'CANCELLED' && notes) {
-      updateData.cancelReason = notes;
+    // upcoming = future startTime (exclude CANCELLED by default)
+    if (isUpcoming) {
+      where.startTime = { gte: new Date() };
+      if (!where.status) {
+        where.status = { in: ["PENDING","CONFIRMED","RESCHEDULED"] };
+      }
     }
 
-    const booking = await prisma.booking.updateMany({
-      where: {
-        id,
-        staffId: ctx.userId,
-        businessId: ctx.business.id,
-        status: { in: ['PENDING', 'CONFIRMED'] } // Only allow updates from these statuses
+    const rows = await prisma.booking.findMany({
+      where,
+      orderBy: { startTime: "asc" },
+      include: {
+        service: { select: { id: true, name: true, price: true, duration: true } },
+        user:    { select: { id: true, name: true, avatarUrl: true } },
       },
-      data: updateData
+      take: 100,
     });
 
-    if (!booking.count) {
-      return NextResponse.json({ 
-        error: 'Booking not found or cannot be updated' 
-      }, { status: 404 });
-    }
+    // normalize to the exact shape the UI expects
+    const bookings = rows.map(b => ({
+      id: b.id,
+      startTime: b.startTime,
+      endTime: b.endTime,
+      status: b.status,
+      serviceId: b.service?.id || b.serviceId,
+      serviceName: b.service?.name || "",
+      servicePrice: b.service?.price ?? null,
+      serviceDuration: b.service?.duration ?? null,
+      customer: b.user ? { 
+        id: b.user.id, 
+        name: b.user.name, 
+        avatarUrl: b.user.avatarUrl 
+      } : null,
+    }));
 
-    return NextResponse.json({ ok: true, updated: booking.count });
+    return NextResponse.json({ bookings }, { status: 200 });
   } catch (err) {
-    Sentry.captureException?.(err);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    Sentry.captureException(err);
+    console.error("GET /api/staff/schedule error:", err);
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }

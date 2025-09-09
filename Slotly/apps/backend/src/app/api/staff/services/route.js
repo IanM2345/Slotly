@@ -1,111 +1,59 @@
-// File: apps/backend/src/app/api/staff/services/route.js
-// Staff assigned services endpoint
-
-import * as Sentry from '@sentry/nextjs';
-import { PrismaClient } from '@/generated/prisma';
-import { NextResponse } from 'next/server';
-import { getStaffContext } from '../route';
+// apps/backend/src/app/api/staff/services/route.js
+import { NextResponse } from "next/server";
+import * as Sentry from "@sentry/nextjs";
+import { PrismaClient } from "@/generated/prisma";
+import { verifyToken } from "@/middleware/auth";
 
 const prisma = new PrismaClient();
 
+function toBool(v) { return String(v).toLowerCase() === "true"; }
+
+async function getStaffFromToken(request) {
+  try {
+    const auth = request.headers.get("authorization") || request.headers.get("Authorization");
+    if (!auth?.startsWith("Bearer ")) return { error: "Unauthorized", status: 401 };
+
+    const token = auth.split(" ")[1];
+    const { valid, decoded } = await verifyToken(token);
+    if (!valid || (decoded.role !== "STAFF" && decoded.role !== "BUSINESS_OWNER")) {
+      return { error: "Forbidden", status: 403 };
+    }
+    Sentry.setUser({ id: decoded.userId, role: decoded.role });
+    return { userId: decoded.userId, role: decoded.role };
+  } catch (err) {
+    Sentry.captureException(err);
+    return { error: "Token validation error", status: 500 };
+  }
+}
+
 export async function GET(request) {
   try {
-    const ctx = await getStaffContext(request);
-    if (ctx?.error) return ctx.response;
+    const { userId, error, status } = await getStaffFromToken(request);
+    if (error) return NextResponse.json({ error }, { status });
 
-    // Get services assigned to this staff member
-    const serviceStaff = await prisma.serviceStaff.findMany({
+    const { searchParams } = new URL(request.url);
+    const businessId = searchParams.get("businessId") || undefined;
+
+    const rows = await prisma.serviceStaff.findMany({
       where: {
-        staffId: ctx.userId,
-        businessId: ctx.business.id
+        staffId: userId,
+        ...(businessId ? { businessId } : {}),
       },
-      include: {
-        service: {
-          select: {
-            id: true,
-            name: true,
-            price: true,
-            duration: true,
-            category: true,
-            available: true,
-            createdAt: true
-          }
-        }
+      select: {
+        service: { select: { id: true, name: true, price: true, duration: true, businessId: true } },
       },
-      orderBy: {
-        service: { name: 'asc' }
-      }
     });
 
-    const services = serviceStaff.map(ss => ({
-      ...ss.service,
-      assignedAt: ss.createdAt
-    }));
+    // de-dup just in case
+    const seen = new Set();
+    const services = rows
+      .map(r => r.service)
+      .filter(s => s && !seen.has(s.id) && seen.add(s.id));
 
-    // Get booking statistics for assigned services
-    const serviceStats = await Promise.all(
-      services.map(async (service) => {
-        const [bookingCount, revenue, recentBookings] = await Promise.all([
-          prisma.booking.count({
-            where: {
-              serviceId: service.id,
-              staffId: ctx.userId,
-              businessId: ctx.business.id,
-              status: 'COMPLETED'
-            }
-          }),
-          prisma.payment.aggregate({
-            _sum: { amount: true },
-            where: {
-              status: 'SUCCESS',
-              booking: {
-                serviceId: service.id,
-                staffId: ctx.userId,
-                businessId: ctx.business.id,
-                status: 'COMPLETED'
-              }
-            }
-          }),
-          prisma.booking.count({
-            where: {
-              serviceId: service.id,
-              staffId: ctx.userId,
-              businessId: ctx.business.id,
-              startTime: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }, // Last 30 days
-              status: 'COMPLETED'
-            }
-          })
-        ]);
-
-        return {
-          ...service,
-          stats: {
-            totalBookings: bookingCount || 0,
-            totalRevenue: revenue._sum.amount || 0,
-            recentBookings: recentBookings || 0,
-            averageBookingValue: bookingCount > 0 ? 
-              Math.round((revenue._sum.amount || 0) / bookingCount) : 0
-          }
-        };
-      })
-    );
-
-    // Calculate overall service statistics
-    const overallStats = {
-      totalServices: serviceStats.length,
-      totalBookings: serviceStats.reduce((sum, s) => sum + s.stats.totalBookings, 0),
-      totalRevenue: serviceStats.reduce((sum, s) => sum + s.stats.totalRevenue, 0),
-      averageServicePrice: services.length > 0 ? 
-        Math.round(services.reduce((sum, s) => sum + s.price, 0) / services.length) : 0
-    };
-
-    return NextResponse.json({
-      services: serviceStats || [],
-      stats: overallStats,
-      business: ctx.business
-    });
+    return NextResponse.json({ services }, { status: 200 });
   } catch (err) {
-    Sentry.captureException?.(err);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    Sentry.captureException(err);
+    console.error("GET /api/staff/services error:", err);
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }

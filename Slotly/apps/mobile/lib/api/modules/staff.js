@@ -84,6 +84,35 @@ async function http(
   }
 }
 
+// ================== Staff Performance Metrics ==================
+export async function staffPerformance({ token, businessId } = {}) {
+  const q = qs({ businessId });
+  const json = await http(`/api/staff/performance${q}`, { method: "GET", token });
+
+  const m = json?.metrics || {};
+  return {
+    // headline cards
+    completedBookings: Number(m.completedBookings || 0),
+    cancellations: Number(m.cancelledBookings || 0),
+    averageRating: Number(m.averageRating ?? 0),
+    commissionEarned: Number(m.commissionEarned || 0),
+
+    // extras (you may use elsewhere)
+    totalBookings: Number(m.totalBookings || 0),
+    totalRevenue: Number(m.totalRevenue || 0),
+    performanceScore: Number(m.performanceScore || 0),
+
+    // charts
+    series: m.series || {
+      bookings: [],      // [{ x: "2025-01", y: 12 }, ...]
+      earnings: [],
+      cancellations: [],
+    },
+    monthlyStats: m.monthlyStats || {},
+    topServices: Array.isArray(m.topServices) ? m.topServices : [],
+  };
+}
+
 // ================== Staff Profile ==================
 /**
  * Get staff profile with business context
@@ -199,6 +228,7 @@ export const staffTimeoff = {
  * @param {boolean} [options.upcoming]
  * @param {string} [options.date] - YYYY-MM-DD
  * @param {string} [options.status]
+ * @param {string} [options.serviceId] - Filter by specific service
  */
 export async function staffSchedule({
   token,
@@ -206,33 +236,44 @@ export async function staffSchedule({
   upcoming,
   date,
   status,
+  serviceId,
 } = {}) {
   const q = qs({
     businessId,
     upcoming: typeof upcoming === "boolean" ? String(upcoming) : undefined,
     date,
     status,
+    serviceId,
   });
 
   const json = await http(`/api/staff/schedule${q}`, { method: "GET", token });
   return Array.isArray(json?.bookings) ? json.bookings : [];
 }
 
-// ================== Performance Metrics ==================
-export async function staffPerformance({ token, businessId } = {}) {
-  const q = qs({ businessId });
-  const json = await http(`/api/staff/performance${q}`, { method: "GET", token });
+// ================== Mark Booking Status ==================
+/**
+ * Mark a booking completed or no-show
+ * @param {Object} options
+ * @param {string} options.id - Booking ID
+ * @param {string} options.action - "complete" | "no_show"
+ * @param {string} [options.token] - JWT token (optional)
+ * @param {string} [options.businessId] - Business ID for scoping
+ */
+export async function markBooking({ id, action, token, businessId }) {
+  if (!id || !action) throw new Error("id and action are required");
+  const q = qs({ id, businessId });
+  return await http(`/api/staff/bookings${q}`, {
+    method: "PATCH",
+    token,
+    body: { action }, // "complete" | "no_show"
+  });
+}
 
-  const m = json?.metrics || json || {};
-  return {
-    completedBookings: Number(m.completedBookings || 0),
-    avgRating: m.avgRating == null ? null : Number(m.avgRating),
-    averageRating: m.avgRating == null ? null : Number(m.avgRating), // alias for compatibility
-    cancellations: Number(m.cancellations || 0),
-    commissionEarned: Number(m.commissionEarned || 0),
-    totalRevenue: Number(m.totalRevenue || 0),
-    ...m, // include any additional backend metrics
-  };
+// ================== Staff Assigned Services ==================
+export async function staffAssignedServices({ token, businessId } = {}) {
+  const q = qs({ businessId });
+  const json = await http(`/api/staff/services${q}`, { method: "GET", token });
+  return Array.isArray(json?.services) ? json.services : [];
 }
 
 // ================== Profile (used by profile.tsx) ==================
@@ -306,6 +347,9 @@ export const staffApi = {
 
   getSchedule: (opts) => staffSchedule(opts),
 
+  // NEW - Mark booking status
+  markBooking: (opts) => markBooking(opts),
+
   // if you don't have a /api/staff/notifications route yet,
   // this returns [] safely (so the screen never hangs)
   getNotifications: async ({ token, businessId } = {}) => {
@@ -319,6 +363,18 @@ export const staffApi = {
       return [];
     }
   },
+
+  // NEW - Assigned services
+  getAssignedServices: (opts) => staffAssignedServices(opts),
+
+  // Bookings by status - convenience wrapper
+  getBookingsByStatus: ({ businessId, status, serviceId } = {}) =>
+    staffSchedule({
+      businessId,
+      status,          // "CONFIRMED" | "CANCELLED" | "NO_SHOW" | "COMPLETED" | "PENDING"
+      ...(status === "UPCOMING" ? { upcoming: true } : {}),
+      ...(serviceId ? { serviceId } : {}),
+    }),
 
   // availability & time off
   getAvailability: ({ token, businessId } = {}) => staffAvailability.list({ token, businessId }),
