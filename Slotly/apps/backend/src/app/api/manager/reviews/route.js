@@ -26,7 +26,6 @@ async function getBusinessFromToken(request) {
       return { error: 'Business not found', status: 404 };
     }
 
-   
     Sentry.setUser({ id: decoded.userId, role: decoded.role });
 
     return { business };
@@ -44,7 +43,13 @@ export async function GET(request) {
     const reviews = await prisma.review.findMany({
       where: { businessId: business.id },
       include: {
-        user: { select: { id: true, name: true } },
+        user: { 
+          select: { 
+            id: true, 
+            name: true, 
+            avatarUrl: true  // ✅ Added avatarUrl support
+          } 
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -69,6 +74,7 @@ export async function PATCH(request) {
       return NextResponse.json({ error: 'Review ID is required' }, { status: 400 });
     }
 
+    // Verify the review belongs to this business
     const review = await prisma.review.findFirst({
       where: {
         id: reviewId,
@@ -80,12 +86,25 @@ export async function PATCH(request) {
       return NextResponse.json({ error: 'Review not found' }, { status: 404 });
     }
 
+    // Update the review to flagged status
     const updated = await prisma.review.update({
       where: { id: reviewId },
       data: { flagged: true },
+      include: {
+        user: { 
+          select: { 
+            id: true, 
+            name: true, 
+            avatarUrl: true  // ✅ Include avatarUrl in response
+          } 
+        },
+      },
     });
 
-    return NextResponse.json({ message: 'Review flagged for moderation', review: updated }, { status: 200 });
+    return NextResponse.json({ 
+      message: 'Review flagged for moderation', 
+      review: updated 
+    }, { status: 200 });
   } catch (err) {
     Sentry.captureException(err);
     console.error('PATCH /manager/reviews error:', err);

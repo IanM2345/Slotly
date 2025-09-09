@@ -64,10 +64,7 @@ export async function GET(request) {
       return NextResponse.json(
         {
           error: 'Your subscription does not support analytics access.',
-          details: {
-            error: 'Your subscription does not support analytics access.',
-            suggestion: 'Upgrade your plan to unlock analytics.',
-          },
+          suggestion: 'Upgrade your plan to unlock analytics.',
         },
         { status: 403 }
       );
@@ -103,7 +100,11 @@ export async function GET(request) {
     const metrics = (searchParams.get('metrics') || 'bookings,revenue,clients,services,staffPerformance,noShows').split(',');
     const smoothing = searchParams.get('smoothing') === 'true'; // for rolling average
     const abTestGroup = searchParams.get('abGroup');
-    const staffLimit = parseInt(searchParams.get('staffLimit')) || 5;
+    
+    // FIXED: Cap staff analytics to plan limit
+    const requestedStaff = parseInt(searchParams.get('staffLimit')) || 5;
+    const staffLimit = Math.max(1, Math.min(requestedStaff, features.maxStaff || requestedStaff));
+    
     const exportCsv = searchParams.get('export') === 'csv';
 
     const cacheKey = `${business.id}:${view}:${startDate.toISOString()}:${endDate.toISOString()}:${metrics.sort().join(',')}:${smoothing}:${abTestGroup}:${staffLimit}:${period || ''}:${tz}`;
@@ -347,7 +348,7 @@ export async function GET(request) {
 
     inMemoryCache.set(cacheKey, { data: responseData, timestamp: Date.now() });
 
-    // ---- Build forward‑compat "kpis" + "series" from analytics ----
+    // ---- Build forward-compat "kpis" + "series" from analytics ----
     // bookings/revenue keyed buckets → totals
     const sumDict = (d) => Object.values(d || {}).reduce((s, v) => s + (Number.isFinite(+v) ? +v : 0), 0);
 
@@ -408,7 +409,7 @@ export async function GET(request) {
     return NextResponse.json(compatPayload, { status: 200 });
   } catch (err) {
     Sentry.captureException(err);
-    console.error('❌ Analytics error:', err);
+    console.error('⚠ Analytics error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

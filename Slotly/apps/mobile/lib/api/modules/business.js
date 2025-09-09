@@ -152,9 +152,11 @@ export async function getBusinessReviews(businessId, { page = 1, limit = 3 } = {
  * @param {string} token - Auth token
  */
 export async function getMyBusiness(token) {
-  return jsonFetch("/api/manager/business", {
-    token,
-  });
+  // Use the existing endpoint that you DO have
+  const me = await jsonFetch("/api/users/me", { token });
+// Normalize to the shape your callers expect
+ if (!me?.business) return { business: null };
+ return { business: me.business };
 }
 
 /**
@@ -262,11 +264,7 @@ export async function getMyBusinessAvailability(startDate, endDate, token) {
  * Get businesses owned by current user (requires authentication)
  * @param {string} token - Auth token
  */
-export async function getMyBusinesses(token) {
-  return jsonFetch("/api/businesses/my", {
-    token,
-  });
-}
+
 
 /**
  * @deprecated Use updateMyBusiness instead

@@ -4,11 +4,14 @@ import React, { useMemo, useState } from "react";
 import { View, ScrollView } from "react-native";
 import { Text, TextInput, Button, HelperText, Snackbar, useTheme } from "react-native-paper";
 import { useRouter } from "expo-router";
-import { addStaffDirect } from "../../../../lib/api/modules/manager";
+import { addStaffEnrollment } from "../../../../lib/api/modules/manager";
+import { useSession } from "../../../../context/SessionContext";
 
 export default function TeamNew() {
   const theme = useTheme();
   const router = useRouter();
+  const { user } = useSession();
+  const businessId = user?.business?.id;
   const [first, setFirst] = useState("");
   const [last, setLast] = useState("");
   const [userId, setUserId] = useState("");
@@ -31,13 +34,14 @@ export default function TeamNew() {
     setSaving(true);
     
     try {
-      await addStaffDirect({
+      await addStaffEnrollment({
         userId: userId.trim(),
         firstName: first.trim(),
         lastName: last.trim(),
+        businessId,
       });
       setSaving(false);
-      setSnack({ visible: true, msg: "Staff member added" });
+      setSnack({ visible: true, msg: "Application sent for approval" });
       setTimeout(() => router.back(), 300);
     } catch (error: any) {
       setSaving(false);
@@ -86,7 +90,7 @@ export default function TeamNew() {
         <HelperText type={userId.length > 0 && !/^[0-9a-fA-F]{24}$/.test(userId) ? "error" : "info"}>
           {userId.length > 0 && !/^[0-9a-fA-F]{24}$/.test(userId) 
             ? "Invalid format. Must be exactly 24 hexadecimal characters."
-            : "This will promote the user to staff and add them to your business."
+            : "This will create a pending staff enrollment for approval."
           }
         </HelperText>
         
@@ -105,7 +109,7 @@ export default function TeamNew() {
             loading={saving}
             style={{ flex: 1 }}
           >
-            Add Staff
+            Send Application
           </Button>
         </View>
       </View>

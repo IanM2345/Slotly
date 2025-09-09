@@ -12,7 +12,7 @@ import { useHeaderHeight } from "@react-navigation/elements";
 
 import { useSession, type BusinessTier } from "../../../context/SessionContext";
 import { useOnboarding } from "../../../context/OnboardingContext";
-import { isAuthenticated, meHeartbeat, clearSession } from "../../../lib/api/modules/auth";
+import { getAuthStatus, meHeartbeat, clearSession } from "../../../lib/api/modules/auth";
 
 const { width } = Dimensions.get("window");
 
@@ -74,7 +74,7 @@ export default function ChoosePlan() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
-  const { updateBusiness } = useSession();
+  const { updateBusiness, ready } = useSession();
   const { data: onboarding, setData, firstRequiredStep, goNext } = useOnboarding();
 
   // ---- Guard: must have Step-1 info + valid session ----
@@ -89,6 +89,9 @@ export default function ChoosePlan() {
         setGuardChecking(true);
         setGuardError(null);
 
+        // Wait for session hydration to avoid false negatives
+        if (!ready) return;
+
         // 1) Validate Step-1 payload presence
         const required: Array<keyof typeof onboarding> = [
           "businessName", "businessType", "email", "phone", "address",
@@ -98,17 +101,19 @@ export default function ChoosePlan() {
         );
         if (mounted) setMissingFields(missing);
 
-        // 2) Validate session (token exists + me ok)
-        let ok = false;
-        if (await isAuthenticated()) {
-          try {
-            const me = await meHeartbeat();
-            ok = !!me?.id;
-          } catch {
-            ok = false;
-          }
+        // 2) Validate session (tokens present + heartbeat OK)
+        const status = await getAuthStatus();
+        if (!status.isAuthenticated) {
+          if (mounted) setGuardError("You're not signed in or your session expired.");
+          return;
         }
-        if (!ok) {
+        try {
+          const { user } = await meHeartbeat();
+          const ok = !!(user?.id || user?.userId || user?._id);
+          if (!ok && mounted) {
+            setGuardError("You're not signed in or your session expired.");
+          }
+        } catch {
           if (mounted) setGuardError("You're not signed in or your session expired.");
         }
       } finally {
@@ -116,31 +121,36 @@ export default function ChoosePlan() {
       }
     })();
     return () => { mounted = false; };
-  }, [onboarding]);
+  }, [ready, onboarding]);
 
   const gated = guardChecking || !!guardError || missingFields.length > 0;
 
   // ---- Plans state ----
   // Fixed version with proper null checking
   const initialPlan = useMemo(() => {
-  // Add null/undefined checks before accessing nested properties
-  if (onboarding?.selectedPlan?.tier) {
-    // Use non-null assertion since we know it exists from the if check
-    return plans.find(p => p.tier === onboarding.selectedPlan!.tier) || null;
-  }
-  return null;
-}, [onboarding?.selectedPlan?.tier]);
+    // Add null/undefined checks before accessing nested properties
+    if (onboarding?.selectedPlan?.tier) {
+      // Use non-null assertion since we know it exists from the if check
+      return plans.find(p => p.tier === onboarding.selectedPlan!.tier) || null;
+    }
+    return null;
+  }, [onboarding?.selectedPlan?.tier]);
 
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(initialPlan);
   const [loading, setLoading] = useState(false);
   const [viewMode, setViewMode] = useState<'cards' | 'list'>('cards');
 
-    const handlePlanSelect = (plan: Plan) => {
+  // Keep local selection in sync when user comes back to this screen
+  useEffect(() => {
+    setSelectedPlan(initialPlan);
+  }, [initialPlan]);
+
+  const handlePlanSelect = (plan: Plan) => {
     if (gated) return; // block selection until guard passes
     setSelectedPlan(plan);
-   // Immediately persist chosen plan + tier + verification requirements
+    // Immediately persist chosen plan + tier + verification requirements
     const tierNumber = plan.tierNumber as BusinessTier;
-   const verificationType = plan.requiresKYC ? ("FORMAL" as const) : ("INFORMAL" as const);
+    const verificationType = plan.requiresKYC ? ("FORMAL" as const) : ("INFORMAL" as const);
     setData({
       selectedPlan: { name: plan.name, tier: plan.tier, price: plan.price },
       tier: tierNumber,
@@ -154,8 +164,8 @@ export default function ChoosePlan() {
 
     // Re-check session right before continuing
     try {
-      const me = await meHeartbeat();
-      if (!me?.id) throw new Error("Not authenticated");
+      const { user } = await meHeartbeat();
+      if (!(user?.id || user?.userId || user?._id)) throw new Error("Not authenticated");
     } catch (e) {
       setGuardError("Your session has expired. Please sign in to continue.");
       await clearSession();
@@ -169,11 +179,11 @@ export default function ChoosePlan() {
 
     // Persist to onboarding context
     setData({
-       selectedPlan: { name: selectedPlan.name, tier: selectedPlan.tier, price: selectedPlan.price },
-       tier: tierNumber,
-       businessVerificationType: verificationType,
-       needsKyc: !!selectedPlan.requiresKYC,
-     });
+      selectedPlan: { name: selectedPlan.name, tier: selectedPlan.tier, price: selectedPlan.price },
+      tier: tierNumber,
+      businessVerificationType: verificationType,
+      needsKyc: !!selectedPlan.requiresKYC,
+    });
 
     // Mirror to session context
     updateBusiness({

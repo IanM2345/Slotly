@@ -29,6 +29,8 @@ import {
   reassignBookingStaff,
   rescheduleBooking,
   cancelManagerBooking,
+  markBookingCompleted,
+  markBookingNoShow,
 } from "../../../../lib/api/modules/manager";
 
 // No need to import payment API anymore - backend provides paidViaApp
@@ -192,6 +194,26 @@ export default function BookingsManageScreen() {
     }
   }
 
+  async function doComplete(b: BookingRow) {
+    try {
+      await markBookingCompleted({ id: b.id });
+      setSnackbar({ visible: true, msg: "Marked as completed" });
+      await load();
+    } catch (e: any) {
+      Alert.alert("Failed", e?.message || "Unable to mark completed");
+    }
+  }
+
+  async function doNoShow(b: BookingRow) {
+    try {
+      await markBookingNoShow({ id: b.id });
+      setSnackbar({ visible: true, msg: "Marked as no-show" });
+      await load();
+    } catch (e: any) {
+      Alert.alert("Failed", e?.message || "Unable to mark no-show");
+    }
+  }
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -261,6 +283,24 @@ export default function BookingsManageScreen() {
                       disabled={b.status === "CANCELLED" || b.status === "COMPLETED" || b.status === "NO_SHOW"}
                     >
                       Cancel
+                    </Button>
+                    <Button
+                      mode="text"
+                      compact
+                      style={styles.actionBtn}
+                      onPress={() => doComplete(b)}
+                      disabled={b.status === "CANCELLED" || b.status === "COMPLETED" || b.status === "NO_SHOW"}
+                    >
+                      Complete
+                    </Button>
+                    <Button
+                      mode="text"
+                      compact
+                      style={styles.actionBtn}
+                      onPress={() => doNoShow(b)}
+                      disabled={b.status === "CANCELLED" || b.status === "COMPLETED" || b.status === "NO_SHOW"}
+                    >
+                      No-Show
                     </Button>
                   </View>
                 </Surface>

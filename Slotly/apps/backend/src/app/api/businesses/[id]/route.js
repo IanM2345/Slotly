@@ -147,7 +147,7 @@ export async function PUT(request, { params }) {
 // Soft delete (recommended) or hard delete a business
 export async function DELETE(_request, { params }) {
   try {
-    const { id: businessId } = await params;
+    const businessId = params?.id;
     if (!isObjectId(businessId)) return jsonError('Invalid business ID format', 400);
 
     // ✅ RECOMMENDED: Soft delete (mark as suspended)

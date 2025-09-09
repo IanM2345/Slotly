@@ -6,99 +6,135 @@ import { verifyToken } from '@/middleware/auth'
 const prisma = new PrismaClient()
 
 async function getBusinessForOwner(userId) {
-  return prisma.business.findFirst({ where: { ownerId: userId } })
+  return prisma.business.findFirst({ where: { ownerId: userId }, select: { id: true } })
+}
+
+async function getBusinessForStaff(userId) {
+  const se = await prisma.staffEnrollment.findFirst({
+    where: { userId, status: 'APPROVED' },
+    select: { businessId: true },
+  })
+  if (!se) return null
+  return prisma.business.findUnique({ where: { id: se.businessId }, select: { id: true } })
+}
+
+async function resolveBusinessId(decoded, businessIdParam) {
+  if (decoded.role === 'ADMIN') {
+    if (!businessIdParam) return null
+    const exists = await prisma.business.findUnique({ where: { id: businessIdParam }, select: { id: true } })
+    return exists?.id ?? null
+  }
+
+  if (decoded.role === 'BUSINESS_OWNER') {
+    if (businessIdParam) {
+      const owned = await prisma.business.findFirst({
+        where: { id: businessIdParam, ownerId: decoded.userId },
+        select: { id: true },
+      })
+      return owned?.id ?? null
+    }
+    const biz = await getBusinessForOwner(decoded.userId)
+    return biz?.id ?? null
+  }
+
+  if (decoded.role === 'STAFF') {
+    const biz = await getBusinessForStaff(decoded.userId)
+    return biz?.id ?? null
+  }
+
+  return null
 }
 
 export async function GET(request) {
   try {
-    const authHeader = request.headers.get('authorization')
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    const auth = request.headers.get('authorization') || request.headers.get('Authorization')
+    if (!auth?.startsWith('Bearer ')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const token = authHeader.split(' ')[1]
+    const token = auth.split(' ')[1]
     const { valid, decoded } = await verifyToken(token)
-    if (!valid || (decoded.role !== 'ADMIN' && decoded.role !== 'BUSINESS_OWNER')) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
+    if (!valid) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
     const { searchParams } = new URL(request.url)
+    const businessIdParam = searchParams.get('businessId') || undefined
     const staffId = searchParams.get('staffId') || undefined
     const serviceId = searchParams.get('serviceId') || undefined
-    const businessIdQuery = searchParams.get('businessId') || undefined
     const date = searchParams.get('date') || undefined // YYYY-MM-DD
-    const status = searchParams.get('status') || undefined // optional filter
+    const view = (searchParams.get('view') || 'upcoming').toLowerCase()
+    const limit = Math.max(1, Math.min(50, Number(searchParams.get('limit') || 5)))
 
-    // Tenant scoping:
-    // - BUSINESS_OWNER: force own business
-    // - ADMIN: may pass ?businessId=..., otherwise reject to avoid cross-tenant dumps
-    let businessId = businessIdQuery
-    if (decoded.role === 'BUSINESS_OWNER') {
-      const biz = await getBusinessForOwner(decoded.userId)
-      if (!biz) return NextResponse.json({ error: 'Business not found' }, { status: 404 })
-      businessId = biz.id
-    } else {
-      if (!businessId) {
-        return NextResponse.json({ error: 'businessId is required' }, { status: 400 })
+    const businessId = await resolveBusinessId(decoded, businessIdParam)
+    if (!businessId) return NextResponse.json({ error: 'businessId not accessible' }, { status: 403 })
+
+    const where = { businessId }
+    if (staffId) where.staffId = staffId
+    if (serviceId) where.serviceId = serviceId
+
+    if (date) {
+      where.startTime = {
+        gte: new Date(`${date}T00:00:00.000Z`),
+        lt: new Date(`${date}T23:59:59.999Z`),
       }
+    } else if (view === 'upcoming') {
+      where.startTime = { gte: new Date() }
     }
 
-    const where = {
-      businessId,
-      ...(staffId ? { staffId } : {}),
-      ...(serviceId ? { serviceId } : {}),
-      ...(status ? { status } : {}),
-      ...(date
-        ? {
-            startTime: {
-              gte: new Date(date + 'T00:00:00.000Z'),
-              lt: new Date(date + 'T23:59:59.999Z'),
-            },
-          }
-        : {}),
-    }
-
-    const bookings = await prisma.booking.findMany({
+    const rows = await prisma.booking.findMany({
       where,
       orderBy: { startTime: 'asc' },
-      include: {
+      take: limit,
+      select: {
+        id: true,
+        startTime: true,
+        endTime: true,
+        status: true,
+        service: { select: { id: true, name: true, price: true } },
         user: { select: { id: true, name: true } },
         staff: { select: { id: true, name: true } },
-        service: { select: { id: true, name: true, duration: true, price: true } },
+        // grab the latest successful in-app payment (if any)
+        payments: {
+          where: {
+            type: 'BOOKING',             // Fixed: was context: 'BOOKING'
+            status: 'SUCCESS',
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: {
+            method: true,
+            provider: true,
+            txRef: true,
+            amount: true,
+          },
+        }
       },
     })
 
-    // --- Enrich: paidViaApp ---
-    const bookingIds = bookings.map(b => b.id)
-    let successPayments = []
-    if (bookingIds.length > 0) {
-      successPayments = await prisma.payment.findMany({
-        where: {
-          bookingId: { in: bookingIds },
-          status: 'SUCCESS',
-        },
-        select: { bookingId: true, provider: true, txRef: true },
-      })
-    }
-    const paidViaAppSet = new Set(
-      successPayments
-        .filter(p => !!p.provider || !!p.txRef)
-        .map(p => p.bookingId)
-    )
+    const bookings = rows.map(b => {
+      const p = b.payments?.[0] || null
+      return {
+        id: b.id,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        status: b.status,
+        service: b.service,
+        user: b.user,
+        staff: b.staff,
+        isPaid: !!p,
+        paidChannel: p?.method || null,
+        paidViaApp: !!(p?.provider || p?.txRef),
+        price: b.service?.price ?? null,
+      }
+    })
 
-    const enriched = bookings.map(b => ({
-      ...b,
-      paidViaApp: paidViaAppSet.has(b.id),
-      price: b?.service?.price ?? null, // convenience for UI
-    }))
-
-    return NextResponse.json({ bookings: enriched })
-  } catch (error) {
-    Sentry.captureException(error)
-    console.error('GET /manager/bookings error:', error)
+    return NextResponse.json({ businessId, bookings }, { status: 200 })
+  } catch (err) {
+    Sentry.captureException(err)
+    console.error('GET /manager/bookings error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
+
 
 export async function PATCH(request) {
   try {
@@ -141,6 +177,47 @@ export async function PATCH(request) {
     }
 
     switch (action) {
+      case 'complete': {
+        // cannot complete if already terminal
+        if (['CANCELLED','COMPLETED','NO_SHOW'].includes(booking.status)) {
+          return NextResponse.json({ error: 'Booking already finalized' }, { status: 400 })
+        }
+        const updated = await prisma.booking.update({
+          where: { id },
+          data: {
+            status: 'COMPLETED',
+            completedAt: new Date(),
+            markedById: decoded.userId,
+          },
+          include: {
+            user: { select: { id: true, name: true, email: true } },
+            staff:{ select: { id: true, name: true } },
+            service:{ select: { id: true, name: true } },
+          },
+        })
+        return NextResponse.json({ message: 'Marked as completed', booking: updated }, { status: 200 })
+      }
+
+      case 'noShow': {
+        if (['CANCELLED','COMPLETED','NO_SHOW'].includes(booking.status)) {
+          return NextResponse.json({ error: 'Booking already finalized' }, { status: 400 })
+        }
+        const updated = await prisma.booking.update({
+          where: { id },
+          data: {
+            status: 'NO_SHOW',
+            noShowAt: new Date(),
+            markedById: decoded.userId,
+          },
+          include: {
+            user: { select: { id: true, name: true, email: true } },
+            staff:{ select: { id: true, name: true } },
+            service:{ select: { id: true, name: true } },
+          },
+        })
+        return NextResponse.json({ message: 'Marked as no-show', booking: updated }, { status: 200 })
+      }
+
       case 'reassign': {
         if (!staffId) {
           return NextResponse.json({ error: 'Missing staffId' }, { status: 400 })
@@ -195,7 +272,11 @@ export async function PATCH(request) {
 
         // 2) Look for successful in-app payment (paid via app if provider/txRef present)
         const pay = await prisma.payment.findFirst({
-          where: { bookingId: booking.id, status: 'SUCCESS' },
+          where: { 
+            bookingId: booking.id, 
+            status: 'SUCCESS',
+            type: 'BOOKING', // Fixed: was context: 'BOOKING'
+          },
         })
         const isAppPayment = !!pay?.provider || !!pay?.txRef
 

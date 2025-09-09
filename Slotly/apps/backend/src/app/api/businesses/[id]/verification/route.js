@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { PrismaClient } from "@/generated/prisma";
-import { requireAuth, verifyToken } from "../../../../lib/token";
+import { requireAuth, verifyToken } from "@/lib/token"; // Fixed: use the correct token helper path
 import * as Sentry from '@sentry/nextjs';
 import bcrypt from 'bcryptjs';
 
@@ -139,5 +139,73 @@ export async function DELETE(request) {
     console.error('Error deleting user:', error);
     Sentry.captureException(error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+  }
+}
+
+export async function POST(req, { params }) {
+  try {
+    const user = await requireAuth(req);
+    const businessId = params?.id;
+    if (!businessId) {
+      return NextResponse.json({ error: "Missing business id" }, { status: 400 });
+    }
+
+    // Ensure the authenticated user owns this business
+    const biz = await prisma.business.findUnique({
+      where: { id: businessId },
+      select: { id: true, ownerId: true },
+    });
+    if (!biz || biz.ownerId !== user.id) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const {
+      type = "INFORMAL",
+      idNumber = "",
+      regNumber = null,
+      idPhotoUrl,
+      selfieWithIdUrl = null,
+      licenseUrl = null,
+    } = body || {};
+
+    // Minimal validation
+    if (!idPhotoUrl) {
+      return NextResponse.json({ error: "idPhotoUrl is required" }, { status: 400 });
+    }
+    if (String(type).toUpperCase() === "FORMAL" && !idNumber) {
+      return NextResponse.json({ error: "idNumber required for FORMAL verification" }, { status: 400 });
+    }
+
+    // Upsert: one verification row per business (model has unique businessId)
+    const verification = await prisma.businessVerification.upsert({
+      where: { businessId },
+      update: {
+        type,
+        idNumber,
+        regNumber,
+        idPhotoUrl,
+        selfieWithIdUrl,
+        licenseUrl,
+        status: "PENDING",
+        reviewedAt: null,
+      },
+      create: {
+        businessId,
+        type,
+        idNumber,
+        regNumber,
+        idPhotoUrl,
+        selfieWithIdUrl,
+        licenseUrl,
+        status: "PENDING",
+      },
+      select: { id: true, status: true, type: true },
+    });
+
+    return NextResponse.json({ ok: true, verification }, { status: 200 });
+  } catch (err) {
+    console.error("POST /api/businesses/[id]/verification error:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

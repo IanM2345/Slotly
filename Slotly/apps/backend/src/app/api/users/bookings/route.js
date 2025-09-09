@@ -47,7 +47,7 @@ export async function GET(request) {
     const token = authHeader.split(' ')[1];
     const { valid, decoded } = await verifyToken(token);
 
-    if (!valid || !decoded || decoded.role !== 'CUSTOMER') {
+    if (!valid || !decoded  ) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -128,7 +128,7 @@ export async function POST(request) {
     const token = authHeader.split(' ')[1];
     const { valid, decoded } = await verifyToken(token);
 
-    if (!valid || !decoded || decoded.role !== 'CUSTOMER') {
+    if (!valid || !decoded ) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

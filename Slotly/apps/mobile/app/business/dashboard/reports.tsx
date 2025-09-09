@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { View, ScrollView, StyleSheet, Alert } from "react-native";
 import {
   Text,
@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   IconButton,
   Button,
+  Banner,
   useTheme,
 } from "react-native-paper";
 import { useRouter } from "expo-router";
@@ -15,6 +16,7 @@ import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import * as WebBrowser from "expo-web-browser";
 
+import { useSession } from "../../../context/SessionContext";
 import { useTier } from "../../../context/TierContext";
 import { VerificationGate } from "../../../components/VerificationGate";
 import { LockedFeature } from "../../../components/LockedFeature";
@@ -24,6 +26,7 @@ import { Section } from "../../../components/Section";
 import {
   listReports,         // GET /api/manager/reports → { reports }
   previewReport,       // GET /api/manager/reports/[id] → PDF bytes
+  downloadEmptyReport, // GET /api/manager/reports?empty=1 → blank PDF
   getAnalytics,        // GET /api/manager/analytics (JSON KPIs)
   getAnalyticsCsv,     // GET /api/manager/analytics?export=csv (CSV text)
 } from "../../../lib/api/modules/manager";
@@ -49,21 +52,25 @@ type ReportCard = BackendReport & {
 export default function ReportsScreen() {
   const router = useRouter();
   const theme = useTheme();
-  const { features } = useTier();
+  const { user } = useSession();
+  const { features, tier } = useTier();
 
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string|null>(null);
+  const [lockedMsg, setLockedMsg] = useState<string|null>(null);
   const [reports, setReports] = useState<ReportCard[]>([]);
 
-  useEffect(() => {
-    if (features.reports) {
-      loadReports();
-    } else {
-      setLoading(false);
-    }
-  }, [features.reports]);
+  // Mirror server: reports available on LEVEL_3+ (tier >= 3)
+  const canAccessReports = useMemo(() => {
+    const numericTier = typeof tier === 'string' ? parseInt(tier, 10) : (tier ?? 1);
+    return numericTier >= 3 && features.reports;
+  }, [tier, features.reports]);
 
-  async function loadReports() {
+  const loadReports = useCallback(async () => {
     setLoading(true);
+    setError(null);
+    setLockedMsg(null);
+
     try {
       // 1) Fetch available reports (owner-scoped, plan-gated)
       const { reports: rows } = await listReports({});
@@ -94,14 +101,27 @@ export default function ReportsScreen() {
       setReports(enriched);
     } catch (err: any) {
       console.error("Error loading reports:", err);
-      // Don't show alert for 403 - user just doesn't have access
-      if (err?.response?.status !== 403) {
-        Alert.alert("Error", err?.message || "Failed to load reports");
+      const msg = err?.response?.status === 403
+        ? "Your plan does not include Reports. Upgrade to unlock."
+        : (err?.message || "Failed to load reports");
+      
+      if (err?.response?.status === 403) {
+        setLockedMsg(msg);
+      } else {
+        setError(msg);
       }
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    if (canAccessReports) {
+      loadReports();
+    } else {
+      setLoading(false);
+    }
+  }, [canAccessReports, loadReports]);
 
   function periodToRange(period?: string) {
     if (!period) return null;
@@ -126,58 +146,79 @@ export default function ReportsScreen() {
     };
   }
 
-  async function handlePreviewPDF(report: ReportCard) {
+  const handleDownload = useCallback(async (report: ReportCard) => {
     try {
-      // Preferred path: if the backend stored a fileUrl, open it directly
+      setLoading(true);
+      let pdfBytes;
+
       if (report.fileUrl) {
-        await WebBrowser.openBrowserAsync(report.fileUrl);
-        return;
+        // Preferred path: if the backend stored a fileUrl, try to download directly first
+        try {
+          await WebBrowser.openBrowserAsync(report.fileUrl);
+          return;
+        } catch {
+          // Fallback to API download
+          pdfBytes = await previewReport({ reportId: report.id });
+        }
+      } else {
+        // Get PDF bytes from API
+        pdfBytes = await previewReport({ reportId: report.id });
       }
 
-      // Fallback: download PDF bytes and share them
-      const dest = FileSystem.documentDirectory + `Business-Report-${report.period}.pdf`;
-      const pdfBytes = await previewReport({ reportId: report.id });
+      const fileUri = FileSystem.documentDirectory + `slotly-report-${report.period}.pdf`;
       
       // Convert ArrayBuffer to base64 string
       const base64 = btoa(String.fromCharCode(...new Uint8Array(pdfBytes)));
-      await FileSystem.writeAsStringAsync(dest, base64, {
+      await FileSystem.writeAsStringAsync(fileUri, base64, {
         encoding: FileSystem.EncodingType.Base64
       });
       
-      await Sharing.shareAsync(dest, { dialogTitle: "Preview Report PDF" });
-    } catch (e: any) {
-      console.error("Preview error:", e);
-      Alert.alert("Preview failed", e?.message || "Could not preview PDF");
-    }
-  }
-
-  async function handleDownloadPDF(report: ReportCard) {
-    try {
-      const dest = FileSystem.documentDirectory + `Business-Report-${report.period}.pdf`;
-      
-      if (report.fileUrl) {
-        // Download from URL
-        const downloadResult = await FileSystem.downloadAsync(report.fileUrl, dest);
-        await Sharing.shareAsync(downloadResult.uri, { dialogTitle: "Share Report PDF" });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, { dialogTitle: "Share report PDF" });
       } else {
-        // Get PDF bytes from API
-        const pdfBytes = await previewReport({ reportId: report.id });
-        const base64 = btoa(String.fromCharCode(...new Uint8Array(pdfBytes)));
-        await FileSystem.writeAsStringAsync(dest, base64, {
-          encoding: FileSystem.EncodingType.Base64
-        });
-        await Sharing.shareAsync(dest, { dialogTitle: "Share Report PDF" });
+        Alert.alert("Success", `Saved to ${fileUri}`);
       }
     } catch (e: any) {
       console.error("Download error:", e);
       Alert.alert("Download failed", e?.message || "Could not download PDF");
+    } finally {
+      setLoading(false);
     }
-  }
+  }, []);
 
-  async function handleDownloadCSV(report: ReportCard) {
+  const handleDownloadEmpty = useCallback(async () => {
     try {
+      setLoading(true);
+      const bytes = await downloadEmptyReport();
+      const fileUri = FileSystem.documentDirectory + `slotly-report-empty.pdf`;
+      
+      // Convert ArrayBuffer to base64 string
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(bytes)));
+      await FileSystem.writeAsStringAsync(fileUri, base64, {
+        encoding: FileSystem.EncodingType.Base64
+      });
+      
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, { dialogTitle: "Share report PDF" });
+      } else {
+        Alert.alert("Success", `Saved to ${fileUri}`);
+      }
+    } catch (e: any) {
+      console.error("Empty download error:", e);
+      Alert.alert("Download failed", e?.message || "Could not download empty report");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const handleDownloadCSV = useCallback(async (report: ReportCard) => {
+    try {
+      setLoading(true);
       const range = periodToRange(report.period);
-      if (!range) return Alert.alert("Invalid period");
+      if (!range) {
+        Alert.alert("Error", "Invalid period");
+        return;
+      }
       
       const csv = await getAnalyticsCsv({
         view: "daily",
@@ -190,12 +231,23 @@ export default function ReportsScreen() {
       await FileSystem.writeAsStringAsync(dest, csv, { 
         encoding: FileSystem.EncodingType.UTF8 
       });
-      await Sharing.shareAsync(dest, { dialogTitle: "Share CSV" });
+      
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(dest, { dialogTitle: "Share CSV" });
+      } else {
+        Alert.alert("Success", `Saved to ${dest}`);
+      }
     } catch (e: any) {
       console.error("CSV export error:", e);
       Alert.alert("Export failed", e?.message || "Could not export CSV");
+    } finally {
+      setLoading(false);
     }
-  }
+  }, []);
+
+  const handleUpgrade = useCallback(() => {
+    router.push("/business/dashboard/billing");
+  }, [router]);
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString("en-US", {
@@ -205,7 +257,7 @@ export default function ReportsScreen() {
     });
   };
 
-  if (!features.reports) {
+  if (!canAccessReports) {
     return (
       <VerificationGate>
         <View style={styles.container}>
@@ -222,21 +274,12 @@ export default function ReportsScreen() {
           <View style={styles.lockedContainer}>
             <LockedFeature
               title="Business Reports"
-              description="Detailed business reports are available on Pro and above"
-              onPressUpgrade={() => router.push("/business/dashboard/billing")}
+              description="Reports are available on Pro (Level 3) and above."
+              onPressUpgrade={handleUpgrade}
             />
           </View>
         </View>
       </VerificationGate>
-    );
-  }
-
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-        <Text style={styles.loadingText}>Loading reports…</Text>
-      </View>
     );
   }
 
@@ -253,93 +296,119 @@ export default function ReportsScreen() {
           <Text style={styles.title}>Business Reports</Text>
         </View>
 
-        <Section title="Available Reports">
-          <View style={styles.reportsContainer}>
-            {reports.length === 0 ? (
-              <Surface style={styles.emptyState} elevation={1}>
-                <Text style={styles.emptyText}>No reports available</Text>
-                <Text style={styles.emptySubtext}>
-                  Generate your first business report to get started
-                </Text>
-              </Surface>
-            ) : (
-              reports.map((r) => (
-                <Surface key={r.id} style={styles.reportCard} elevation={2}>
-                  <View style={styles.reportHeader}>
-                    <View style={styles.reportInfo}>
-                      <Text style={styles.reportTitle}>
-                        {periodToRange(r.period)?.text ?? r.period} Business Report
-                      </Text>
-                      <Text style={styles.reportDate}>
-                        Generated: {formatDate(r.createdAt)}
-                      </Text>
-                    </View>
-                    <View style={styles.reportIcon}>
-                      <Text style={styles.reportEmoji}>📊</Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.kpisGrid}>
-                    <View style={styles.kpiItem}>
-                      <Text style={styles.kpiValue}>
-                        {r.kpis?.totalBookings ?? "—"}
-                      </Text>
-                      <Text style={styles.kpiLabel}>Total Bookings</Text>
-                    </View>
-                    <View style={styles.kpiItem}>
-                      <Text style={styles.kpiValue}>
-                        {r.kpis?.totalRevenue ?? "—"}
-                      </Text>
-                      <Text style={styles.kpiLabel}>Revenue</Text>
-                    </View>
-                    <View style={styles.kpiItem}>
-                      <Text style={styles.kpiValue}>
-                        {r.kpis?.uniqueClients ?? "—"}
-                      </Text>
-                      <Text style={styles.kpiLabel}>Unique Clients</Text>
-                    </View>
-                    <View style={styles.kpiItem}>
-                      <Text style={styles.kpiValue}>
-                        {r.kpis?.showRate ?? "—"}
-                      </Text>
-                      <Text style={styles.kpiLabel}>Show Rate</Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.reportActions}>
-                    <Button
-                      mode="outlined"
-                      icon="eye"
-                      compact
-                      style={styles.actionButton}
-                      onPress={() => handlePreviewPDF(r)}
-                    >
-                      Preview
-                    </Button>
-                    <Button
-                      mode="contained"
-                      icon="download"
-                      compact
-                      style={styles.actionButton}
-                      onPress={() => handleDownloadPDF(r)}
-                    >
-                      Download PDF
-                    </Button>
-                    <Button
-                      mode="text"
-                      icon="file-delimited"
-                      compact
-                      style={styles.actionButton}
-                      onPress={() => handleDownloadCSV(r)}
-                    >
-                      CSV
-                    </Button>
-                  </View>
-                </Surface>
-              ))
-            )}
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+            <Text style={styles.loadingText}>Working…</Text>
           </View>
-        </Section>
+        ) : error && !lockedMsg ? (
+          <View style={styles.errorContainer}>
+            <Text style={[styles.errorText, { color: theme.colors.error }]}>{error}</Text>
+            <Button onPress={loadReports} style={styles.retryButton}>
+              Retry
+            </Button>
+          </View>
+        ) : (
+          <>
+            {lockedMsg && (
+              <View style={styles.bannerContainer}>
+                <Banner visible icon="lock" style={styles.banner}>
+                  {lockedMsg}{" "}
+                  <Text 
+                    onPress={handleUpgrade} 
+                    style={{ color: theme.colors.primary }}
+                  >
+                    Upgrade
+                  </Text>
+                </Banner>
+              </View>
+            )}
+
+            <Section title="Available Reports">
+              <View style={styles.reportsContainer}>
+                {reports.length === 0 ? (
+                  <Surface style={styles.emptyState} elevation={1}>
+                    <Text style={styles.emptyText}>No reports yet for your selected period.</Text>
+                    <Button 
+                      mode="contained" 
+                      onPress={handleDownloadEmpty} 
+                      style={styles.emptyButton} 
+                      icon="download"
+                    >
+                      Download Empty Report
+                    </Button>
+                  </Surface>
+                ) : (
+                  reports.map((r) => (
+                    <Surface key={r.id} style={styles.reportCard} elevation={2}>
+                      <View style={styles.reportHeader}>
+                        <View style={styles.reportInfo}>
+                          <Text style={styles.reportTitle}>
+                            {periodToRange(r.period)?.text ?? r.period} Business Report
+                          </Text>
+                          <Text style={styles.reportDate}>
+                            Generated: {formatDate(r.createdAt)}
+                          </Text>
+                        </View>
+                        <View style={styles.reportIcon}>
+                          <Text style={styles.reportEmoji}>📊</Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.kpisGrid}>
+                        <View style={styles.kpiItem}>
+                          <Text style={styles.kpiValue}>
+                            {r.kpis?.totalBookings ?? "—"}
+                          </Text>
+                          <Text style={styles.kpiLabel}>Total Bookings</Text>
+                        </View>
+                        <View style={styles.kpiItem}>
+                          <Text style={styles.kpiValue}>
+                            {r.kpis?.totalRevenue ?? "—"}
+                          </Text>
+                          <Text style={styles.kpiLabel}>Revenue</Text>
+                        </View>
+                        <View style={styles.kpiItem}>
+                          <Text style={styles.kpiValue}>
+                            {r.kpis?.uniqueClients ?? "—"}
+                          </Text>
+                          <Text style={styles.kpiLabel}>Unique Clients</Text>
+                        </View>
+                        <View style={styles.kpiItem}>
+                          <Text style={styles.kpiValue}>
+                            {r.kpis?.showRate ?? "—"}
+                          </Text>
+                          <Text style={styles.kpiLabel}>Show Rate</Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.reportActions}>
+                        <Button
+                          mode="outlined"
+                          icon="download"
+                          compact
+                          style={styles.actionButton}
+                          onPress={() => handleDownload(r)}
+                        >
+                          Download
+                        </Button>
+                        <Button
+                          mode="text"
+                          icon="file-delimited"
+                          compact
+                          style={styles.actionButton}
+                          onPress={() => handleDownloadCSV(r)}
+                        >
+                          CSV
+                        </Button>
+                      </View>
+                    </Surface>
+                  ))
+                )}
+              </View>
+            </Section>
+          </>
+        )}
 
         <View style={styles.bottomSpacing} />
       </ScrollView>
@@ -353,15 +422,26 @@ const styles = StyleSheet.create({
     backgroundColor: "#F8FAFC",
   },
   loadingContainer: {
-    flex: 1,
-    backgroundColor: "#F8FAFC",
-    justifyContent: "center",
     alignItems: "center",
+    paddingVertical: 60,
   },
   loadingText: {
     marginTop: 16,
     fontSize: 16,
     color: "#6B7280",
+  },
+  errorContainer: {
+    alignItems: "center",
+    paddingVertical: 40,
+    paddingHorizontal: 16,
+  },
+  errorText: {
+    fontSize: 16,
+    textAlign: "center",
+    marginBottom: 16,
+  },
+  retryButton: {
+    marginTop: 12,
   },
   header: {
     flexDirection: "row",
@@ -380,12 +460,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 40,
   },
-  actionContainer: {
+  bannerContainer: {
     paddingHorizontal: 16,
-    marginBottom: 20,
+    marginBottom: 16,
   },
-  generateButton: {
-    borderRadius: 25,
+  banner: {
+    marginBottom: 12,
   },
   reportsContainer: {
     paddingHorizontal: 16,
@@ -394,19 +474,17 @@ const styles = StyleSheet.create({
   emptyState: {
     backgroundColor: "#FFFFFF",
     borderRadius: 12,
-    padding: 40,
+    padding: 24,
     alignItems: "center",
   },
   emptyText: {
     fontSize: 16,
-    fontWeight: "600",
     color: "#6B7280",
-    marginBottom: 4,
-  },
-  emptySubtext: {
-    fontSize: 14,
-    color: "#9CA3AF",
     textAlign: "center",
+    marginBottom: 16,
+  },
+  emptyButton: {
+    marginTop: 12,
   },
   reportCard: {
     backgroundColor: "#FFFFFF",
@@ -428,11 +506,6 @@ const styles = StyleSheet.create({
     color: "#1F2937",
     marginBottom: 4,
   },
-  reportPeriod: {
-    fontSize: 14,
-    color: "#6B7280",
-    marginBottom: 2,
-  },
   reportDate: {
     fontSize: 12,
     color: "#9CA3AF",
@@ -442,15 +515,6 @@ const styles = StyleSheet.create({
   },
   reportEmoji: {
     fontSize: 32,
-  },
-  reportKpis: {
-    marginBottom: 20,
-  },
-  kpisTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#374151",
-    marginBottom: 12,
   },
   kpisGrid: {
     flexDirection: "row",

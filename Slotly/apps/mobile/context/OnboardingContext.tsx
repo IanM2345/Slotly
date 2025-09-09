@@ -172,12 +172,14 @@ const OnboardingContext = createContext<Ctx | undefined>(undefined);
 // Helpers
 // ----------------------------
 
-function normalizePlan(input?: string) {
-  const s = String(input || "LEVEL_1").toUpperCase().replace(/\s+/g, "");
-  if (s === "LEVEL1") return "LEVEL_1";
-  if (s === "LEVEL2") return "LEVEL_2";
-  if (s === "LEVEL3") return "LEVEL_3";
-  return s;
+function normalizePlan(input?: string | number) {
+  const s = String(input ?? "LEVEL_1").toUpperCase().replace(/[\s-]+/g, "");
+  // Accept: "LEVEL1", "LEVEL_1", "level1", "1"
+  const m =
+    /^LEVEL_?([1-6])$/.exec(s) ||
+    /^([1-6])$/.exec(s);
+  if (m) return `LEVEL_${m[1]}`;
+  return s; // if already a correct enum like "LEVEL_4"
 }
 
 export function OnboardingProvider({ children }: { children: ReactNode }) {
@@ -511,7 +513,13 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
           kycSections: data.kycSections,
         });
 
-        // 1) Create Business
+        // 1) Create Business (include chosen plan)
+        const chosenPlan = normalizePlan(
+          data.billing?.planTier ||
+          data.selectedPlan?.tier ||
+          (data.tier ? `LEVEL_${data.tier}` : "LEVEL_1")
+        );
+
         const bizRes = (await createBusiness(
           {
             name: data.businessName,
@@ -520,6 +528,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
             latitude: lat,
             longitude: lng,
             type: data.businessVerificationType || "INFORMAL",
+            plan: chosenPlan, // <— NEW
             payoutType: data.payoutType ?? null,
             mpesaPhoneNumber: data.mpesaPhoneNumber ?? null,
             tillNumber: data.tillNumber ?? null,

@@ -23,6 +23,8 @@ import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import api from "../../../lib/api/client";
 import { attachPayoutMethod, prewarmPaymentsAttach } from "../../../lib/api/modules/payment";
+import { useSession } from "../../../context/SessionContext";
+import { getAuthStatus, meHeartbeat, clearSession } from "../../../lib/api/modules/auth";
 import { useOnboarding } from "../../../context/OnboardingContext";
 
 type PayoutType = "MPESA_PHONE" | "MPESA_TILL" | "MPESA_PAYBILL" | "BANK";
@@ -44,7 +46,8 @@ export default function PaymentSetup() {
   const router = useRouter();
   const theme = useTheme();
   const { width } = useWindowDimensions();
-  const { data, setData, updateKycSection } = useOnboarding();
+  const { data, setData, updateKycSection, firstRequiredStep, goNext } = useOnboarding();
+  const { ready } = useSession();
 
   const [payoutType, setPayoutType] = useState<PayoutType>(
     (data.payoutType as PayoutType) || "MPESA_PHONE"
@@ -61,11 +64,56 @@ export default function PaymentSetup() {
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [guardChecking, setGuardChecking] = useState(true);
+  const [guardError, setGuardError] = useState<string | null>(null);
 
   // Pre-warm the API route to avoid first-compile timeout
   useEffect(() => {
-    prewarmPaymentsAttach();
-  }, []);
+    if (!ready) return;
+    prewarmPaymentsAttach().catch(() => {});
+  }, [ready]);
+
+  // Entry guard: session must be valid, and previous steps must be satisfied
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        setGuardChecking(true);
+        setGuardError(null);
+        if (!ready) return; // wait for session hydration
+
+        // 1) Session has tokens and hasn't expired (weekly window)
+        const status = await getAuthStatus();
+        if (!status.isAuthenticated) {
+          if (mounted) setGuardError("You're not signed in or your session expired.");
+          return;
+        }
+
+        // 2) Heartbeat returns a user object (reads the same token store)
+         const { user } = await meHeartbeat();
+        if (!(user?.id || user?.userId || user?._id)) throw new Error("Not authenticated");
+
+    
+
+        // 3) Don't allow direct entry if earlier steps aren't complete
+        const expected = "/business/onboarding/payment-setup";
+        const mustGo = firstRequiredStep();
+        if (mustGo !== expected) {
+          router.replace(mustGo);
+          return;
+        }
+        if (!data.selectedPlan) {
+          router.replace("/business/onboarding/plan");
+          return;
+        }
+      } catch {
+        if (mounted) setGuardError("You're not signed in or your session expired.");
+      } finally {
+        if (mounted) setGuardChecking(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [ready, data.selectedPlan]);
 
   // --- Layout: responsive grid (no vertical text collapse) ---
   const pagePad = 20;
@@ -114,7 +162,7 @@ export default function PaymentSetup() {
 
   // --- Actions ---
   const handleContinue = async () => {
-    if (!isValid) {
+    if (!isValid || guardChecking || guardError) {
       setErr("Please fill the required fields for your chosen payout method.");
       return;
     }
@@ -122,6 +170,10 @@ export default function PaymentSetup() {
     setLoading(true);
 
     try {
+      // Re-check auth just before hitting payments
+      const { user } = await meHeartbeat();
+      if (!(user?.id || user?.userId || user?._id)) throw new Error("Not authenticated");
+
       // 1) persist local fields
       setData({
         payoutType,
@@ -153,8 +205,16 @@ export default function PaymentSetup() {
       });
 
       updateKycSection("payment", true);
+      // Proceed to review (or use goNext if you prefer centralized routing)
       router.push("/business/onboarding/review");
     } catch (e: any) {
+      const status = Number(e?.status || e?.response?.status || 0);
+      if (status === 401) {
+        setErr("Your session has expired. Please sign in to continue.");
+        await clearSession();
+        router.replace("/auth/login?next=/business/onboarding/payment-setup");
+        return;
+      }
       setErr(e?.message || "Network error. Check your connection and try again.");
       if (__DEV__) {
         console.log("attachPayoutMethod error:", e);
@@ -233,6 +293,12 @@ export default function PaymentSetup() {
           </View>
 
           <Surface style={[styles.card, { backgroundColor: theme.colors.surface }]} elevation={1}>
+            {guardChecking ? (
+              <Text style={{ marginBottom: 8 }}>Checking your session…</Text>
+            ) : guardError ? (
+              <Text style={{ marginBottom: 8, color: theme.colors.error }}>{guardError}</Text>
+            ) : null}
+            
             <Text variant="titleLarge" style={{ fontWeight: "700", color: theme.colors.primary, marginBottom: 8 }}>
               Choose payout method
             </Text>
@@ -345,7 +411,7 @@ export default function PaymentSetup() {
               mode="contained"
               onPress={handleContinue}
               loading={loading}
-              disabled={loading || !isValid}
+              disabled={loading || !isValid || guardChecking || !!guardError}
               style={[styles.continueButton, { backgroundColor: theme.colors.primary }]}
               contentStyle={styles.buttonContent}
               labelStyle={[styles.buttonLabel, { color: theme.colors.onPrimary }]}

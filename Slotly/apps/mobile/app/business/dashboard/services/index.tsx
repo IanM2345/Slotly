@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { View, ScrollView, StyleSheet, Alert } from "react-native";
 import {
   Text,
@@ -17,9 +17,11 @@ import {
   Divider,
 } from "react-native-paper";
 import { useRouter } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import { VerificationGate } from "../../../../components/VerificationGate";
 import { Section } from "../../../../components/Section";
 import { FilterChipsRow } from "../../../../components/FilterChipsRow";
+import { useSession } from "../../../../context/SessionContext";
 import * as Sentry from "sentry-expo";
 
 // API (new module)
@@ -43,6 +45,7 @@ type ServiceRow = {
   duration: number;           // minutes (backend)
   category: Category;
   available: boolean;
+  businessId?: string;        // for client-side filtering
   staff?: StaffLite[];        // included by GET
   description?: string | null;
 };
@@ -52,6 +55,7 @@ type BundleRow = {
   name: string;
   price: number;
   duration: number;
+  businessId?: string;        // for client-side filtering
   services: { service: { id: string; name: string } }[]; // backend include
   description?: string | null;
 };
@@ -59,6 +63,8 @@ type BundleRow = {
 export default function ServicesIndexScreen() {
   const router = useRouter();
   const theme = useTheme();
+  const { user } = useSession();
+  const myBusinessId = user?.business?.id;
 
   const [loading, setLoading] = useState(true);
   const [services, setServices] = useState<ServiceRow[]>([]);
@@ -81,10 +87,6 @@ export default function ServicesIndexScreen() {
   // manage staff dialog
   const [manageSelected, setManageSelected] = useState<string[]>([]);
 
-  useEffect(() => {
-    loadData();
-  }, [selectedCategory]);
-
   async function loadData() {
     setLoading(true);
     try {
@@ -99,8 +101,14 @@ export default function ServicesIndexScreen() {
         listBundles(),
       ]);
 
-      setServices(svcRes.status === "fulfilled" && Array.isArray(svcRes.value) ? svcRes.value : []);
-      setBundles(bunRes.status === "fulfilled" && Array.isArray(bunRes.value) ? bunRes.value : []);
+      // Get data from results
+      const svc = (svcRes.status === "fulfilled" && Array.isArray(svcRes.value)) ? svcRes.value : [];
+      const bun = (bunRes.status === "fulfilled" && Array.isArray(bunRes.value)) ? bunRes.value : [];
+      
+      // Extra client-side guard by business id
+      setServices(myBusinessId ? svc.filter(s => s.businessId === myBusinessId) : svc);
+      setBundles(myBusinessId ? bun.filter(b => b.businessId === myBusinessId) : bun);
+      
     } catch (err: any) {
       // Should rarely hit due to allSettled, but keep resilient
       setServices([]); setBundles([]);
@@ -111,14 +119,16 @@ export default function ServicesIndexScreen() {
     }
   }
 
-  // categories
-  const categoryOptions = [
-    { key: "All Services", label: "All Services" },
-    { key: "Hair", label: "Hair" },
-    { key: "Spa", label: "Spa" },
-    { key: "Nails", label: "Nails" },
-    { key: "Bundles", label: "Bundles" },
-  ];
+  useEffect(() => {
+    loadData();
+  }, [selectedCategory]);
+
+  // ✅ NEW: Refresh when screen comes into focus (after creating bundles)
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [selectedCategory])
+  );
 
   const filteredServices =
     selectedCategory[0] === "Bundles"
@@ -134,7 +144,7 @@ export default function ServicesIndexScreen() {
     try {
       setCreateOpen(true);
       // load approved staff list for selection
-      const staffResp = await listStaff();
+      const staffResp = await listStaff(myBusinessId);
       setAllStaff(staffResp?.approvedStaff || []);
     } catch (e: any) {
       console.error(e);
@@ -181,7 +191,7 @@ export default function ServicesIndexScreen() {
   async function openManage(svc: ServiceRow) {
     try {
       setManageOpen(svc);
-      const staffResp = await listStaff();
+      const staffResp = await listStaff(myBusinessId);
       setAllStaff(staffResp?.approvedStaff || []);
       setManageSelected((svc.staff || []).map((s) => s.id));
     } catch (e: any) {
@@ -662,4 +672,4 @@ const styles = StyleSheet.create({
   bottomSpacing: {
     height: 40,
   },
-})
+});

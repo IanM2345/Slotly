@@ -2,14 +2,13 @@ import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
-import { serviceLimitByPlan } from '@/shared/subscriptionPlanUtils';
+import { getPlanFeatures } from '@/shared/subscriptionPlanUtils';
 import { createNotification } from '@/shared/notifications/createNotification';
 
 const prisma = new PrismaClient();
 
 async function getBusinessFromRequest(request) {
   try {
-    // Use lowercase 'authorization' for consistency
     const authHeader = request.headers.get('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return { error: 'Unauthorized', status: 401 };
@@ -21,9 +20,9 @@ async function getBusinessFromRequest(request) {
       return { error: 'Unauthorized', status: 403 };
     }
 
-    const business = await prisma.business.findFirst({
-      where: { ownerId: decoded.userId },
-    });
+    // Normalize owner id just in case your token uses a different field
+    const ownerId = decoded?.userId ?? decoded?.id ?? decoded?.sub;
+    const business = await prisma.business.findFirst({ where: { ownerId } });
 
     if (!business) return { error: 'Business not found', status: 404 };
 
@@ -53,7 +52,9 @@ export async function POST(request) {
       plan: business.plan 
     });
 
-    const limit = serviceLimitByPlan[business.plan];
+    const features = getPlanFeatures(business.plan);
+    const limit = Number(features?.maxServices ?? 0);
+
     const currentCount = await prisma.service.count({
       where: { businessId: business.id },
     });
@@ -63,15 +64,17 @@ export async function POST(request) {
         userId: business.ownerId,
         type: 'SYSTEM',
         title: 'Service Limit Reached',
-        message: `Your plan allows a maximum of ${limit} services. Upgrade your subscription or purchase a Service Add-on to create more.`,
+        message: `Your plan (${business.plan}) allows a maximum of ${limit} services. Upgrade your subscription to create more.`,
       });
 
       Sentry.captureMessage(`Service limit reached for business ${business.id} (Plan: ${business.plan}, Limit: ${limit})`);
 
       return NextResponse.json(
         {
-          error: `Service limit reached (${limit}) for your current plan.`,
-          suggestion: 'Please upgrade your subscription or purchase an add-on to add more services.',
+          code: 'SERVICE_LIMIT_REACHED',
+          error: `Your plan (${business.plan}) allows up to ${limit} services.`,
+          limits: { plan: business.plan, limit, currentCount, remaining: Math.max(0, limit - currentCount) },
+          suggestion: 'Please upgrade your subscription to add more services.',
         },
         { status: 403 }
       );
@@ -80,8 +83,8 @@ export async function POST(request) {
     const newService = await prisma.service.create({
       data: {
         name,
-        price: parseInt(price),
-        duration: parseInt(duration),
+        price: parseInt(price, 10),
+        duration: parseInt(duration, 10),
         category,
         available,
         businessId: business.id,
@@ -116,8 +119,8 @@ export async function PUT(request) {
       where: { id },
       data: {
         name,
-        price: price ? parseInt(price) : undefined,
-        duration: duration ? parseInt(duration) : undefined,
+        price: price ? parseInt(price, 10) : undefined,
+        duration: duration ? parseInt(duration, 10) : undefined,
         category,
         available,
       },

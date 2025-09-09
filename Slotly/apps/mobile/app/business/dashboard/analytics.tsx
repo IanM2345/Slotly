@@ -38,7 +38,6 @@ import {
   VictoryTheme,
 } from "victory-native";
 
-
 // Types
 interface ServiceData {
   name: string
@@ -65,6 +64,26 @@ interface AnalyticsResponse {
     startDate: string
     endDate: string
     view: string
+  }
+  kpis?: {
+    bookings: number
+    revenue: number
+    cancellations: number
+    noShows: number
+    avgTicket: number
+  }
+  series?: {
+    byDay: Array<{
+      date: string
+      bookings: number
+      revenue: number
+    }>
+    byService: Array<{
+      serviceId: string | null
+      name: string
+      count: number
+      revenue: number
+    }>
   }
 }
 
@@ -97,8 +116,14 @@ interface GroupedBarData {
 const screenW = Dimensions.get("window").width
 const chartW = Math.min(screenW - 32, 720)
 
+type PeriodKey = "7d" | "30d" | "90d"
 type ViewKey = "DAILY" | "WEEKLY" | "MONTHLY"
-const viewToQuery = (v: ViewKey): string => v.toLowerCase()
+
+const periodToDays = (period: PeriodKey): number => ({
+  "7d": 7,
+  "30d": 30,
+  "90d": 90,
+}[period])
 
 // Utility functions
 const fmtDate = (d?: Date | null): string | undefined => {
@@ -130,21 +155,15 @@ export default function AnalyticsScreen() {
   const theme = useTheme()
   const { features } = useTier()
   const { isVerified } = useVerification()
-  const { token } = useSession() // token is attached by the shared API client; kept here if needed elsewhere
+  const { token } = useSession()
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const [selectedPeriod, setSelectedPeriod] = useState<ViewKey[]>(["MONTHLY"])
-  const [selectedMetrics, setSelectedMetrics] = useState<string[]>([
-    "revenue",
-    "bookings",
-    "clients",
-    "services",
-    "staffPerformance",
-    "noShows",
-  ])
-
+  // Using the new period-based API
+  const [selectedPeriod, setSelectedPeriod] = useState<PeriodKey>("30d")
+  const [customDateRange, setCustomDateRange] = useState(false)
+  
   const [startDate, setStartDate] = useState<Date | null>(null)
   const [endDate, setEndDate] = useState<Date | null>(null)
   const [showStartPicker, setShowStartPicker] = useState(false)
@@ -166,88 +185,80 @@ export default function AnalyticsScreen() {
     setLoading(true)
     setError(null)
     setLockedMsg(null)
+    
     try {
-      // Current backend (shared client attaches token). We'll support both response shapes.
-      const res = await getAnalytics({
-        view: viewToQuery(selectedPeriod[0]), // "daily" | "weekly" | "monthly"
-        ...(startDate ? { startDate: fmtDate(startDate) } : {}),
-        ...(endDate ? { endDate: fmtDate(endDate) } : {}),
-        metrics: "bookings,revenue,clients,services,staffPerformance,noShows",
-      })
+      let res: AnalyticsResponse
+      
+      if (customDateRange && startDate && endDate) {
+        // Use legacy API with date range
+        res = await getAnalytics({
+          view: "monthly", // fallback view
+          startDate: fmtDate(startDate),
+          endDate: fmtDate(endDate),
+          metrics: "bookings,revenue,clients,services,staffPerformance,noShows",
+        })
+      } else {
+        // Use new period-based API (preferred)
+        res = await getAnalytics(token, { 
+          period: selectedPeriod, 
+          tz: "Africa/Nairobi" 
+        })
+      }
 
-      // Normalize to screen shape
+      // The backend now returns both shapes - normalize for consistency
       let adapted: AnalyticsResponse
       if (res?.analytics) {
-        // New backend shape: { analytics, meta }
-        const a = res.analytics || {}
-        adapted = {
-          analytics: {
-            revenue: a.revenue ?? {},
-            bookings: a.bookings ?? {},
-            clients: Number.isFinite(a.clients) ? a.clients : 0,
-            popularServices: Array.isArray(a.popularServices)
-              ? a.popularServices.map((row: any) => ({
-                  name: row?.name ?? "—",
-                  count: Number.isFinite(+row?.count) ? +row.count : 0,
-                }))
-              : [],
-            staffPerformance: Array.isArray(a.staffPerformance) ? a.staffPerformance : [],
-            noShows: a.noShows ?? {},
-          },
-          meta: {
-            startDate: fmtDate(startDate) ?? "",
-            endDate: fmtDate(endDate) ?? "",
-            view: viewToQuery(selectedPeriod[0]),
-          },
-        }
-      } else {
-        // Earlier proposal: { kpis, series }
-        const k = res?.kpis ?? {}
-        const s = res?.series ?? {}
+        // Current response shape
+        adapted = res
+      } else if (res?.kpis) {
+        // Fallback - construct analytics from kpis/series
+        const series = res.series || { byDay: [], byService: [] }
         const revenue: Record<string, number> = {}
         const bookings: Record<string, number> = {}
-        const byDay = Array.isArray(s.byDay) ? s.byDay : []
-        for (const p of byDay) {
-          const d = String(p?.date ?? "")
-          if (!d) continue
-          revenue[d]  = Number.isFinite(+p?.revenue)  ? +p.revenue  : 0
-          bookings[d] = Number.isFinite(+p?.bookings) ? +p.bookings : 0
-        }
-        const byService = Array.isArray(s.byService) ? s.byService : []
-        const popularServices = byService.map((row: any) => ({
-          name: row?.name ?? "—",
-          count: Number.isFinite(+row?.count) ? +row.count : 0,
-        }))
+        
+        series.byDay.forEach((item) => {
+          if (item.date) {
+            revenue[item.date] = item.revenue || 0
+            bookings[item.date] = item.bookings || 0
+          }
+        })
+        
         adapted = {
           analytics: {
             revenue,
             bookings,
-            clients: Number.isFinite(k.clients) ? k.clients : 0,
-            popularServices,
+            clients: res.kpis.bookings || 0,
+            popularServices: series.byService.map((s) => ({
+              name: s.name,
+              count: s.count,
+            })),
             staffPerformance: [],
             noShows: {},
           },
           meta: {
-            startDate: fmtDate(startDate) ?? "",
-            endDate: fmtDate(endDate) ?? "",
-            view: viewToQuery(selectedPeriod[0]),
+            startDate: fmtDate(startDate) || "",
+            endDate: fmtDate(endDate) || "",
+            view: customDateRange ? "custom" : selectedPeriod,
           },
+          kpis: res.kpis,
+          series: res.series,
         }
+      } else {
+        throw new Error("Unexpected response format")
       }
 
       setData(adapted)
 
-      // Empty-state check based on normalized dicts
-      const hasRevenue = Object.values(adapted.analytics.revenue ?? {}).some((v) => Number(v) > 0)
-      const hasBookings = Object.values(adapted.analytics.bookings ?? {}).some((v) => Number(v) > 0)
+      // Empty-state check
+      const hasRevenue = Object.values(adapted.analytics.revenue || {}).some((v) => Number(v) > 0)
+      const hasBookings = Object.values(adapted.analytics.bookings || {}).some((v) => Number(v) > 0)
       setEmpty(!(hasRevenue || hasBookings))
+      
     } catch (e: unknown) {
-      // Axios/fetch error shapes
       const status = (e as any)?.response?.status ?? (e as any)?.status
       const msg = (e as any)?.response?.data?.error || (e as any)?.message
       console.error("Error loading analytics:", e)
 
-      // Treat 403/404 as soft empty (renderable) + optional banner
       if (status === 403 || status === 404) {
         setLockedMsg(
           status === 403
@@ -262,16 +273,16 @@ export default function AnalyticsScreen() {
         setError(fallback)
       }
 
-      // Render an empty dataset so UI can display empty charts
+      // Render empty dataset
       setData({
         analytics: { revenue: {}, bookings: {}, clients: 0, popularServices: [], staffPerformance: [], noShows: {} },
-        meta: { startDate: "", endDate: "", view: viewToQuery(selectedPeriod[0]) },
+        meta: { startDate: "", endDate: "", view: customDateRange ? "custom" : selectedPeriod },
       })
       setEmpty(true)
     } finally {
       setLoading(false)
     }
-  }, [selectedPeriod, selectedMetrics, startDate, endDate, token])
+  }, [selectedPeriod, customDateRange, startDate, endDate, token])
 
   useEffect(() => {
     if (features.analytics && isVerified) {
@@ -280,19 +291,10 @@ export default function AnalyticsScreen() {
   }, [features.analytics, isVerified, loadAnalytics])
 
   const periodOptions = [
-    { key: "DAILY", label: "Daily" },
-    { key: "WEEKLY", label: "Weekly" },
-    { key: "MONTHLY", label: "Monthly" },
+    { key: "7d", label: "Last 7 Days" },
+    { key: "30d", label: "Last 30 Days" },
+    { key: "90d", label: "Last 90 Days" },
   ] as const
-
-  const metricOptions = [
-    { key: "revenue", label: "Revenue" },
-    { key: "bookings", label: "Bookings" },
-    { key: "clients", label: "Clients" },
-    { key: "services", label: "Services" },
-    { key: "staffPerformance", label: "Staff Performance" },
-    { key: "noShows", label: "No-Shows" },
-  ]
 
   // Helper functions for data transformation
   const dictToSeries = useCallback((d?: Record<string, number>): ChartPoint[] => {
@@ -347,11 +349,14 @@ export default function AnalyticsScreen() {
     return labels.map((label, i) => ({ x: label, y: days[i] }))
   }, [])
 
-  // Derived data
+  // Derived data - prioritize KPIs from backend if available
   const kpis = useMemo((): KpiData[] => {
     const a = data?.analytics || {}
-    const totalRevenue = sumDict(a.revenue)
-    const totalBookings = sumDict(a.bookings)
+    const k = data?.kpis
+    
+    // Use backend KPIs if available, otherwise compute from analytics
+    const totalRevenue = k?.revenue ?? sumDict(a.revenue)
+    const totalBookings = k?.bookings ?? sumDict(a.bookings)
     const uniqueClients = isValidNumber(a.clients) ? a.clients : 0
     
     const topService = Array.isArray(a.popularServices) && a.popularServices.length > 0 
@@ -366,21 +371,21 @@ export default function AnalyticsScreen() {
           currency: "USD", 
           maximumFractionDigits: 0 
         }).format(totalRevenue / 100),
-        caption: selectedPeriod[0],
+        caption: customDateRange ? "Custom Range" : `Last ${periodToDays(selectedPeriod)} days`,
         icon: "cash-multiple",
         color: "#1559C1",
       },
       {
         label: "Bookings",
         value: String(totalBookings),
-        caption: selectedPeriod[0],
+        caption: customDateRange ? "Custom Range" : `Last ${periodToDays(selectedPeriod)} days`,
         icon: "calendar-check",
         color: "#0E7490",
       },
       {
         label: "Clients",
         value: String(uniqueClients),
-        caption: selectedPeriod[0],
+        caption: customDateRange ? "Custom Range" : `Last ${periodToDays(selectedPeriod)} days`,
         icon: "account-group",
         color: "#A16207",
       },
@@ -392,7 +397,7 @@ export default function AnalyticsScreen() {
         color: "#7C3AED",
       },
     ]
-  }, [data, selectedPeriod, sumDict])
+  }, [data, selectedPeriod, customDateRange, sumDict])
 
   const groupBars = useMemo((): GroupedBarData => {
     const a = data?.analytics
@@ -446,18 +451,21 @@ export default function AnalyticsScreen() {
         throw new Error('File system not available')
       }
       
-      const params = {
-        view: viewToQuery(selectedPeriod[0]),
-        metrics: selectedMetrics.join(","),
-        startDate: fmtDate(startDate),
-        endDate: fmtDate(endDate),
+      const params: any = {}
+      
+      if (customDateRange && startDate && endDate) {
+        params.view = "monthly"
+        params.startDate = fmtDate(startDate)
+        params.endDate = fmtDate(endDate)
+      } else {
+        params.period = selectedPeriod
+        params.tz = "Africa/Nairobi"
       }
       
       const csv = await getAnalyticsCsv(params)
       const stamp = new Date().toISOString().replace(/[:.]/g, "-")
-      const startKey = fmtDate(startDate) || "start"
-      const endKey = fmtDate(endDate) || "end"
-      const filename = `analytics_${params.view}_${startKey}_${endKey}_${stamp}.csv`
+      const periodKey = customDateRange ? `${fmtDate(startDate)}_${fmtDate(endDate)}` : selectedPeriod
+      const filename = `analytics_${periodKey}_${stamp}.csv`
       const fileUri = FileSystem.documentDirectory + filename
 
       await FileSystem.writeAsStringAsync(fileUri, csv, {
@@ -476,7 +484,7 @@ export default function AnalyticsScreen() {
     } finally {
       setLoading(false)
     }
-  }, [selectedPeriod, selectedMetrics, startDate, endDate])
+  }, [selectedPeriod, customDateRange, startDate, endDate])
 
   const handleGenerateReport = useCallback(() => {
     router.push("/business/dashboard/reports")
@@ -485,12 +493,14 @@ export default function AnalyticsScreen() {
   const handleDateRangeClear = useCallback(() => {
     setStartDate(null)
     setEndDate(null)
+    setCustomDateRange(false)
   }, [])
 
   const handleStartDateChange = useCallback((event: any, selectedDate?: Date) => {
     setShowStartPicker(false)
     if (selectedDate) {
       setStartDate(selectedDate)
+      setCustomDateRange(true)
     }
   }, [])
 
@@ -498,6 +508,7 @@ export default function AnalyticsScreen() {
     setShowEndPicker(false)
     if (selectedDate) {
       setEndDate(selectedDate)
+      setCustomDateRange(true)
     }
   }, [])
 
@@ -583,12 +594,15 @@ export default function AnalyticsScreen() {
                 <Text style={styles.filterLabel}>Time Period</Text>
                 <FilterChipsRow
                   options={periodOptions as unknown as { key: string; label: string }[]}
-                  selectedKeys={selectedPeriod as unknown as string[]}
-                  onSelectionChange={(v) => setSelectedPeriod(v as ViewKey[])}
+                  selectedKeys={[selectedPeriod] as unknown as string[]}
+                  onSelectionChange={(v) => {
+                    setSelectedPeriod(v[0] as PeriodKey)
+                    setCustomDateRange(false)
+                  }}
                   multiSelect={false}
                 />
 
-                <Text style={styles.filterLabel}>Date Range (optional)</Text>
+                <Text style={styles.filterLabel}>Custom Date Range (optional)</Text>
                 <View style={{ gap: 8 }}>
                   <TextInput
                     mode="outlined"
@@ -633,14 +647,6 @@ export default function AnalyticsScreen() {
                     onChange={handleEndDateChange}
                   />
                 )}
-
-                <Text style={styles.filterLabel}>Metrics</Text>
-                <FilterChipsRow
-                  options={metricOptions}
-                  selectedKeys={selectedMetrics}
-                  onSelectionChange={setSelectedMetrics}
-                  multiSelect
-                />
 
                 <Button 
                   mode="contained" 

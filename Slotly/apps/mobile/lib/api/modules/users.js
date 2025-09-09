@@ -14,27 +14,27 @@ function authHeaders(token) {
 /* ========================= USERS (admin-ish) ========================= */
 /** GET /api/users — list users */
 export async function getUsers(config) {
-  const { data } = await api.get("api/users", config);
+  const { data } = await api.get("/api/users", config);
   return data;
 }
 
 /** POST /api/users — create user */
 export async function createUser(payload, config) {
-  const { data } = await api.post("api/users", payload, config);
+  const { data } = await api.post("/api/users", payload, config);
   return data;
 }
 
 /** PUT /api/users/:id — update by id */
 export async function updateUser(id, payload, config) {
   if (!id) throw new Error("updateUser requires a user id");
-  const { data } = await api.put(`api/users/${id}`, payload, config);
+  const { data } = await api.put(`/api/users/${id}`, payload, config);
   return data;
 }
 
 /** DELETE /api/users/:id — delete by id */
 export async function deleteUser(id, config) {
   if (!id) throw new Error("deleteUser requires a user id");
-  const { data } = await api.delete(`api/users/${id}`, config);
+  const { data } = await api.delete(`/api/users/${id}`, config);
   return data;
 }
 
@@ -80,13 +80,13 @@ export async function uploadToCloudinary({ fileUri, uploadPreset, cloudName }) {
 /* ============================ ADDRESS =============================== */
 /** GET /api/users/address — returns user address or {} if none */
 export async function getMyAddress(token) {
-  const { data } = await api.get("/users/address", withAuth({}, token));
+  const { data } = await api.get("/api/users/address", withAuth({}, token));
   return data; // {} if none
 }
 
 /** PUT /api/users/address — upsert user address */
 export async function updateMyAddress(payload, token) {
-  const { data } = await api.put("/users/address", payload, withAuth({}, token));
+  const { data } = await api.put("/api/users/address", payload, withAuth({}, token));
   return data; // saved address
 }
 
@@ -94,7 +94,7 @@ export async function updateMyAddress(payload, token) {
 /** GET /api/users/notifications?page&limit */
 export async function getNotifications({ page = 1, limit = 10 } = {}, token) {
   const { data } = await api.get(
-    `api/users/notifications?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}`,
+    `/api/users/notifications?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}`,
     withAuth({}, token)
   );
   return data; // { page, limit, total, notifications } (uses decoded.userId)
@@ -103,7 +103,7 @@ export async function getNotifications({ page = 1, limit = 10 } = {}, token) {
 /** PATCH /api/users/notifications — { notificationIds: string[], read: boolean } */
 export async function markNotifications({ notificationIds, read }, token) {
   const { data } = await api.patch(
-    "api/users/notifications",
+    "/api/users/notifications",
     { notificationIds, read },
     withAuth({}, token)
   );
@@ -114,7 +114,7 @@ export async function markNotifications({ notificationIds, read }, token) {
 export async function deleteNotification(notificationId, token) {
   if (!notificationId) throw new Error("deleteNotification requires a notification id");
   const { data } = await api.delete(
-    `api/users/notifications?id=${encodeURIComponent(notificationId)}`,
+    `/api/users/notifications?id=${encodeURIComponent(notificationId)}`,
     withAuth({}, token)
   );
   return data; // { message: 'Notification dismissed' }
@@ -123,35 +123,35 @@ export async function deleteNotification(notificationId, token) {
 /* ============================ BOOKINGS ============================== */
 /** GET /api/users/bookings — returns { upcomingBookings, pastBookings } */
 export async function listBookings(token) {
-  const { data } = await api.get("api/users/bookings", withAuth({}, token));
+  const { data } = await api.get("/api/users/bookings", withAuth({}, token));
   return data; // includes service, business, payment, reminder in each item
 }
 
 /** POST /api/users/bookings — create booking (supports couponCode) */
 export async function createBooking(payload, token) {
   // payload must include: serviceId, businessId, startTime, endTime; optional: status, couponCode
-  const { data } = await api.post("api/users/bookings", payload, withAuth({}, token));
+  const { data } = await api.post("/api/users/bookings", payload, withAuth({}, token));
   return data; // returns booking (includes service, business, payment, reminder, coupon)
 }
 
 /** POST /api/users/bookings/:id/cancel — may trigger late fee, sets status CANCELLED */
 export async function cancelBooking(id, payload = {}, token) {
   if (!id) throw new Error("cancelBooking requires a booking id");
-  const { data } = await api.post(`api/users/bookings/${id}/cancel`, payload, withAuth({}, token));
+  const { data } = await api.post(`/api/users/bookings/${id}/cancel`, payload, withAuth({}, token));
   return data; // { message, updatedBooking } (auth requires role CUSTOMER)
 }
 
 /** PATCH /api/users/bookings/:id/reschedule — body: { newStartTime, newEndtime } */
 export async function rescheduleBooking(id, payload, token) {
   if (!id) throw new Error("rescheduleBooking requires a booking id");
-  const { data } = await api.patch(`api/users/bookings/${id}/reschedule`, payload, withAuth({}, token));
+  const { data } = await api.patch(`/api/users/bookings/${id}/reschedule`, payload, withAuth({}, token));
   return data; // returns { message, updatedBooking } (blocks inside cancellation deadline)
 }
 
 /* ============================ COUPONS =============================== */
 /** GET /api/users/coupon — returns { available, used, expired } */
 export async function getCoupons(token) {
-  const { data } = await api.get("api/users/coupon", withAuth({}, token));
+  const { data } = await api.get("/api/users/coupon", withAuth({}, token));
   return data; // may also issue milestone reward coupon + notifications when threshold met
 }
 
@@ -159,14 +159,14 @@ export async function getCoupons(token) {
 /** GET /api/users/favourites */
 export async function getFavourites(params = {}, token) {
   const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null)).toString();
-  const url = qs ? `api/users/favourites?${qs}` : "/users/favourites";
+  const url = qs ? `/api/users/favourites?${qs}` : "/api/users/favourites";
   const { data } = await api.get(url, withAuth({}, token));
   return data; // includes business + selected staff fields
 }
 
 /** POST /api/users/favourites — body: { businessId? , staffId? } (one required) */
 export async function addFavourite(payload, token) {
-  const { data } = await api.post("api/users/favourites", payload, withAuth({}, token));
+  const { data } = await api.post("/api/users/favourites", payload, withAuth({}, token));
   return data; // returns created favourite
 }
 
@@ -176,21 +176,21 @@ export async function removeFavourite({ businessId, staffId }, token) {
   const params = new URLSearchParams();
   if (businessId) params.set("businessId", businessId);
   if (staffId) params.set("staffId", staffId);
-  const { data } = await api.delete(`api/users/favourites?${params.toString()}`, withAuth({}, token));
+  const { data } = await api.delete(`/api/users/favourites?${params.toString()}`, withAuth({}, token));
   return data; // { message: 'Favourite deleted successfully' }
 }
 
 /* ============================ REFERRALS ============================= */
 /** GET /api/users/referrals — returns list w/ completedBookings & rewardIssued; may issue reward */
 export async function getReferrals(token) {
-  const { data } = await api.get("api/users/referrals", withAuth({}, token));
+  const { data } = await api.get("/api/users/referrals", withAuth({}, token));
   return data; // endpoint can auto-issue coupon + notifications if milestone hit
 }
 
 /* ============================= REVIEWS ============================== */
 /** GET /api/users/reviews — my reviews */
 export async function getMyReviews(token) {
-  const { data } = await api.get("api/users/reviews", withAuth({}, token));
+  const { data } = await api.get("/api/users/reviews", withAuth({}, token));
   return data; // includes business { id, name } and orders by createdAt desc
 }
 
@@ -221,14 +221,14 @@ export async function createOrUpdateReview({ businessId, bookingId, rating, comm
 /** DELETE /api/users/reviews?businessId=... */
 export async function deleteReview(businessId, token) {
   if (!businessId) throw new Error("deleteReview requires a businessId");
-  const { data } = await api.delete(`api/users/reviews?businessId=${encodeURIComponent(businessId)}`, withAuth({}, token));
+  const { data } = await api.delete(`/api/users/reviews?businessId=${encodeURIComponent(businessId)}`, withAuth({}, token));
   return data; // { message: 'Review deleted' }
 }
 
 /* ========================= PASSWORD CHANGE =========================== */
 export async function changePassword({ currentPassword, newPassword }, token) {
   const { data } = await api.post(
-    "api/users/change-password",
+    "/api/users/change-password",
     { currentPassword, newPassword },
     withAuth({}, token)
   );

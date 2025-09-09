@@ -7,11 +7,18 @@ import { staffLimitByPlan } from '@/shared/subscriptionPlanUtils';
 
 const prisma = new PrismaClient();
 
-async function getOwnerBusiness(userId) {
-  return prisma.business.findFirst({ where: { ownerId: userId } });
+async function getBusinessForOwner(ownerId, businessId) {
+  if (businessId) {
+    const b = await prisma.business.findUnique({ where: { id: businessId } });
+    if (!b) return { error: 'Business not found', status: 404 };
+    if (b.ownerId !== ownerId) return { error: 'Forbidden', status: 403 };
+    return { business: b };
+  }
+  const b = await prisma.business.findFirst({ where: { ownerId } });
+  if (!b) return { error: 'Business not found', status: 404 };
+  return { business: b };
 }
 
-// ✅ Direct add: set user role to STAFF, set name, and create/approve StaffEnrollment for this business
 export async function POST(request) {
   try {
     const authHeader = request.headers.get('authorization');
@@ -20,49 +27,85 @@ export async function POST(request) {
     }
     const token = authHeader.split(' ')[1];
     const { valid, decoded } = await verifyToken(token);
-    if (!valid || decoded.role !== 'BUSINESS_OWNER') {
+    const ownerId = decoded?.userId ?? decoded?.id ?? decoded?.sub;
+
+    if (!valid || decoded?.role !== 'BUSINESS_OWNER') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    const business = await getOwnerBusiness(decoded.userId);
-    if (!business) return NextResponse.json({ error: 'Business not found' }, { status: 404 });
-
     const body = await request.json().catch(() => ({}));
-    const { userId, firstName, lastName } = body || {};
+    const { userId, firstName, lastName, businessId, approveNow = false } = body || {};
+    const result = await getBusinessForOwner(ownerId, businessId);
+    if (!result.business) return NextResponse.json({ error: result.error }, { status: result.status });
+    const business = result.business;
+
     if (!userId) {
       return NextResponse.json({ error: 'userId is required' }, { status: 400 });
     }
-
-    // Validate MongoDB ObjectId format (24 hex characters)
     if (!/^[0-9a-fA-F]{24}$/.test(userId)) {
       return NextResponse.json({ error: 'Invalid userId format. Must be a valid MongoDB ObjectId' }, { status: 400 });
+    }
+
+    // --- Direct add path (approve immediately) enforces limits; plain enrollment does not ---
+    if (approveNow) {
+      const approvedCount = await prisma.staffEnrollment.count({
+        where: { businessId: business.id, status: 'APPROVED' },
+      });
+      const baseAllowed = staffLimitByPlan[business.plan] || 0;
+      const extraAddOn = await prisma.addOn.findFirst({
+        where: { businessId: business.id, type: 'EXTRA_STAFF', isActive: true },
+        select: { value: true },
+      });
+      const extra = Number(extraAddOn?.value ?? 0);
+      const totalAllowed = baseAllowed + extra;
+      const alreadyApproved = await prisma.staffEnrollment.findFirst({
+        where: { businessId: business.id, userId, status: 'APPROVED' },
+        select: { id: true },
+      });
+      if (!alreadyApproved && approvedCount >= totalAllowed) {
+        return NextResponse.json(
+          { error: `Your staff limit (${totalAllowed}) has been reached.`, suggestion: `Upgrade or purchase an Extra Staff add-on.` },
+          { status: 403 }
+        );
+      }
     }
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
 
-    // Do not override privileged roles
-    if (user.role === 'ADMIN' || user.role === 'BUSINESS_OWNER') {
+    // We only touch the role on direct-add
+    if (approveNow && (user.role === 'ADMIN' || user.role === 'BUSINESS_OWNER')) {
       return NextResponse.json({ error: 'Cannot change role for this account' }, { status: 400 });
     }
 
-    const fullName = `${firstName || ''} ${lastName || ''}`.trim() || user.name || null;
-
-    // 1) Promote to STAFF + set name (single "name" field in schema)
-    const updatedUser = await prisma.user.update({
+    let updatedUser = await prisma.user.findUnique({
       where: { id: userId },
-      data: { role: 'STAFF', ...(fullName ? { name: fullName } : {}) },
-      select: { id: true, name: true, email: true, role: true },
+      select: { id: true, name: true, email: true, role: true, phone: true, createdAt: true },
     });
+    const fullName = `${firstName || ''} ${lastName || ''}`.trim() || updatedUser?.name || null;
+    
+    if (approveNow) {
+      updatedUser = await prisma.user.update({
+        where: { id: userId },
+        data: { role: 'STAFF', ...(fullName ? { name: fullName } : {}) },
+        select: { id: true, name: true, email: true, role: true, phone: true, createdAt: true },
+      });
+    } else if (fullName && !updatedUser?.name) {
+      // Optional: if you want to set name on enrollment even if not approving:
+      updatedUser = await prisma.user.update({
+        where: { id: userId },
+        data: { name: fullName },
+        select: { id: true, name: true, email: true, role: true, phone: true, createdAt: true },
+      });
+    }
 
-    // 2) Ensure StaffEnrollment exists and is APPROVED for this business
+    // 2) Ensure StaffEnrollment exists (APPROVED if direct add, else PENDING)
     const existing = await prisma.staffEnrollment.findFirst({
       where: { userId, businessId: business.id },
       select: { id: true, status: true },
     });
 
     if (!existing) {
-      // Model requires idNumber/idPhotoUrl/selfieWithIdUrl → use placeholders for direct add.
       await prisma.staffEnrollment.create({
         data: {
           userId,
@@ -70,21 +113,26 @@ export async function POST(request) {
           idNumber: '',
           idPhotoUrl: '',
           selfieWithIdUrl: '',
-          status: 'APPROVED',
-          reviewedAt: new Date(),
+          status: approveNow ? 'APPROVED' : 'PENDING',
+          reviewedAt: approveNow ? new Date() : null,
         },
       });
-    } else if (existing.status !== 'APPROVED') {
+    } else if (approveNow && existing.status !== 'APPROVED') {
       await prisma.staffEnrollment.update({
         where: { id: existing.id },
         data: { status: 'APPROVED', reviewedAt: new Date() },
       });
     }
 
-    return NextResponse.json({ message: 'Staff added', staff: updatedUser }, { status: 201 });
+    return NextResponse.json(
+      approveNow
+        ? { message: 'Staff added', staff: updatedUser, businessId: business.id }
+        : { message: 'Enrollment submitted', enrollment: { userId, businessId: business.id, status: 'PENDING' } },
+      { status: 201 }
+    );
   } catch (e) {
     Sentry.captureException(e);
-    console.error('POST /manager/staff (direct add) error:', e);
+    console.error('POST /manager/staff error:', e);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
@@ -98,18 +146,16 @@ export async function GET(request) {
 
         const token = authHeader.split(' ')[1];
         const { valid, decoded } = await verifyToken(token);
+        const ownerId = decoded?.userId ?? decoded?.id ?? decoded?.sub;
 
-        if (!valid || decoded.role !== 'BUSINESS_OWNER') {
+        if (!valid || decoded?.role !== 'BUSINESS_OWNER') {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        const business = await prisma.business.findFirst({
-            where: { ownerId: decoded.userId },
-        });
-
-        if (!business) {
-            return NextResponse.json({ error: 'Business not found' }, { status: 404 });
-        }
+        const { searchParams } = new URL(request.url);
+        const businessId = searchParams.get('businessId') || undefined;
+        const { business, error, status } = await getBusinessForOwner(ownerId, businessId);
+        if (!business) return NextResponse.json({ error }, { status });
 
         const approvedEnrollments = await prisma.staffEnrollment.findMany({
             where: {
@@ -147,10 +193,32 @@ export async function GET(request) {
                 }
             }
         });
-        return NextResponse.json({ approvedStaff, pendingEnrollments }, { status: 200 });
+
+        // --- Expose plan-based limits so the app can show remaining slots
+        const baseAllowed = staffLimitByPlan[business.plan] || 0;
+        const extraAddOn = await prisma.addOn.findFirst({
+            where: { businessId: business.id, type: 'EXTRA_STAFF', isActive: true },
+            select: { value: true },
+        });
+        const totalAllowed = baseAllowed + (extraAddOn?.value || 0);
+        const approvedCount = approvedEnrollments.length;
+        const remaining = Math.max(0, totalAllowed - approvedCount);
+
+        return NextResponse.json({
+            approvedStaff,
+            pendingEnrollments,
+            limits: {
+                plan: business.plan,
+                baseAllowed,
+                extraAllowed: extraAddOn?.value || 0,
+                totalAllowed,
+                approvedCount,
+                remaining,
+            }
+        }, { status: 200 });
     } catch (error) {
         Sentry.captureException(error);
-        console.error('GET /manager/me/staff error:', error);
+        console.error('GET /manager/staff error:', error);
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
 }
@@ -164,8 +232,9 @@ export async function PUT(request) {
 
         const token = authHeader.split(' ')[1];
         const { valid, decoded } = await verifyToken(token);
+        const ownerId = decoded?.userId ?? decoded?.id ?? decoded?.sub;
 
-        if (!valid || decoded.role !== 'BUSINESS_OWNER') {
+        if (!valid || decoded?.role !== 'BUSINESS_OWNER') {
             return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
 
@@ -187,6 +256,42 @@ export async function PUT(request) {
             return NextResponse.json({ error: 'Staff is already approved' }, { status: 400 });
         }
 
+        // Ensure the current owner actually owns this enrollment's business
+        const biz = await prisma.business.findUnique({
+            where: { id: existing.businessId },
+            select: { ownerId: true, plan: true },
+        });
+        if (!biz || biz.ownerId !== ownerId) {
+            return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
+
+        // If approving, enforce plan limits BEFORE updating status
+        if (status === 'APPROVED') {
+            const approvedCount = await prisma.staffEnrollment.count({
+                where: { businessId: existing.businessId, status: 'APPROVED' },
+            });
+            const baseAllowed = staffLimitByPlan[biz.plan] || 0;
+            const extraAddOn = await prisma.addOn.findFirst({
+                where: { businessId: existing.businessId, type: 'EXTRA_STAFF', isActive: true },
+                select: { value: true },
+            });
+            const totalAllowed = baseAllowed + (extraAddOn?.value || 0);
+
+            // Block if approving this one would exceed the cap
+            if (approvedCount >= totalAllowed) {
+                await createNotification({
+                    userId: ownerId,
+                    type: 'SYSTEM',
+                    title: 'Staff Limit Reached',
+                    message: `Your current plan only allows ${totalAllowed} staff members. Upgrade or purchase an add-on to approve more.`,
+                });
+                return NextResponse.json({
+                    error: `Your staff limit (${totalAllowed}) has been reached.`,
+                    suggestion: `Please upgrade your subscription or purchase an 'Extra Staff Add-on' to approve more staff.`,
+                }, { status: 403 });
+            }
+        }
+
         const enrollment = await prisma.staffEnrollment.update({
             where: { id: enrollmentId },
             data: {
@@ -196,59 +301,13 @@ export async function PUT(request) {
             include: { user: true, business: true }
         });
 
+        // Finally, on approval set the role (limit already checked)
         if (status === 'APPROVED') {
-        const business = await prisma.business.findUnique({
-           where: { id: existing.businessId },
-           select: { plan: true },
-         });
-
-          const approvedCount = await prisma.staffEnrollment.count({
-           where: {
-            businessId: existing.businessId,
-            status: 'APPROVED',
-           },
-          });
-
-          const allowed = staffLimitByPlan[business.plan] || 0;
-
-       
-          const extraAddOn = await prisma.addOn.findFirst({
-            where: {
-                 businessId: existing.businessId,
-                type: 'EXTRA_STAFF',
-                isActive: true
-            }
-          });
-
-            const extraAllowed = extraAddOn?.value || 0;
-            const totalAllowed = allowed + extraAllowed;
-
-         if (approvedCount >= totalAllowed) {
-            await createNotification({
-                 userId: decoded.userId,
-                 type: 'SYSTEM',
-                 title: 'Staff Limit Reached',
-                 message: `Your current plan only allows ${totalAllowed} staff members. Upgrade or purchase an add-on to approve more.`,
+            await prisma.user.update({
+                where: { id: enrollment.userId },
+                data: { role: 'STAFF' }
             });
-
-            Sentry.captureMessage(`Staff limit reached for business ${enrollment.businessId}. Plan: ${business.plan}, Allowed: ${totalAllowed}, Attempted by user: ${decoded.userId}`);
-
-            return NextResponse.json({
-             error: `Your staff limit (${totalAllowed}) has been reached.`,
-            suggestion: `Please upgrade your subscription or purchase an 'Extra Staff Add-on' to approve more staff.`,
-             }, { status: 403 });
         }
-
-          await prisma.business.update({
-           where: { id: enrollment.businessId },
-           data: {
-            staff: {
-              connect: { id: enrollment.userId }
-            }
-          }
-          });
-        }
-
 
         await createNotification({
             userId: enrollment.userId,
@@ -281,34 +340,22 @@ export async function DELETE(request) {
 
         const token = authHeader.split(' ')[1];
         const { valid, decoded } = await verifyToken(token);
+        const ownerId = decoded?.userId ?? decoded?.id ?? decoded?.sub;
 
-        if (!valid || decoded.role !== 'BUSINESS_OWNER') {
+        if (!valid || decoded?.role !== 'BUSINESS_OWNER') {
             return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
 
         const { searchParams } = new URL(request.url);
         const staffId = searchParams.get('id');
+        const businessId = searchParams.get('businessId') || undefined;
 
         if (!staffId) {
             return NextResponse.json({ error: 'Missing staff ID' }, { status: 400 });
         }
 
-        const business = await prisma.business.findFirst({
-            where: { ownerId: decoded.userId }
-        });
-
-        if (!business) {
-            return NextResponse.json({ error: 'Business not found' }, { status: 404 });
-        }
-
-        await prisma.business.update({
-            where: { id: business.id },
-            data: {
-                staff: {
-                    disconnect: { id: staffId }
-                }
-            }
-        });
+        const { business, error, status } = await getBusinessForOwner(ownerId, businessId);
+        if (!business) return NextResponse.json({ error }, { status });
 
         await prisma.staffEnrollment.updateMany({
             where: {
@@ -320,6 +367,7 @@ export async function DELETE(request) {
                 reviewedAt: new Date()
             }
         });
+
         const removedStaff = await prisma.user.findUnique({
             where: { id: staffId },
             select: {

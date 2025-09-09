@@ -2,9 +2,9 @@
 import * as SecureStore from "expo-secure-store";
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { usePathname } from "expo-router";
-import { meHeartbeat, decodeJwt, setCurrentPath, apiLogout } from "../lib/api/modules/auth";
+import { meHeartbeat, decodeJwt, setCurrentPath, apiLogout, clearSessionStart } from "../lib/api/modules/auth";
 import { jsonFetch } from "../lib/api/modules/_fetch";
-import api, { setAuthToken, getTokens } from "../lib/api/client";
+import api, { setAuthToken, getTokens, setTokens, clearTokens } from "../lib/api/client";
 
 // Optional Sentry (won't crash if not installed)
 let Sentry: any = null;
@@ -25,6 +25,7 @@ export type VerificationStatus = "unverified" | "pending" | "approved" | "reject
 export type BusinessTier = 1 | 2 | 3 | 4 | 5 | 6;
 
 export interface BusinessProfile {
+  id?: string;                 // ← Fixed: added id field
   tier?: BusinessTier;
   verificationStatus: VerificationStatus;
   businessName?: string;
@@ -133,24 +134,28 @@ export function SessionProvider({ children }: SessionProviderProps) {
   const [ready, setReady] = useState(false);
   const pathname = usePathname();
 
-  // Enhanced session cleanup helper
+  // Enhanced session cleanup helper - now uses API client helpers
   const clearSession = async () => {
     try {
-      // 1. Clear stored tokens
-      await SecureStore.deleteItemAsync("access_token").catch(() => {});
-      await SecureStore.deleteItemAsync("refresh_token").catch(() => {}); // if you store it
+      // 1. Clear stored tokens via API client helpers (same store as interceptors)
+      await clearTokens();
       
-      // 2. Clear any other auth-related storage keys
+      // 2. Clear any weekly session marker if you track it
+      await clearSessionStart?.().catch?.(() => {});
+      
+      // 3. Clean up any legacy keys for migration
+      await SecureStore.deleteItemAsync("access_token").catch(() => {});
+      await SecureStore.deleteItemAsync("refresh_token").catch(() => {});
       await SecureStore.deleteItemAsync("sessionStartedAt").catch(() => {});
       
-      // 3. Clear API client auth headers
+      // 4. Clear API client auth headers
       setAuthToken(null);
       
-      // 4. Clear in-memory session state
+      // 5. Clear in-memory session state
       setToken(null);
       setUser(null);
       
-      // 5. Clear Sentry user context
+      // 6. Clear Sentry user context
       clearSentryUser();
       
       console.log("✅ Local session cleared");
@@ -168,11 +173,12 @@ export function SessionProvider({ children }: SessionProviderProps) {
     }
   }, [pathname]);
 
-  // Initial boot: restore token, probe auth, fetch user profile
+  // Initial boot: restore token from API client store, probe auth, fetch user profile
   useEffect(() => {
     (async () => {
       try {
-        const storedToken = await SecureStore.getItemAsync("access_token");
+        // Use API client's getTokens() instead of direct SecureStore access
+        const { accessToken: storedToken } = await getTokens();
         if (!storedToken) {
           return; // Not signed in
         }
@@ -214,10 +220,8 @@ export function SessionProvider({ children }: SessionProviderProps) {
             /invalid/i.test(codeMsg) ||
             /no[_\s-]?token/i.test(codeMsg)
           ) {
-            console.log("🔐 Stored token is invalid, clearing session");
-            try {
-              await SecureStore.deleteItemAsync("access_token");
-            } catch {}
+            console.log("🔓 Stored token is invalid, clearing session");
+            await clearTokens(); // Use API client helper instead of direct SecureStore
             setAuthToken(null);
           }
           
@@ -228,9 +232,7 @@ export function SessionProvider({ children }: SessionProviderProps) {
       } catch (error) {
         console.error("❌ Session initialization failed:", error);
         // Hard failure → ensure clean state
-        try {
-          await SecureStore.deleteItemAsync("access_token");
-        } catch {}
+        await clearTokens().catch(() => {}); // Use API client helper
         setAuthToken(null);
         setToken(null);
         setUser(null);
@@ -265,7 +267,7 @@ export function SessionProvider({ children }: SessionProviderProps) {
         });
 
         if (!canceled) {
-          console.log(`📍 Session ping successful for ${pathname}`);
+          console.log(`🔄 Session ping successful for ${pathname}`);
         }
       } catch (err: any) {
         if (canceled) return;
@@ -274,7 +276,7 @@ export function SessionProvider({ children }: SessionProviderProps) {
         
         if (status === 401) {
           console.log("🚪 Session expired during ping, signing out");
-          // Token is no longer valid — sign out immediately
+          // Token is no longer valid – sign out immediately
           await clearSession();
         } else {
           // Non-auth errors: don't sign out, just log
@@ -300,7 +302,12 @@ export function SessionProvider({ children }: SessionProviderProps) {
     }
 
     try {
-      await SecureStore.setItemAsync("access_token", newToken);
+      // Use API client's setTokens helper - pass both tokens if available
+      const { refreshToken } = await getTokens().catch(() => ({ refreshToken: null }));
+      await setTokens({ 
+        accessToken: newToken,
+        refreshToken: refreshToken || undefined // Keep existing refresh token if available
+      });
       setAuthToken(newToken);
       setToken(newToken);
       setUser(newUser ?? null);
@@ -322,9 +329,8 @@ export function SessionProvider({ children }: SessionProviderProps) {
     console.log("👋 Signing out...");
     
     try {
-      // Get current tokens before clearing
-      const accessToken = await SecureStore.getItemAsync("access_token");
-      const refreshToken = await SecureStore.getItemAsync("refresh_token"); // if you store it
+      // Get current tokens from API client store
+      const { accessToken, refreshToken } = await getTokens();
       
       // 1. Try to revoke server-side refresh tokens (best effort)
       if (accessToken) {

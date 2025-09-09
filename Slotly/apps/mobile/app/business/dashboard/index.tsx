@@ -1,10 +1,20 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { ScrollView, StyleSheet, View, useWindowDimensions } from "react-native";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
+import { ScrollView, StyleSheet, View, RefreshControl, useWindowDimensions } from "react-native";
 import { Button, Card, Chip, Divider, IconButton, Surface, Text, useTheme } from "react-native-paper";
 import { Link, type Href, useRouter } from "expo-router";
 import { useSession } from "../../../context/SessionContext";
+
+// ✅ manager client (uses axios with token interceptor)
+import {
+  getBusinessProfile as getManagerBusiness, // /api/manager/me
+  getPerformance,                            // /api/manager/performance?start=&end=
+  listBookings,                              // /api/manager/bookings
+  getSubscription,                           // /api/manager/subscription
+  listReviews,                               // /api/manager/reviews
+  flagReview,                                // PATCH /api/manager/reviews?id=
+} from "../../../lib/api/modules/manager";
 
 /* ---------- Local types ---------- */
 type DashboardMetrics = {
@@ -26,48 +36,6 @@ type BookingPreview = {
   startTime?: string;
 };
 
-/* ---------- Config ---------- */
-const API_BASE =
-  (typeof process !== "undefined" && (process as any).env?.EXPO_PUBLIC_API_BASE_URL) || "";
-
-/* ---------- Strict fetchers: token REQUIRED ---------- */
-async function fetchJSON<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
-  const url = API_BASE ? `${API_BASE}${path}` : path;
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-    ...(init.headers as Record<string, string>),
-    Authorization: `Bearer ${token}`,
-  };
-
-  const res = await fetch(url, {
-    method: init.method || "GET",
-    headers,
-    ...(init.body ? { body: init.body } : {}),
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    const err: any = new Error(`${init.method || "GET"} ${path} ${res.status}: ${text || res.statusText}`);
-    err.status = res.status;
-    throw err;
-  }
-  return res.json();
-}
-
-async function fetchAnalyticsDaily(token: string, startISO: string, endISO: string) {
-  const qs = new URLSearchParams({
-    view: "daily",
-    startDate: startISO,
-    endDate: endISO,
-    metrics: "bookings,revenue",
-  }).toString();
-  return fetchJSON<any>(`/api/manager/analytics?${qs}`, token);
-}
-
-async function fetchBookings(token: string) {
-  return fetchJSON<any[]>(`/api/manager/bookings`, token);
-}
-
 /* ---------- Screen ---------- */
 export default function BusinessOverview() {
   const theme = useTheme();
@@ -75,125 +43,198 @@ export default function BusinessOverview() {
   const { width } = useWindowDimensions();
   const oneCol = width < 980;
 
-  const { token } = useSession(); // token: string | null
+  const { token } = useSession();
 
   const [loading, setLoading] = useState(true);
-  const [m, setM] = useState<DashboardMetrics | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [upcoming, setUpcoming] = useState<BookingPreview[]>([]);
+  
+  // Additional state from first file
+  const [billing, setBilling] = useState<any>(null);
+  const [profile, setProfile] = useState<any>(null);
+  const [reviews, setReviews] = useState<any[]>([]);
 
-  useEffect(() => {
-    let cancelled = false;
+  const todayISO = useMemo(() => {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }, []);
 
-    (async () => {
-      // Require token: if not present, do nothing (avoids unauth loops).
-      if (!token) {
-        // Optional: dev hint
-        console.warn("[BusinessOverview] Missing auth token — skipping dashboard fetch.");
+  const fetchAll = useCallback(async () => {
+    if (!token) {
+      console.warn("[BusinessOverview] Missing auth token – skipping dashboard fetch.");
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    try {
+      // 1) Get profile first so we have the businessId
+      const profileData = await getManagerBusiness();
+      setProfile(profileData);
+      const businessId =
+        profileData?.id ??
+        profileData?.business?.id ??
+        profileData?.ownedBusinesses?.[0]?.id ??
+        null;
+
+      if (!businessId) {
+        console.error("[BusinessOverview] No businessId found in profile:", profileData);
         setLoading(false);
         return;
       }
 
-      setLoading(true);
-      try {
-        // ----- today YYYY-MM-DD -----
-        const today = new Date();
-        const yyyy = today.getFullYear();
-        const mm = String(today.getMonth() + 1).padStart(2, "0");
-        const dd = String(today.getDate()).padStart(2, "0");
-        const todayISO = `${yyyy}-${mm}-${dd}`;
+      // 2) ✅ UPDATED: Use getSubscription instead of getBilling
+      const [perfRes, bookingsRes, subscriptionRes, reviewsRes] = await Promise.allSettled([
+        getPerformance({ start: todayISO, end: todayISO }),   // KPIs for today
+        listBookings({ businessId }),                         // ✅ pass businessId
+        getSubscription(),                                    // ⬅️ use subscription route instead
+        listReviews(),                                        // latest reviews
+      ]);
 
-        // 1) KPIs via analytics
-        let bookingsToday = 0;
-        let revenueTodayMinor = 0;
+      // ----- KPIs -----
+      let bookingsToday = 0;
+      let revenueTodayMinor = 0;
+      let cancellationsToday = 0;
+      let noShowsToday = 0;
 
-        try {
-          const res = await fetchAnalyticsDaily(token, todayISO, todayISO);
-          const a = res?.analytics ?? {};
-          const bkt = a?.bookings && typeof a.bookings === "object" ? a.bookings : {};
-          const rvt = a?.revenue && typeof a.revenue === "object" ? a.revenue : {};
-          bookingsToday = Number.isFinite(bkt[todayISO]) ? Number(bkt[todayISO]) : 0;
-          revenueTodayMinor = Number.isFinite(rvt[todayISO]) ? Number(rvt[todayISO]) : 0;
-        } catch {
-          // 401/403/etc → soft empty
-          bookingsToday = 0;
-          revenueTodayMinor = 0;
-        }
+      if (perfRes.status === "fulfilled" && perfRes.value) {
+        // Expect either { analytics: { bookings: {YYYY-MM-DD}, revenue: {YYYY-MM-DD} } }
+        // or any shape with today buckets – be defensive:
+        const a = (perfRes.value as any).analytics ?? perfRes.value ?? {};
+        const b = typeof a.bookings === "object" ? a.bookings : {};
+        const r = typeof a.revenue === "object" ? a.revenue : {};
+        bookingsToday = Number.isFinite(b[todayISO]) ? Number(b[todayISO]) : 0;
+        revenueTodayMinor = Number.isFinite(r[todayISO]) ? Number(r[todayISO]) : 0;
+      }
+      const revenueTodayKES = Math.round(revenueTodayMinor / 100);
 
-        // 2) Upcoming + derived cancels/no-shows
-        let nextFive: BookingPreview[] = [];
-        let cancellationsToday = 0;
-        let noShowsToday = 0;
+      // ----- Upcoming bookings (next 5) + cancellations/no-shows -----
+      const nowMs = Date.now();
+      if (bookingsRes.status === "fulfilled" && Array.isArray(bookingsRes.value)) {
+        const safe = bookingsRes.value as any[];
+        const nextFiveRaw = safe
+          .filter(b => b?.startTime && new Date(b.startTime).getTime() >= nowMs)
+          .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
+          .slice(0, 5);
 
-        try {
-          const list = await fetchBookings(token);
-          const now = Date.now();
-          const safe = Array.isArray(list) ? list : [];
+        const fmt = (iso?: string) => {
+          if (!iso) return "—";
+          const d = new Date(iso);
+          const hh = String(d.getHours()).padStart(2, "0");
+          const mm = String(d.getMinutes()).padStart(2, "0");
+          return `${hh}:${mm}`;
+        };
 
-          const upcomingRaw = safe
-            .filter((b: any) => b?.startTime && new Date(b.startTime).getTime() >= now)
-            .sort((a: any, b: any) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
-            .slice(0, 5);
-
-          nextFive = upcomingRaw.map((b: any) => ({
+        setUpcoming(
+          nextFiveRaw.map(b => ({
             id: String(b?.id ?? ""),
             service: String(b?.service?.name ?? "—"),
             customer: String(b?.user?.name ?? b?.user?.email ?? "—"),
-            time: formatTime(b?.startTime),
+            time: fmt(b?.startTime),
             startTime: b?.startTime,
-          }));
+          }))
+        );
 
-          const isSameDay = (iso?: string) => {
-            if (!iso) return false;
-            const d = new Date(iso);
-            return d.getFullYear() === yyyy && d.getMonth() + 1 === Number(mm) && d.getDate() === Number(dd);
-          };
-
-          for (const b of safe) {
-            if (!isSameDay(b?.startTime)) continue;
+        // Calculate same-day cancellations and no-shows
+        const yyyy = new Date().getFullYear();
+        const mm = new Date().getMonth() + 1;
+        const dd = new Date().getDate();
+        
+        for (const b of safe) {
+          if (!b?.startTime) continue;
+          const bookingDate = new Date(b.startTime);
+          if (bookingDate.getFullYear() === yyyy && 
+              bookingDate.getMonth() + 1 === mm && 
+              bookingDate.getDate() === dd) {
             const status = String(b?.status || "").toUpperCase();
             if (status === "CANCELLED") cancellationsToday++;
             if (status === "NO_SHOW") noShowsToday++;
           }
-        } catch {
-          nextFive = [];
-          cancellationsToday = 0;
-          noShowsToday = 0;
         }
-
-        const revenueTodayKES = Math.round(revenueTodayMinor / 100);
-
-        if (!cancelled) {
-          setM({
-            bookingsToday,
-            revenueTodayKES,
-            bookingsChangePct: 0,
-            revenueChangePct: 0,
-            cancellationsToday,
-            cancellationsDelta: 0,
-            noShowsToday,
-            noShowsDelta: 0,
-          });
-          setUpcoming(nextFive);
+      } else {
+        setUpcoming([]);
+        if (bookingsRes.status === "rejected") {
+          console.error("Bookings fetch failed:", bookingsRes.reason);
         }
-      } catch {
-        if (!cancelled) {
-          setM({
-            bookingsToday: 0,
-            revenueTodayKES: 0,
-            cancellationsToday: 0,
-            noShowsToday: 0,
-          });
-          setUpcoming([]);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
       }
-    })();
 
-    return () => {
-      cancelled = true;
-    };
-  }, [token]); // token is REQUIRED; effect runs only when it's available
+      // ----- Billing (now via subscription + business.plan) -----
+      const planFromBusiness =
+        profileData?.plan ??
+        profileData?.business?.plan ??
+        profileData?.ownedBusinesses?.[0]?.plan ??
+        null;
+
+      const planLabelFromSlug = (slug?: string) => {
+        if (!slug) return "Unknown";
+        const s = String(slug);
+        return s.startsWith("LEVEL_") ? `Level ${s.split("_")[1]}` : s;
+      };
+
+      if (subscriptionRes.status === "fulfilled") {
+        const subscription = subscriptionRes.value as any;
+        setBilling({
+          plan: planFromBusiness,
+          planLabel: planLabelFromSlug(planFromBusiness || ""),
+          subscription,
+          payments: [], // (optional) fill from another endpoint if you want recent payments here
+        });
+      } else {
+        console.error("Subscription fetch failed:", (subscriptionRes as any).reason);
+        setBilling({
+          plan: planFromBusiness,
+          planLabel: planLabelFromSlug(planFromBusiness || ""),
+          subscription: null,
+          payments: [],
+        });
+      }
+
+      // ----- Reviews (latest) -----
+      if (reviewsRes.status === "fulfilled" && Array.isArray(reviewsRes.value)) {
+        setReviews((reviewsRes.value as any[]).slice(0, 3));
+      } else {
+        setReviews([]);
+        if (reviewsRes.status === "rejected") {
+          console.error("Reviews fetch failed:", reviewsRes.reason);
+        }
+      }
+
+      setMetrics({
+        bookingsToday,
+        revenueTodayKES,
+        bookingsChangePct: 0, // Could calculate from historical data
+        revenueChangePct: 0,  // Could calculate from historical data
+        cancellationsToday,
+        cancellationsDelta: 0, // Could calculate from yesterday's data
+        noShowsToday,
+        noShowsDelta: 0, // Could calculate from yesterday's data
+      });
+    } catch (err) {
+      console.warn("Dashboard fetch failed:", err);
+      setMetrics({
+        bookingsToday: 0,
+        revenueTodayKES: 0,
+        cancellationsToday: 0,
+        noShowsToday: 0,
+      });
+      setUpcoming([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [token, todayISO]);
+
+  useEffect(() => {
+    fetchAll();
+  }, [fetchAll]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchAll();
+    setRefreshing(false);
+  }, [fetchAll]);
 
   // Navigation to settings
   const navigateToSettings = () => {
@@ -201,46 +242,68 @@ export default function BusinessOverview() {
   };
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.colors.background }} contentContainerStyle={styles.container}>
+    <ScrollView 
+      style={{ flex: 1, backgroundColor: theme.colors.background }} 
+      contentContainerStyle={styles.container}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      showsVerticalScrollIndicator={false}
+    >
       
-      {/* Header with Settings Navigation */}
+      {/* Header with Back to Settings and Actions */}
       <View style={styles.headerRow}>
-        <Text variant="headlineLarge" style={[styles.h1, { color: "#0F4BAC" }]}>
-          Dashboard Overview
-        </Text>
-        <IconButton
-          icon="cog"
-          size={24}
-          onPress={navigateToSettings}
-          style={{ margin: 0 }}
-        />
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+          <IconButton
+            icon="arrow-left"
+            size={24}
+            onPress={() => router.replace("/settings")}  // always go to Settings
+            style={{ margin: 0 }}
+          />
+          <Text variant="headlineLarge" style={[styles.h1, { color: "#0F4BAC" }]}>
+            Dashboard Overview
+          </Text>
+        </View>
+
+        <View style={{ flexDirection: "row" }}>
+          <IconButton
+            icon="refresh"
+            size={24}
+            onPress={onRefresh}
+            style={{ margin: 0 }}
+          />
+          <IconButton
+            icon="cog"
+            size={24}
+            onPress={navigateToSettings}
+            style={{ margin: 0 }}
+          />
+        </View>
       </View>
 
       {/* METRICS */}
       <View style={[styles.metricsGrid, oneCol && { gap: 14 }]}>
         <MetricCard
           title="TODAY'S BOOKINGS"
-          value={m?.bookingsToday ?? 0}
+          value={metrics?.bookingsToday ?? (loading ? "…" : 0)}
           tone="info"
-          pill={`${sign(m?.bookingsChangePct)}% from yesterday`}
+          pill={`${sign(metrics?.bookingsChangePct)}% from yesterday`}
         />
         <MetricCard
           title="TODAY'S REVENUE"
-          value={`KSh ${(m?.revenueTodayKES ?? 0).toLocaleString()}`}
+          value={`KSh ${(metrics?.revenueTodayKES ?? 0).toLocaleString()}`}
           tone="info"
-          pill={`${sign(m?.revenueChangePct)}% from yesterday`}
+          pill={`${sign(metrics?.revenueChangePct)}% from yesterday`}
         />
         <MetricCard
           title="CANCELLATIONS"
-          value={m?.cancellationsToday ?? 0}
+          value={metrics?.cancellationsToday ?? (loading ? "…" : 0)}
           tone="danger"
-          pill={`${delta(m?.cancellationsDelta)} from yesterday`}
+          pill={`${delta(metrics?.cancellationsDelta)} from yesterday`}
         />
         <MetricCard
           title="NO SHOWS"
-          value={m?.noShowsToday ?? 0}
+          value={metrics?.noShowsToday ?? (loading ? "…" : 0)}
           tone="success"
-          pill={`${delta(m?.noShowsDelta)} from yesterday`}
+          pill={`${delta(metrics?.noShowsDelta)} from yesterday`}
         />
       </View>
 
@@ -269,10 +332,107 @@ export default function BusinessOverview() {
               <Text style={styles.upcomingTime}>{b.time}</Text>
             </Surface>
           ))}
-          {(!upcoming || upcoming.length === 0) && (
+          {(!upcoming || upcoming.length === 0) && !loading && (
             <Text style={{ marginTop: 12, color: theme.colors.onSurfaceVariant }}>
               No bookings have been made yet.
             </Text>
+          )}
+        </View>
+      </Surface>
+
+      {/* Billing Section */}
+      <Surface elevation={1} style={[styles.sectionCard, { backgroundColor: theme.colors.surface }]}>
+        <Text variant="titleLarge" style={{ fontWeight: "800", color: "#0F4BAC" }}>Billing</Text>
+        <Divider style={{ marginVertical: 8 }} />
+        {billing ? (
+          <>
+            <Text>Plan: <Text style={styles.bold}>{billing.planLabel}</Text></Text>
+            {!!billing.renewalDate && (
+              <Text>Renews: {new Date(billing.renewalDate).toDateString()}</Text>
+            )}
+            {!billing.renewalDate && billing.plan !== 'LEVEL_1' && (
+              <Text style={{ color: theme.colors.onSurfaceVariant, marginTop: 4 }}>
+                Subscription details loading...
+              </Text>
+            )}
+            {billing.plan === 'LEVEL_1' && (
+              <Text style={{ color: theme.colors.onSurfaceVariant, marginTop: 4 }}>
+                Free plan - No renewal required
+              </Text>
+            )}
+            {!!billing.payments?.length && (
+              <View style={{ marginTop: 8 }}>
+                <Text style={styles.bold}>Recent payments</Text>
+                {billing.payments.slice(0, 3).map((p: any) => (
+                  <Text key={p.id}>KSh {Math.round((p.amount ?? 0) / 100).toLocaleString()} – {new Date(p.createdAt).toDateString()}</Text>
+                ))}
+              </View>
+            )}
+          </>
+        ) : (
+          <Text>{loading ? "Loading…" : "No billing data"}</Text>
+        )}
+      </Surface>
+
+      {/* Business Profile Section */}
+      <Surface elevation={1} style={[styles.sectionCard, { backgroundColor: theme.colors.surface }]}>
+        <Text variant="titleLarge" style={{ fontWeight: "800", color: "#0F4BAC" }}>Business Profile</Text>
+        <Divider style={{ marginVertical: 8 }} />
+        {profile ? (
+          <>
+            <Text>Name: <Text style={styles.bold}>{profile?.name}</Text></Text>
+            {!!profile?.type && <Text>Type: {profile.type}</Text>}
+            {!!profile?.address && <Text>Address: {profile.address}</Text>}
+            {!!profile?.createdAt && <Text>Since: {new Date(profile.createdAt).toDateString()}</Text>}
+            <View style={{ marginTop: 8 }}>
+              <Button mode="outlined" onPress={() => router.push("/business/dashboard/profile")}>
+                Edit Profile
+              </Button>
+            </View>
+          </>
+        ) : (
+          <Text>{loading ? "Loading…" : "No profile data"}</Text>
+        )}
+      </Surface>
+
+      {/* Reviews Section */}
+      <Surface elevation={1} style={[styles.sectionCard, { backgroundColor: theme.colors.surface }]}>
+        <View style={styles.sectionHeader}>
+          <Text variant="titleLarge" style={{ fontWeight: "800", color: "#0F4BAC" }}>Recent Reviews</Text>
+          <Button onPress={() => router.push("/business/dashboard/reviews")}>View all</Button>
+        </View>
+        <Divider />
+        <View style={{ paddingVertical: 8 }}>
+          {!reviews.length && !loading ? (
+            <Text style={{ marginTop: 12, color: theme.colors.onSurfaceVariant }}>No reviews yet.</Text>
+          ) : (
+            reviews.map((r: any) => (
+              <View key={r.id} style={styles.reviewRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.bold}>{r?.user?.name || "Anonymous"}</Text>
+                  <Text>{"★".repeat(Number(r?.rating || 0))}</Text>
+                  {!!r?.comment && <Text>{r.comment}</Text>}
+                  <Text style={{ opacity: 0.6, marginTop: 2 }}>
+                    {new Date(r.createdAt).toDateString()}
+                  </Text>
+                </View>
+                {!!r?.flagged ? (
+                  <Chip compact>Flagged</Chip>
+                ) : (
+                  <Button
+                    mode="text"
+                    onPress={async () => {
+                      try {
+                        await flagReview(r.id);
+                        onRefresh();
+                      } catch {}
+                    }}
+                  >
+                    Flag
+                  </Button>
+                )}
+              </View>
+            ))
           )}
         </View>
       </Surface>
@@ -280,7 +440,7 @@ export default function BusinessOverview() {
   );
 }
 
-/* ---------- Pieces ---------- */
+/* ---------- Components ---------- */
 
 function MetricCard(props: { title: string; value: string | number; pill: string; tone: "info" | "success" | "danger" }) {
   const theme = useTheme();
@@ -333,18 +493,6 @@ function QuickLink({ href, label, icon }: { href: string; label: string; icon: s
 /* ---------- Helpers ---------- */
 const sign = (n?: number) => (n == null ? "0" : n > 0 ? `+${n}` : `${n}`);
 const delta = (n?: number) => (n == null ? "0" : n > 0 ? `+${n}` : `${n}`);
-
-function formatTime(iso?: string): string {
-  if (!iso) return "—";
-  try {
-    const d = new Date(iso);
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mm = String(d.getMinutes()).padStart(2, "0");
-    return `${hh}:${mm}`;
-  } catch {
-    return "—";
-  }
-}
 
 /* ---------- Styles ---------- */
 const styles = StyleSheet.create({
@@ -402,4 +550,13 @@ const styles = StyleSheet.create({
   },
   upcomingText: { fontSize: 16, fontWeight: "600", color: "#233044" },
   upcomingTime: { fontSize: 14, fontWeight: "800", color: "#0F4BAC" },
+
+  reviewRow: { 
+    flexDirection: "row", 
+    alignItems: "flex-start", 
+    justifyContent: "space-between", 
+    paddingVertical: 10, 
+    gap: 8 
+  },
+  bold: { fontWeight: "700" },
 });

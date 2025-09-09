@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { View, StyleSheet, ScrollView, RefreshControl } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { View, StyleSheet, ScrollView, RefreshControl, Linking } from "react-native";
 import {
   Text,
   Surface,
@@ -14,138 +14,196 @@ import {
   Chip,
 } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter, type Href, useFocusEffect } from "expo-router";
+import { useRouter, useFocusEffect, type Href } from "expo-router";
 import { useOnboarding } from "../../../context/OnboardingContext";
 import { useSession } from "../../../context/SessionContext";
+import { getVerification, getMyBusiness, getMyLatestVerification } from "../../../lib/api/modules/business";
+import { getMe } from "../../../lib/api/modules/users";
+
+type VerificationRecord = {
+  id?: string;
+  status?: string;
+  idPhotoUrl?: string | null;
+  selfieWithIdUrl?: string | null;
+  licenseUrl?: string | null;
+};
+
+const ACTIVE_STATES = ["approved", "active", "verified"];
+const PENDING_STATES = ["pending", "submitted", "under_review", "review"];
 
 export default function PendingVerification() {
   const theme = useTheme();
   const router = useRouter();
   const { data } = useOnboarding();
-  const { user, token, setUser } = useSession();
+  const { token, ready } = useSession();
 
   const [refreshing, setRefreshing] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [status, setStatus] = useState<string>(
-    user?.business?.verificationStatus || "pending"
-  );
-  const [isMounted, setIsMounted] = useState(false);
+  const [status, setStatus] = useState<string>("pending");
+  const [bizId, setBizId] = useState<string | null>(null);
+  const [verification, setVerification] = useState<VerificationRecord | null>(null);
   const [navigationReady, setNavigationReady] = useState(false);
+
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const planName = data.selectedPlan?.name || "Level 1";
   const planTier = data.selectedPlan?.tier?.toUpperCase?.() || "LEVEL1";
   const hasPromo = !!data.promoApplied && !!data.trialEndsOn;
 
-  const canEnterDashboard = useMemo(() => {
-    const s = status?.toLowerCase?.() || "pending";
-    return s === "approved" || s === "active" || s === "verified";
-  }, [status]);
+  const canEnterDashboard = useMemo(() => ACTIVE_STATES.includes(status), [status]);
 
-  // Enhanced safe navigation helper with better timing checks
-  const safeNavigate = useCallback((path: string) => {
-    if (isMounted && navigationReady) {
+  const safeNavigate = useCallback((path: Href) => {
+    if (!navigationReady) return;
+    try {
+      setTimeout(() => router.replace(path), 100);
+    } catch (e) {
+      console.error("Navigation error:", e);
+    }
+  }, [router, navigationReady]);
+
+  const openUrl = (url?: string | null) => {
+    if (!url) return;
+    Linking.openURL(url).catch(() => {});
+  };
+
+  const readVerificationStrict = useCallback(async (bId: string) => {
+    // Primary: /api/businesses/[id]/verification
+    try {
+      const res: any = await getVerification(token!, bId);
+      const ver: VerificationRecord | null = res?.verification ?? (res ?? null);
+      return ver;
+    } catch (err: any) {
+      // Fallback: /api/businesses/verification/latest
       try {
-        // Use setTimeout to ensure navigation happens in next tick
-        setTimeout(() => {
-          router.replace(path as any);
-        }, 100);
-      } catch (error) {
-        console.error("Navigation error:", error);
+        const latest: any = await getMyLatestVerification(token!);
+        return (latest?.verification ?? latest) as VerificationRecord | null;
+      } catch {
+        return null;
       }
     }
-  }, [router, isMounted, navigationReady]);
+  }, [token]);
+
+  const resolveBizIdOnce = useCallback(async () => {
+    // Try fast path via /api/users/me
+    const me = await getMe(token!);
+    let id: string | null = me?.business?.id ?? null;
+
+    // Fallback: normalized getMyBusiness()
+    if (!id) {
+      const myBiz = await getMyBusiness(token!); // returns { business: me.business }
+      id = myBiz?.business?.id ?? null;
+    }
+    return id;
+  }, [token]);
 
   const refresh = useCallback(async () => {
+    if (!token) return;
     setRefreshing(true);
     try {
-      const { getMe } = await import("../../../lib/api/modules/users");
-      const me = await getMe(token || undefined);
-      if (me) {
-        setUser(me as any);
-        const newStatus = me?.business?.verificationStatus || "pending";
-        setStatus(newStatus);
+      // Ensure we have a business id
+      let id = bizId;
+      if (!id) id = await resolveBizIdOnce();
+      if (id) setBizId(id);
 
-        // Auto-redirect when approved - enhanced logic with better safety checks
-        const verificationStatus = newStatus?.toLowerCase();
-        if (verificationStatus && ["approved", "active", "verified"].includes(verificationStatus)) {
-          // Only navigate if component is mounted and navigation is ready
-          if (isMounted && navigationReady) {
-            // Add a longer delay to ensure everything is ready
-            setTimeout(() => {
-              safeNavigate("/business/dashboard");
-            }, 1500);
-          }
+      // Read the freshest verification record (prefer server record)
+      let nextStatus = status;
+      let ver: VerificationRecord | null = verification;
+
+      if (id) {
+        const strict = await readVerificationStrict(id);
+        if (strict) {
+          ver = strict;
+          if (strict.status) nextStatus = String(strict.status).toLowerCase();
         }
+      }
+
+      // If server didn’t return anything (older backends), peek at /api/users/me
+      if (!ver) {
+        const me = await getMe(token);
+        const s = me?.business?.verificationStatus;
+        if (s) nextStatus = String(s).toLowerCase();
+      }
+
+      setVerification(ver ?? null);
+      setStatus(nextStatus);
+
+      // Navigate as soon as we’re active
+      if (ACTIVE_STATES.includes(nextStatus)) {
+        // stop polling
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+        safeNavigate("/business/dashboard");
       }
     } catch (e) {
       console.error("Failed to refresh verification status:", e);
-      // Optionally show a subtle error indicator
     } finally {
       setRefreshing(false);
     }
-  }, [setUser, token, safeNavigate, isMounted, navigationReady]);
+  }, [token, bizId, status, verification, resolveBizIdOnce, readVerificationStrict, safeNavigate]);
 
-  // Use useFocusEffect to ensure component is ready for navigation
+  // Prepare navigation readiness
   useFocusEffect(
     useCallback(() => {
       setNavigationReady(true);
-      return () => {
-        setNavigationReady(false);
-      };
+      return () => setNavigationReady(false);
     }, [])
   );
 
-  // Enhanced mount detection and initial setup
+  // Initial load
   useEffect(() => {
-    setIsMounted(true);
-    
-    // Add a small delay before starting to check status
-    const mountTimer = setTimeout(() => {
-      setChecking(true);
-      refresh().finally(() => setChecking(false));
-    }, 500);
+    if (!ready) return;
+    setChecking(true);
+    refresh().finally(() => setChecking(false));
+  }, [ready, refresh]);
 
-    // Polling interval - reduced frequency to prevent too many requests
-    const pollInterval = setInterval(() => {
-      if (isMounted && navigationReady) {
+  // Poll while in a pending state; stop when active
+useEffect(() => {
+  if (!ready) return;
+
+  // Start polling while status is pending
+  if (PENDING_STATES.includes(status)) {
+    if (pollRef.current == null) {
+      pollRef.current = setInterval(() => {
         refresh();
-      }
-    }, 10000); // Increased to 10 seconds for better performance
+      }, 10_000);
+    }
+  } else {
+    // Stop polling if we’re no longer pending
+    if (pollRef.current != null) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }
 
-    return () => {
-      clearTimeout(mountTimer);
-      clearInterval(pollInterval);
-      setIsMounted(false);
-      setNavigationReady(false);
-    };
-  }, [refresh, isMounted, navigationReady]);
-
-  // Safe navigation functions with proper checks
-  const goToOnboarding = () => {
-    if (navigationReady) safeNavigate("/business/onboarding");
-  };
-  
-  const goToSupport = () => {
-    if (navigationReady) safeNavigate("/settings/support");
-  };
-  
-  const goToHome = () => {
-    if (navigationReady) safeNavigate("/(tabs)");
-  };
-  
-  const goToDashboard = () => {
-    if (navigationReady && canEnterDashboard) {
-      safeNavigate("/business/dashboard");
+  // Cleanup on unmount/dep change
+  return () => {
+    if (pollRef.current != null) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
     }
   };
+}, [ready, status, refresh]);
+
+
+  const goToOnboarding = () => navigationReady && safeNavigate("/business/onboarding");
+  const goToSupport = () => navigationReady && safeNavigate("/settings/support");
+  const goToHome = () => navigationReady && safeNavigate("/(tabs)");
+  const goToDashboard = () => navigationReady && canEnterDashboard && safeNavigate("/business/dashboard");
+
+  const trialText = useMemo(() => {
+    if (hasPromo && data.trialEndsOn) {
+      return `Free until ${new Date(data.trialEndsOn).toDateString()}`;
+    }
+    return "No trial applied";
+  }, [hasPromo, data.trialEndsOn]);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <ScrollView
         contentContainerStyle={styles.scroll}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={refresh} />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
         showsVerticalScrollIndicator={false}
       >
         {/* Header */}
@@ -187,7 +245,7 @@ export default function PendingVerification() {
           </View>
         </Surface>
 
-        {/* Success Banner for Approved Status */}
+        {/* Success */}
         {canEnterDashboard && (
           <Card style={[styles.pendingBanner, { backgroundColor: "#E8F5E8" }]}>
             <Card.Content style={styles.bannerContent}>
@@ -204,7 +262,7 @@ export default function PendingVerification() {
           </Card>
         )}
 
-        {/* Pending Warning Banner */}
+        {/* Pending */}
         {!canEnterDashboard && (
           <Card style={[styles.pendingBanner, { backgroundColor: "#FFF3C4" }]}>
             <Card.Content style={styles.bannerContent}>
@@ -219,68 +277,6 @@ export default function PendingVerification() {
               </View>
             </Card.Content>
           </Card>
-        )}
-
-        {/* Dashboard Preview (disabled while pending) */}
-        {!canEnterDashboard && (
-          <Surface style={[styles.card, { backgroundColor: theme.colors.surface }]} elevation={1}>
-            <View style={styles.cardHeader}>
-              <View style={styles.dashboardHeader}>
-                <View style={styles.menuIcon}>
-                  <View style={[styles.menuLine, { backgroundColor: theme.colors.primary }]} />
-                  <View style={[styles.menuLine, { backgroundColor: theme.colors.primary }]} />
-                  <View style={[styles.menuLine, { backgroundColor: theme.colors.primary }]} />
-                </View>
-                <Text variant="titleLarge" style={[styles.cardTitle, { color: theme.colors.primary }]}>
-                  Dashboard Preview
-                </Text>
-              </View>
-            </View>
-            <Divider />
-            
-            <View style={styles.dashboardButtons}>
-              <View style={styles.buttonRow}>
-                <Button 
-                  mode="outlined" 
-                  style={[styles.dashboardButton, { borderColor: theme.colors.outline }]} 
-                  contentStyle={styles.buttonContent} 
-                  labelStyle={[styles.dashboardButtonLabel, { color: theme.colors.primary }]} 
-                  disabled
-                >
-                  Bookings
-                </Button>
-                <Button 
-                  mode="outlined" 
-                  style={[styles.dashboardButton, { borderColor: theme.colors.outline }]} 
-                  contentStyle={styles.buttonContent} 
-                  labelStyle={[styles.dashboardButtonLabel, { color: theme.colors.primary }]} 
-                  disabled
-                >
-                  Payments
-                </Button>
-              </View>
-              <View style={styles.buttonRow}>
-                <Button 
-                  mode="outlined" 
-                  style={[styles.dashboardButton, { borderColor: theme.colors.outline }]} 
-                  contentStyle={styles.buttonContent} 
-                  labelStyle={[styles.dashboardButtonLabel, { color: theme.colors.primary }]} 
-                  disabled
-                >
-                  Analytics
-                </Button>
-                <Button 
-                  mode="outlined" 
-                  style={[styles.dashboardButton, { borderColor: theme.colors.outline }]} 
-                  contentStyle={styles.buttonContent} 
-                  labelStyle={[styles.dashboardButtonLabel, { color: theme.colors.primary }]} 
-                  disabled
-                >
-                  Staff
-                </Button>
-              </View>
-            </View>
-          </Surface>
         )}
 
         {/* Submission Summary */}
@@ -309,18 +305,37 @@ export default function PendingVerification() {
           </View>
           <View style={styles.row}>
             <Text>Trial</Text>
-            <Text
-              style={[
-                styles.value,
-                { color: hasPromo ? "#1B5E20" : theme.colors.onSurfaceVariant },
-              ]}
-            >
-              {hasPromo
-                ? `Free until ${new Date(data.trialEndsOn!).toDateString()}`
-                : "No trial applied"}
+            <Text style={[styles.value, { color: hasPromo ? "#1B5E20" : theme.colors.onSurfaceVariant }]}>
+              {trialText}
             </Text>
           </View>
         </Surface>
+
+        {/* Documents */}
+        {verification && (
+          <Surface style={[styles.card, { backgroundColor: theme.colors.surface }]} elevation={1}>
+            <Text variant="titleLarge" style={styles.cardTitle}>Submitted documents</Text>
+            <Divider style={{ marginVertical: 6 }} />
+            <View style={styles.row}>
+              <Text>ID photo</Text>
+              {verification.idPhotoUrl
+                ? <Button mode="text" onPress={() => openUrl(verification.idPhotoUrl)}>View</Button>
+                : <Text style={styles.value}>—</Text>}
+            </View>
+            <View style={styles.row}>
+              <Text>Selfie with ID</Text>
+              {verification.selfieWithIdUrl
+                ? <Button mode="text" onPress={() => openUrl(verification.selfieWithIdUrl)}>View</Button>
+                : <Text style={styles.value}>—</Text>}
+            </View>
+            <View style={styles.row}>
+              <Text>License/Permit</Text>
+              {verification.licenseUrl
+                ? <Button mode="text" onPress={() => openUrl(verification.licenseUrl)}>View</Button>
+                : <Text style={styles.value}>—</Text>}
+            </View>
+          </Surface>
+        )}
 
         {/* What happens next */}
         <Surface style={[styles.card, { backgroundColor: theme.colors.surface }]} elevation={1}>
@@ -346,75 +361,31 @@ export default function PendingVerification() {
           </View>
         </Surface>
 
-        {/* Available Actions */}
+        {/* Actions */}
         <Surface style={[styles.card, { backgroundColor: theme.colors.surface }]} elevation={1}>
           <Text variant="titleLarge" style={styles.cardTitle}>You can still:</Text>
           <Divider style={{ marginVertical: 6 }} />
-          
-          <Button 
-            mode="text" 
-            onPress={goToOnboarding} 
-            style={styles.actionButton} 
-            icon="pencil"
-            contentStyle={styles.actionButtonContent}
-            disabled={!navigationReady}
-          >
+          <Button mode="text" onPress={goToOnboarding} style={styles.actionButton} icon="pencil" contentStyle={styles.actionButtonContent} disabled={!navigationReady}>
             Edit business profile
           </Button>
-
-          <Button 
-            mode="text" 
-            onPress={refresh} 
-            style={styles.actionButton} 
-            icon="eye"
-            contentStyle={styles.actionButtonContent}
-            disabled={!navigationReady}
-          >
+          <Button mode="text" onPress={refresh} style={styles.actionButton} icon="eye" contentStyle={styles.actionButtonContent} disabled={!navigationReady}>
             View verification status
           </Button>
-
-          <Button 
-            mode="text" 
-            onPress={goToSupport} 
-            style={styles.actionButton} 
-            icon="help-circle"
-            contentStyle={styles.actionButtonContent}
-            disabled={!navigationReady}
-          >
+          <Button mode="text" onPress={goToSupport} style={styles.actionButton} icon="help-circle" contentStyle={styles.actionButtonContent} disabled={!navigationReady}>
             Contact support
           </Button>
         </Surface>
 
-        {/* Main Actions */}
         <View style={styles.actions}>
-          <Button
-            mode="contained"
-            onPress={refresh}
-            style={[styles.primaryBtn, { backgroundColor: theme.colors.primary }]}
-            icon="refresh"
-            disabled={!navigationReady}
-          >
+          <Button mode="contained" onPress={refresh} style={[styles.primaryBtn, { backgroundColor: theme.colors.primary }]} icon="refresh" disabled={!navigationReady}>
             Refresh status
           </Button>
-
           {canEnterDashboard ? (
-            <Button
-              mode="contained"
-              onPress={goToDashboard}
-              style={[styles.primaryBtn, { backgroundColor: "#1B5E20" }]}
-              icon="view-dashboard"
-              disabled={!navigationReady}
-            >
+            <Button mode="contained" onPress={goToDashboard} style={[styles.primaryBtn, { backgroundColor: "#1B5E20" }]} icon="view-dashboard" disabled={!navigationReady}>
               Open dashboard
             </Button>
           ) : (
-            <Button
-              mode="outlined"
-              onPress={goToHome}
-              style={styles.secondaryBtn}
-              icon="home"
-              disabled={!navigationReady}
-            >
+            <Button mode="outlined" onPress={goToHome} style={styles.secondaryBtn} icon="home" disabled={!navigationReady}>
               Back to home
             </Button>
           )}
@@ -429,25 +400,13 @@ const styles = StyleSheet.create({
   scroll: { flexGrow: 1, padding: 20, gap: 12 },
   header: { flexDirection: "row", alignItems: "center", marginBottom: 6 },
   titleContainer: { flex: 1, alignItems: "center", marginRight: 32 },
-  stepIndicator: { 
-    width: 32, 
-    height: 32, 
-    borderRadius: 16, 
-    justifyContent: "center", 
-    alignItems: "center", 
-    marginBottom: 8 
-  },
+  stepIndicator: { width: 32, height: 32, borderRadius: 16, justifyContent: "center", alignItems: "center", marginBottom: 8 },
   stepNumber: { fontSize: 16, fontWeight: "bold" },
   title: { fontWeight: "700", textAlign: "center" },
   hero: { borderRadius: 16, padding: 16, gap: 8 },
   heroTitle: { fontWeight: "700", textAlign: "center" },
   heroText: { textAlign: "center" },
-  statusRow: { 
-    flexDirection: "row", 
-    alignItems: "center", 
-    justifyContent: "center", 
-    marginTop: 6 
-  },
+  statusRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 6 },
   pendingBanner: { marginBottom: 12 },
   bannerContent: { flexDirection: "row", alignItems: "center", padding: 12 },
   warningIcon: { fontSize: 20, marginRight: 12 },
@@ -456,29 +415,16 @@ const styles = StyleSheet.create({
   bannerTitle: { fontWeight: "600", marginBottom: 2 },
   bannerSubtitle: { fontWeight: "400" },
   card: { borderRadius: 16, padding: 16, gap: 8 },
-  cardHeader: { 
-    flexDirection: "row", 
-    alignItems: "center", 
-    justifyContent: "space-between" 
-  },
+  cardHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   dashboardHeader: { flexDirection: "row", alignItems: "center" },
   menuIcon: { marginRight: 12 },
   menuLine: { width: 18, height: 2, marginBottom: 3, borderRadius: 1 },
   cardTitle: { fontWeight: "700" },
-  row: { 
-    flexDirection: "row", 
-    justifyContent: "space-between", 
-    paddingVertical: 6 
-  },
+  row: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 6 },
   value: { fontWeight: "600" },
   stepItem: { gap: 6, marginTop: 4 },
   stepText: { lineHeight: 20 },
   bold: { fontWeight: "700" },
-  dashboardButtons: { marginTop: 8 },
-  buttonRow: { flexDirection: "row", gap: 12, marginBottom: 12 },
-  dashboardButton: { flex: 1, opacity: 0.5 },
-  buttonContent: { paddingVertical: 8 },
-  dashboardButtonLabel: { fontSize: 14, fontWeight: "600" },
   actionButton: { justifyContent: "flex-start", marginVertical: 2 },
   actionButtonContent: { justifyContent: "flex-start" },
   actions: { gap: 10, marginTop: 4 },

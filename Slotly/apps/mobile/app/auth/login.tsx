@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
 import { Text, TextInput, Button, useTheme, Surface, IconButton } from "react-native-paper";
 import { useRouter } from "expo-router";
@@ -10,28 +10,37 @@ import { useSession, SessionUser } from "../../context/SessionContext";
 
 const REQUIRE_PASSWORD = process.env.EXPO_PUBLIC_REQUIRE_PASSWORD === "true";
 
-// Add this helper near the top of the file
+// ---- helpers ---------------------------------------------------------------
+const isApproved = (status?: string) => {
+  const s = String(status || "").toLowerCase();
+  return s === "approved" || s === "active" || s === "verified";
+};
+
+const pickStatus = (b?: any) =>
+  (b?.verification?.status ??
+    b?.verificationStatus ??
+    b?.status ??
+    b?.verification_status ??
+    undefined) as string | undefined;
+
 function getPostLoginRoute(u?: Pick<SessionUser, "role" | "business">) {
   const role = String(u?.role || "").toUpperCase();
 
-  if (role === "STAFF") {
-    // staff land on the staff dashboard page
-    return "/business/dashboard/staff";
-  }
-
-  if (["ADMIN", "SUPER_ADMIN", "CREATOR"].includes(role)) {
-    return "/admin";
-  }
+  if (role === "STAFF") return "/business/dashboard/staff";
+  if (["ADMIN", "SUPER_ADMIN", "CREATOR"].includes(role)) return "/admin";
 
   if (role === "BUSINESS_OWNER") {
-    const verificationStatus = String(u?.business?.verificationStatus || "").toLowerCase();
-    return ["approved", "active", "verified"].includes(verificationStatus)
-      ? "/business/dashboard"
-      : "/business/onboarding/pending";
+    // If we DON'T know the business yet, be optimistic and let the dashboard gate handle it.
+    if (!u?.business) return "/business/dashboard";
+
+    const status = pickStatus(u.business);
+    return isApproved(status) ? "/business/dashboard" : "/business/onboarding/pending";
   }
 
-  return "/(tabs)"; // customers / general users
+  return "/(tabs)"; // customers
 }
+
+// ---------------------------------------------------------------------------
 
 export default function LoginScreen() {
   const theme = useTheme();
@@ -46,38 +55,30 @@ export default function LoginScreen() {
   const [errors, setErrors] = useState<{ email?: string; phone?: string; password?: string }>({});
   const [serverError, setServerError] = useState<string | null>(null);
 
-  // ✅ If user lands on login while already authenticated, redirect them
+  const redirectingRef = useRef(false);
+
+  // If user lands on login while already authenticated, route them.
   useEffect(() => {
-    if (!ready) return; // Wait for hydration
-    
-    if (token && user) {
-      console.log("🔄 Already authenticated, redirecting from login...");
-      router.replace(getPostLoginRoute(user));   // <— use helper
-    }
+    if (!ready || !token || !user || redirectingRef.current) return;
+
+    redirectingRef.current = true;
+    console.log("🔄 Already authenticated, redirecting from login...", { role: user.role });
+    router.replace(getPostLoginRoute(user));
+    // No need to reset redirectingRef since we're leaving this screen
   }, [ready, token, user, router]);
 
   const validateForm = () => {
     const newErrors: { email?: string; phone?: string; password?: string } = {};
-
-    // Require at least one identifier: email OR phone
     if (!email.trim() && !phone.trim()) {
       newErrors.email = "Email or phone is required";
       newErrors.phone = "Email or phone is required";
     }
-
-    if (email.trim() && !/\S+@\S+\.\S+/.test(email.trim())) {
-      newErrors.email = "Please enter a valid email";
-    }
-
-    if (phone.trim() && !/^\+?[\d\s\-\(\)]{7,}$/.test(phone.trim())) {
-      newErrors.phone = "Please enter a valid phone number";
-    }
-
+    if (email.trim() && !/\S+@\S+\.\S+/.test(email.trim())) newErrors.email = "Please enter a valid email";
+    if (phone.trim() && !/^\+?[\d\s\-\(\)]{7,}$/.test(phone.trim())) newErrors.phone = "Please enter a valid phone number";
     if (REQUIRE_PASSWORD) {
       if (!password.trim()) newErrors.password = "Password is required";
       else if (password.length < 6) newErrors.password = "Password must be at least 6 characters";
     }
-
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -92,35 +93,33 @@ export default function LoginScreen() {
       const payload = {
         email: email.trim() || undefined,
         phone: phone.trim() || undefined,
-        password: password || "", // Always include password, even if empty
+        password: password || "",
       };
 
       console.log("🔐 Attempting login...");
       const res = await login(payload);
-
       if (res?.error) {
         setServerError(res.error || "Invalid credentials. Please try again.");
         return;
       }
 
-      // Ensure SessionContext is updated (even though the module saved tokens)
+      // Get user data - the updated /api/users/me now includes business data
       const userData = res?.user ?? (await meHeartbeat());
-      
-      // Normalize user data
-      const normalizedUser = {
+      let normalizedUser: SessionUser = {
         id: userData?.id,
         email: userData?.email,
         role: userData?.role,
-        business: userData?.business, // Include business data if available
+        business: userData?.business, // This now comes with proper verification status
       };
 
-      console.log("✅ Login successful:", { role: normalizedUser.role });
+      console.log("✅ Login successful:", { 
+        role: normalizedUser.role, 
+        hasBusiness: !!normalizedUser.business,
+        verificationStatus: normalizedUser.business?.verificationStatus 
+      });
 
       if (res?.token) {
-        // This sets axios auth header automatically via SessionContext
         await setAuth(res.token, normalizedUser);
-
-        // Role-based routing — go straight to the correct destination
         router.replace(getPostLoginRoute(normalizedUser));
       }
     } catch (e: any) {
@@ -131,33 +130,19 @@ export default function LoginScreen() {
     }
   };
 
-   const handleForgotPassword = () => router.push("../forgot-password");
-   const handleCreateAccount = () => router.push("/auth/signup");
-   const handleBack = () => router.back();
+  const handleForgotPassword = () => router.push("../forgot-password");
+  const handleCreateAccount = () => router.push("/auth/signup");
+  const handleBack = () => router.back();
 
-  // Don't render the form if we're redirecting
-  if (ready && token && user) {
-    return null;
-  }
+  if (ready && token && user) return null;
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      <KeyboardAvoidingView
-        style={styles.keyboardView}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-      >
+      <KeyboardAvoidingView style={styles.keyboardView} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <View style={styles.header}>
-            <IconButton
-              icon="arrow-left"
-              size={24}
-              iconColor={theme.colors.onBackground}
-              onPress={handleBack}
-              style={styles.backButton}
-            />
-            <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onBackground }]}>
-              Sign In
-            </Text>
+            <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onBackground} onPress={handleBack} style={styles.backButton} />
+            <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onBackground }]}>Sign In</Text>
           </View>
 
           <Surface style={[styles.formContainer, { backgroundColor: theme.colors.surface }]} elevation={2}>
@@ -178,11 +163,7 @@ export default function LoginScreen() {
                 style={styles.input}
                 left={<TextInput.Icon icon="email" />}
               />
-              {errors.email ? (
-                <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
-                  {errors.email}
-                </Text>
-              ) : null}
+              {errors.email ? <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>{errors.email}</Text> : null}
 
               <TextInput
                 mode="outlined"
@@ -199,11 +180,7 @@ export default function LoginScreen() {
                 style={styles.input}
                 left={<TextInput.Icon icon="phone" />}
               />
-              {errors.phone ? (
-                <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
-                  {errors.phone}
-                </Text>
-              ) : null}
+              {errors.phone ? <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>{errors.phone}</Text> : null}
 
               <TextInput
                 mode="outlined"
@@ -219,31 +196,13 @@ export default function LoginScreen() {
                 error={!!errors.password}
                 style={styles.input}
                 left={<TextInput.Icon icon="lock" />}
-                right={
-                  <TextInput.Icon
-                    icon={showPassword ? "eye-off" : "eye"}
-                    onPress={() => setShowPassword(!showPassword)}
-                  />
-                }
+                right={<TextInput.Icon icon={showPassword ? "eye-off" : "eye"} onPress={() => setShowPassword(!showPassword)} />}
               />
-              {errors.password ? (
-                <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
-                  {errors.password}
-                </Text>
-              ) : null}
+              {errors.password ? <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>{errors.password}</Text> : null}
 
-              {serverError ? (
-                <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>
-                  {serverError}
-                </Text>
-              ) : null}
+              {serverError ? <Text variant="bodySmall" style={[styles.errorText, { color: theme.colors.error }]}>{serverError}</Text> : null}
 
-              <Button
-                mode="text"
-                onPress={handleForgotPassword}
-                style={styles.forgotButton}
-                labelStyle={[styles.forgotButtonText, { color: theme.colors.primary }]}
-              >
+              <Button mode="text" onPress={handleForgotPassword} style={styles.forgotButton} labelStyle={[styles.forgotButtonText, { color: theme.colors.primary }]}>
                 Forgot Password?
               </Button>
 

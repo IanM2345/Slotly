@@ -5,20 +5,23 @@ import { View, ScrollView, StyleSheet, Alert } from "react-native";
 import { Text, Surface, Button, IconButton, useTheme } from "react-native-paper";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { listStaff, removeStaff } from "../../../../lib/api/modules/manager";
+import { useSession } from "../../../../context/SessionContext";
 
 export default function TeamDetail() {
   const theme = useTheme()
   const router = useRouter()
+  const { user } = useSession();
+  const businessId = user?.business?.id;
   const { id } = useLocalSearchParams<{ id: string }>()
   const [m, setM] = useState<any | null>(null)
 
   useEffect(() => {
     (async () => {
-      const data = await listStaff();
+      const data = await listStaff(businessId);
       const match = (data?.approvedStaff ?? []).find((u: any) => String(u.id) === String(id));
       setM(match ?? null);
     })();
-  }, [id])
+  }, [id, businessId])
 
   const remove = () => {
     if (!m) return
@@ -28,7 +31,7 @@ export default function TeamDetail() {
         text: "Remove",
         style: "destructive",
         onPress: async () => {
-          await removeStaff(m.id);
+          await removeStaff(m.id, businessId);
           router.replace("..")
         },
       },

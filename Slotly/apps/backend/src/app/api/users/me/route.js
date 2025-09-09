@@ -22,29 +22,66 @@ async function getAuthedUserId(request) {
   return extractUserId(decoded);
 }
 
-/** GET /api/users/me – returns current profile (preload-friendly) */
+/** GET /api/users/me — returns current profile with business data (preload-friendly) */
+/** GET /api/users/me — returns current profile with business data */
 export async function GET(request) {
   try {
     const userId = await getAuthedUserId(request);
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    // add Sentry user context
+    Sentry.setUser({ id: userId });
 
     const me = await prisma.user.findUnique({
       where: { id: userId },
       select: {
         id: true, email: true, phone: true, name: true, role: true,
         avatarUrl: true, createdAt: true, updatedAt: true,
+        ownedBusinesses: {
+          take: 1,
+          select: {
+            id: true, name: true, address: true, description: true, logoUrl: true, hours: true,
+            plan: true, // include if your UI shows plan/Level
+            verification: { select: { status: true } }
+          }
+        },
+        staffEnrollments: {
+          where: { status: 'APPROVED' },
+          take: 1,
+          select: {
+            business: {
+              select: {
+                id: true, name: true, address: true, description: true, logoUrl: true, hours: true,
+                plan: true,
+                verification: { select: { status: true } }
+              }
+            }
+          }
+        }
       },
     });
 
     if (!me) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-    return NextResponse.json(me, { status: 200 });
+
+    let business = null;
+    if (me.role === 'BUSINESS_OWNER' && me.ownedBusinesses?.[0]) {
+      const { verification, ...rest } = me.ownedBusinesses[0];
+      business = { ...rest, verificationStatus: verification?.status ?? 'pending' };
+    } else if (me.role === 'STAFF' && me.staffEnrollments?.[0]?.business) {
+      const { verification, ...rest } = me.staffEnrollments[0].business;
+      business = { ...rest, verificationStatus: verification?.status ?? 'approved' };
+    }
+
+    const { ownedBusinesses, staffEnrollments, ...userData } = me;
+    return NextResponse.json({ ...userData, business }, { status: 200 });
   } catch (err) {
     Sentry.captureException(err);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
 
-/** PATCH /api/users/me – update name/phone/avatar */
+
+/** PATCH /api/users/me — update name/phone/avatar */
 export async function PATCH(request) {
   try {
     const userId = await getAuthedUserId(request);
@@ -73,7 +110,7 @@ export async function PATCH(request) {
   }
 }
 
-/** DELETE /api/users/me – hard delete + cascade-ish cleanup */
+/** DELETE /api/users/me — hard delete + cascade-ish cleanup */
 export async function DELETE(request) {
   try {
     const userId = await getAuthedUserId(request);

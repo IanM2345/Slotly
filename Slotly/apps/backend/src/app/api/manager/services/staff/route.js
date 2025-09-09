@@ -1,4 +1,3 @@
-
 import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
@@ -8,7 +7,8 @@ const prisma = new PrismaClient();
 
 async function getBusinessFromToken(request) {
   try {
-    const authHeader = request.headers.get('Authorization');
+    // standardize to lowercase header everywhere
+    const authHeader = request.headers.get('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return { error: 'Unauthorized', status: 401 };
     }
@@ -40,32 +40,27 @@ export async function GET(request) {
     const { business, error, status } = await getBusinessFromToken(request);
     if (error) return NextResponse.json({ error }, { status });
 
-    const allStaff = await prisma.user.findMany({
-      where: {
-        staffOf: {
-          some: {
-            id: business.id,
-          },
+    // Get all services for this business, including assigned staff
+    const services = await prisma.service.findMany({
+      where: { businessId: business.id },
+      include: {
+        serviceStaff: {
+          include: { staff: { select: { id: true, name: true } } },
         },
       },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        servicesProvided: {
-          where: {
-            businessId: business.id,
-          },
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-      },
+      orderBy: { createdAt: 'desc' },
     });
 
-    const assigned = allStaff.filter((staff) => staff.servicesProvided.length > 0);
-    const unassigned = allStaff.filter((staff) => staff.servicesProvided.length === 0);
+    const assigned = [];
+    const unassigned = [];
+    for (const s of services) {
+      const item = {
+        serviceId: s.id,
+        serviceName: s.name,
+        staff: s.serviceStaff.map(a => ({ id: a.staff.id, name: a.staff.name })),
+      };
+      (item.staff.length > 0 ? assigned : unassigned).push(item);
+    }
 
     return NextResponse.json({ assigned, unassigned }, { status: 200 });
   } catch (err) {
