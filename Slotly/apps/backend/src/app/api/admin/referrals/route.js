@@ -3,7 +3,7 @@ import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
 import { authenticateRequest } from '@/middleware/auth';
-import { sendNotification } from '@/lib/notifications/sendNotification';
+import { sendNotification } from '@/shared/notifications/sendNotification';
 
 const prisma = new PrismaClient();
 

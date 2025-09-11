@@ -4,7 +4,7 @@ import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@/generated/prisma'
 import { verifyToken } from '@/middleware/auth'
-import { generateMonthlyReport } from '@/lib/reports' // To Be Implemented
+import { generateMonthlyReport } from '@/lib/reports/generateMonthlyReport' // To Be Implemented
 
 const prisma = new PrismaClient()
 
