@@ -1,87 +1,23 @@
 // apps/mobile/lib/api/client.js
 import axios from 'axios';
-import Constants from 'expo-constants';
-import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { router } from 'expo-router';
 
 /* ------------------------------- Config ---------------------------------- */
 
-// Enhanced base URL resolution with better debugging
-function resolveBaseURL() {
-  // Get the host from Expo's config (works for physical devices on same network)
-  const hostFromExpo = Constants.expoConfig?.hostUri?.split(':')?.[0];
-  
-  // Debug all available environment variables
-  console.log('🔍 Environment Variables Debug:');
-  console.log('  - EXPO_PUBLIC_API_URL:', process.env.EXPO_PUBLIC_API_URL);
-  console.log('  - EXPO_PUBLIC_API_URL_WEB:', process.env.EXPO_PUBLIC_API_URL_WEB);
-  console.log('  - API_BASE_URL:', process.env.API_BASE_URL); // Check if this exists
-  console.log('  - NODE_ENV:', process.env.NODE_ENV);
-  console.log('  - __DEV__:', __DEV__);
-  
-  if (__DEV__) {
-    console.log('🔧 DEV MODE: Resolving API base URL...');
-    console.log('Platform:', Platform.OS);
-    console.log('Host from Expo:', hostFromExpo);
-    
-    // Check if we're running on web
-    if (Platform.OS === 'web') {
-      const webUrl = process.env.EXPO_PUBLIC_API_URL_WEB || 'http://localhost:3000';
-      console.log('🌐 Web platform detected, using:', webUrl);
-      return webUrl;
-    }
-    
-    // For mobile platforms, prioritize environment variable for physical devices
-    if (process.env.EXPO_PUBLIC_API_URL) {
-      console.log('📱 Using EXPO_PUBLIC_API_URL:', process.env.EXPO_PUBLIC_API_URL);
-      return process.env.EXPO_PUBLIC_API_URL;
-    }
-    
-    // Fallback to platform-specific defaults for emulators/simulators
-    if (Platform.OS === 'android') {
-      // Check if it's likely an emulator vs physical device
-      if (!hostFromExpo || hostFromExpo === 'localhost') {
-        const url = 'http://10.0.2.2:3000';
-        console.log('📱 Android emulator detected, using:', url);
-        return url;
-      }
-    }
-    
-    if (Platform.OS === 'ios') {
-      // Check if it's likely a simulator vs physical device  
-      if (!hostFromExpo || hostFromExpo === 'localhost') {
-        const url = 'http://localhost:3000';
-        console.log('📱 iOS simulator detected, using:', url);
-        return url;
-      }
-    }
-    
-    // Physical device fallback - use detected network IP
-    if (hostFromExpo && hostFromExpo !== 'localhost') {
-      const url = `http://${hostFromExpo}:3000`;
-      console.log('📱 Physical device fallback, using network IP:', url);
-      return url;
-    }
-    
-    // Final fallback
-    const url = 'http://localhost:3000';
-    console.log('🌐 Final fallback to localhost:', url);
-    return url;
-  }
-  
-  // Production API
-  const prodUrl = process.env.EXPO_PUBLIC_API_URL || 'https://api.slotly.co.ke';
-  console.log('🚀 Production mode, using:', prodUrl);
-  return prodUrl;
-}
+// ---------- STRICT base URL (no LAN guessing) ----------
+const envURL =
+  (process.env.EXPO_PUBLIC_API_URL || "").trim() ||
+  (process.env.EXPO_PUBLIC_API_BASE_URL || "").trim() ||
+  (process.env.EXPO_PUBLIC_API_URL_WEB || "").trim();
 
-const BASE_URL = resolveBaseURL();
+export const API_BASE_URL = (envURL.startsWith("http") ? envURL : "https://slotly.onrender.com")
+  .replace(/\/+$/, ""); // strip trailing slash
+
+console.log("🔗 API base URL:", API_BASE_URL);
+
 const ACCESS_KEY = 'accessToken';
 const REFRESH_KEY = 'refreshToken';
-
-// Export BASE_URL for use in other modules
-export const API_BASE_URL = BASE_URL;
 
 // Updated timeouts - longer default timeout for Next.js dev compilation
 const DEFAULT_TIMEOUT = 
@@ -143,19 +79,13 @@ async function clearSession() {
 /* ------------------------------- Axios ----------------------------------- */
 
 const api = axios.create({
-  baseURL: BASE_URL,
+  baseURL: API_BASE_URL,
   timeout: DEFAULT_TIMEOUT,
   headers: { 
     'Content-Type': 'application/json',
     'Accept': 'application/json'
   },
 });
-
-// Log the final configuration for debugging
-console.log('🔗 API Client initialized with:');
-console.log('  - baseURL:', BASE_URL);
-console.log('  - timeout:', DEFAULT_TIMEOUT);
-console.log('  - API_BASE_URL export:', API_BASE_URL);
 
 /* ------------------------------ Auth utils ------------------------------- */
 
@@ -190,7 +120,7 @@ async function refreshTokensOrThrow() {
 
   try {
     const resp = await axios.post(
-      `${BASE_URL}/api/auth/refresh`,
+      `${API_BASE_URL}/api/auth/refresh`,
       { refreshToken },
       { 
         timeout: REFRESH_TIMEOUT_MS,
