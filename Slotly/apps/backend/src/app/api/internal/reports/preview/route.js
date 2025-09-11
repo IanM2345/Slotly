@@ -1,9 +1,9 @@
-/* import { NextResponse } from 'next/server';
+ import { NextResponse } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
 import { generateMonthlyReport } from 'import * as Sentry from ';
-import { getBusinessFromUser } from '@/shared/authHelpers';
+
 
 const prisma = new PrismaClient();
 
@@ -24,16 +24,6 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    const business = await getBusinessFromUser(decoded.userId);
-    if (!business) {
-      return NextResponse.json({ error: 'Business not found' }, { status: 404 });
-    }
-
-    const data = await request.json();
-    const period = data.period;
-    if (!period) {
-      return NextResponse.json({ error: 'Missing report period' }, { status: 400 });
-    }
 
     
     const buffer = await generateMonthlyReport(business.id, period);
@@ -64,4 +54,4 @@ export async function POST(request) {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
- */
+ 
