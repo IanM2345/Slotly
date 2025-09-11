@@ -2,8 +2,6 @@ import { NextResponse } from 'next/server';
 import prisma from '@/generated/prisma';
 import * as Sentry from '@sentry/nextjs';
 
-const prisma= new PrismaClient();
-
 export async function POST(request) {
   try {
     const { businessId, title, budget, startDate, endDate } = await request.json();
