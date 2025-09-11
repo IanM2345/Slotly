@@ -3,7 +3,7 @@ import * as Sentry from '@sentry/nextjs';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
 import { getPlanFeatures } from '@/shared/subscriptionPlanUtils';
-import { runMonthlyReportRunner } from '@/lib/reports/runMonthlyReportRunner';
+import { runMonthlyReportRunner } from '@/lib/reports/sendMonthlyReport';
 
 const prisma = new PrismaClient();
 
