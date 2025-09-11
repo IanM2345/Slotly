@@ -2,7 +2,7 @@
 import * as Sentry from '@sentry/nextjs'; 
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
-import { verifyToken } from '@/lib/auth'; 
+import { verifyToken } from '@/middleware/auth'; 
 
 const prisma = new PrismaClient();
 

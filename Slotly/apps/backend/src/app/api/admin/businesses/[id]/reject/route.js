@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+/* import { NextResponse } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
@@ -204,4 +204,4 @@ async function handleReject(req, ctx) {
 // Support both POST and PATCH so the client doesn't 405
 export async function POST(req, ctx) { return handleReject(req, ctx); }
 export async function PATCH(req, ctx) { return handleReject(req, ctx); }
-export async function OPTIONS() { return NextResponse.json({}, { status: 204 }); }
+export async function OPTIONS() { return NextResponse.json({}, { status: 204 }); } */
