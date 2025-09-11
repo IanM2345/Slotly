@@ -1,7 +1,7 @@
 // apps/backend/src/app/api/subscriptions/route.js
 import { NextResponse } from "next/server";
 import { PrismaClient } from "@/generated/prisma";
-import { requireAuth } from "@/lib/auth";
+import { requireAuth } from "@/lib/token";
 
 const prisma = globalThis._prisma ?? new PrismaClient();
 if (process.env.NODE_ENV !== "production") globalThis._prisma = prisma;

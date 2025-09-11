@@ -1,4 +1,4 @@
-// apps/backend/src/app/api/promo/link/route.js
+/* // apps/backend/src/app/api/promo/link/route.js
 import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
@@ -125,4 +125,4 @@ export async function GET(request) {
     console.error('GET /api/promo/link error:', error);
     return NextResponse.json({ error: 'Failed to fetch promo redemptions' }, { status: 500 });
   }
-}
+} */

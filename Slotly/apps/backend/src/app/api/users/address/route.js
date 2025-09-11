@@ -1,4 +1,4 @@
-import { NextResponse } from 'next.server';
+import { NextResponse } from "next/server";
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
 import * as Sentry from '@sentry/nextjs';
