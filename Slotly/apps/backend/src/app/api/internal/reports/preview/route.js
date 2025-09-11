@@ -1,8 +1,8 @@
- import { NextResponse } from 'next/server';
-import * as Sentry from '@sentry/nextjs';
-import { PrismaClient } from '@/generated/prisma';
+import { NextResponse } from 'next/server';
+import prisma from '@/lib/prisma';              // or '@/generated/prisma' if that's your client
+import * as Sentry from '@sentry/nextjs';      // ← keep this on ONE line
 import { verifyToken } from '@/middleware/auth';
-import { generateMonthlyReport } from 'import * as Sentry from ';
+import { generateMonthlyReport } from '@/lib/reports/generateMonthlyReport'; ';
 
 
 const prisma = new PrismaClient();
