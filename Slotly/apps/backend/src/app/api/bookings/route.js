@@ -1,8 +1,8 @@
 import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@/generated/prisma';
-import { verifyToken } from '@/lib/auth';
-import { sendNotification } from '@/lib/notifications/sendNotification';
+import { verifyToken } from '@/middleware/auth';
+import { sendNotification } from '@/shared/notifications/sendNotification';
 
 const prisma = new PrismaClient();
 
