@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';              // or '@/generated/prisma' if that's your client
 import * as Sentry from '@sentry/nextjs';      // ← keep this on ONE line
 import { verifyToken } from '@/middleware/auth';
-import { generateMonthlyReport } from '@/lib/reports/generateMonthlyReport'; ';
+import { generateMonthlyReport } from '@/lib/reports/generateMonthlyReport'; 
 
 
 const prisma = new PrismaClient();
