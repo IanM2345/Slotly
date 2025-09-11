@@ -82,8 +82,8 @@ export default function BusinessOverview() {
       setLoading(true);
       setError(null);
 
-      // 1) Get 30-day analytics for KPI cards
-      const { kpis } = await getAnalytics(undefined, { period: "30d" });
+      // 1) Get 30-day analytics for KPI cards - NOW WITH TOKEN
+      const { kpis } = await getAnalytics(token, { period: "30d", tz: "Africa/Nairobi" });
       if (!mounted) return;
 
       setKpis({
@@ -286,8 +286,8 @@ export default function BusinessOverview() {
               pill="Last 30 days"
             />
             <MetricCard
-              title="REVENUE (KES)"
-              value={`${((kpis?.revenueMinor ?? 0) / 100).toLocaleString()}`}
+              title="REVENUE"
+              value={`KSh ${Number(kpis?.revenueMinor ?? 0).toLocaleString("en-KE")}`}
               tone="info"
               pill="Last 30 days"
             />
@@ -305,13 +305,11 @@ export default function BusinessOverview() {
             />
           </View>
 
-          {/* QUICK LINKS - REMOVED COUPONS AND BILLING */}
+          {/* QUICK LINKS - REMOVED ANALYTICS AND REPORTS */}
           <View style={styles.quickLinks}>
-            <QuickLink href="/business/dashboard/analytics" label="Analytics" icon="chart-box" />
             <QuickLink href="/business/dashboard/team" label="Staff" icon="account-group" />
             <QuickLink href="/business/dashboard/bookings/manage" label="Bookings" icon="calendar" />
             <QuickLink href="/business/dashboard/services" label="Services" icon="briefcase" />
-            <QuickLink href="/business/dashboard/reports" label="Reports" icon="file-chart" />
             <QuickLink href="/business/dashboard/profile" label="Profile" icon="store" />
           </View>
 
@@ -319,7 +317,9 @@ export default function BusinessOverview() {
           <Surface elevation={1} style={[styles.sectionCard, { backgroundColor: theme.colors.surface }]}>
             <View style={styles.sectionHeader}>
               <Text variant="titleLarge" style={{ fontWeight: "800", color: "#0F4BAC" }}>Next 5 Upcoming Bookings</Text>
-              <Link href="./bookings/manage" asChild><Button mode="text">View all</Button></Link>
+              <Button mode="text" onPress={() => router.push("/business/dashboard/bookings/manage")}>
+                View all
+              </Button>
             </View>
             <Divider />
             <View style={{ paddingVertical: 8 }}>

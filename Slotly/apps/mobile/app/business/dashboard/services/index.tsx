@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { View, ScrollView, StyleSheet, Alert } from "react-native";
 import {
@@ -22,7 +20,14 @@ import { VerificationGate } from "../../../../components/VerificationGate";
 import { Section } from "../../../../components/Section";
 import { FilterChipsRow } from "../../../../components/FilterChipsRow";
 import { useSession } from "../../../../context/SessionContext";
-import * as Sentry from "sentry-expo";
+
+// Import Sentry conditionally to avoid the __extends error
+let Sentry: any = null;
+try {
+  Sentry = require("sentry-expo");
+} catch (error) {
+  console.warn("Sentry import failed:", error);
+}
 
 // API (new module)
 import {
@@ -83,6 +88,7 @@ export default function ServicesIndexScreen() {
   const [cCategory, setCCategory] = useState<Category>("hair");
   const [allStaff, setAllStaff] = useState<StaffLite[]>([]);
   const [createSelected, setCreateSelected] = useState<string[]>([]);
+  const [loadingStaff, setLoadingStaff] = useState(false);
 
   // manage staff dialog
   const [manageSelected, setManageSelected] = useState<string[]>([]);
@@ -101,19 +107,36 @@ export default function ServicesIndexScreen() {
         listBundles(),
       ]);
 
-      // Get data from results
-      const svc = (svcRes.status === "fulfilled" && Array.isArray(svcRes.value)) ? svcRes.value : [];
-      const bun = (bunRes.status === "fulfilled" && Array.isArray(bunRes.value)) ? bunRes.value : [];
-      
-      // Extra client-side guard by business id
-      setServices(myBusinessId ? svc.filter(s => s.businessId === myBusinessId) : svc);
-      setBundles(myBusinessId ? bun.filter(b => b.businessId === myBusinessId) : bun);
+      // Handle service results
+      if (svcRes.status === "fulfilled" && Array.isArray(svcRes.value)) {
+        const filteredServices = myBusinessId 
+          ? svcRes.value.filter(s => s.businessId === myBusinessId) 
+          : svcRes.value;
+        setServices(filteredServices);
+      } else {
+        console.error("Failed to load services:", svcRes.status === "rejected" ? svcRes.reason : "Invalid data");
+        setServices([]);
+      }
+
+      // Handle bundle results
+      if (bunRes.status === "fulfilled" && Array.isArray(bunRes.value)) {
+        const filteredBundles = myBusinessId 
+          ? bunRes.value.filter(b => b.businessId === myBusinessId) 
+          : bunRes.value;
+        setBundles(filteredBundles);
+      } else {
+        console.error("Failed to load bundles:", bunRes.status === "rejected" ? bunRes.reason : "Invalid data");
+        setBundles([]);
+      }
       
     } catch (err: any) {
       // Should rarely hit due to allSettled, but keep resilient
-      setServices([]); setBundles([]);
+      setServices([]); 
+      setBundles([]);
       console.error("Error loading services:", err?.message || err);
-      Sentry.Native.captureException(err);
+      if (Sentry?.Native?.captureException) {
+        Sentry.Native.captureException(err);
+      }
     } finally {
       setLoading(false);
     }
@@ -123,7 +146,7 @@ export default function ServicesIndexScreen() {
     loadData();
   }, [selectedCategory]);
 
-  // ✅ NEW: Refresh when screen comes into focus (after creating bundles)
+  // Refresh when screen comes into focus (after creating bundles)
   useFocusEffect(
     useCallback(() => {
       loadData();
@@ -143,12 +166,18 @@ export default function ServicesIndexScreen() {
   async function openCreate() {
     try {
       setCreateOpen(true);
+      setLoadingStaff(true);
       // load approved staff list for selection
       const staffResp = await listStaff(myBusinessId);
       setAllStaff(staffResp?.approvedStaff || []);
     } catch (e: any) {
-      console.error(e);
-      Sentry.Native.captureException(e);
+      console.error("Error loading staff for create dialog:", e);
+      setAllStaff([]);
+      if (Sentry?.Native?.captureException) {
+        Sentry.Native.captureException(e);
+      }
+    } finally {
+      setLoadingStaff(false);
     }
   }
 
@@ -160,13 +189,21 @@ export default function ServicesIndexScreen() {
 
   async function handleCreate() {
     try {
-      if (!cName || !cPrice || !cDuration) {
+      if (!cName.trim() || !cPrice || !cDuration) {
         return Alert.alert("Missing fields", "Name, price and duration are required.");
       }
+
+      const priceNum = Number(cPrice);
+      const durationNum = Number(cDuration);
+
+      if (priceNum <= 0 || durationNum <= 0) {
+        return Alert.alert("Invalid values", "Price and duration must be greater than 0.");
+      }
+
       const payload = {
         name: cName.trim(),
-        price: Number(cPrice),
-        duration: Number(cDuration),
+        price: priceNum,
+        duration: durationNum,
         category: cCategory,
         available: true,
       };
@@ -174,15 +211,30 @@ export default function ServicesIndexScreen() {
 
       // pre-assign selected staff
       for (const staffId of createSelected) {
-        await assignStaffToService({ serviceId: created.id, staffId });
+        try {
+          await assignStaffToService({ serviceId: created.id, staffId });
+        } catch (staffError) {
+          console.warn("Failed to assign staff during create:", staffId, staffError);
+        }
       }
 
       setCreateOpen(false);
-      setCName(""); setCPrice(""); setCDuration(""); setCCategory("hair"); setCreateSelected([]);
+      setCName(""); 
+      setCPrice(""); 
+      setCDuration(""); 
+      setCCategory("hair"); 
+      setCreateSelected([]);
+      
       await loadData();
+      
+      Alert.alert("Success", "Service created successfully!");
+      
     } catch (e: any) {
-      Alert.alert("Create failed", e?.message || "Could not create service");
-      Sentry.Native.captureException(e);
+      const errorMsg = e?.response?.data?.error || e?.message || "Could not create service";
+      Alert.alert("Create failed", errorMsg);
+      if (Sentry?.Native?.captureException) {
+        Sentry.Native.captureException(e);
+      }
     }
   }
 
@@ -191,12 +243,18 @@ export default function ServicesIndexScreen() {
   async function openManage(svc: ServiceRow) {
     try {
       setManageOpen(svc);
+      setLoadingStaff(true);
       const staffResp = await listStaff(myBusinessId);
       setAllStaff(staffResp?.approvedStaff || []);
       setManageSelected((svc.staff || []).map((s) => s.id));
     } catch (e: any) {
-      console.error(e);
-      Sentry.Native.captureException(e);
+      console.error("Error loading staff for manage dialog:", e);
+      setAllStaff([]);
+      if (Sentry?.Native?.captureException) {
+        Sentry.Native.captureException(e);
+      }
+    } finally {
+      setLoadingStaff(false);
     }
   }
 
@@ -209,6 +267,7 @@ export default function ServicesIndexScreen() {
   async function saveManage() {
     try {
       if (!manageOpen) return;
+      
       const original = new Set((manageOpen.staff || []).map((s) => s.id));
       const now = new Set(manageSelected);
 
@@ -227,9 +286,15 @@ export default function ServicesIndexScreen() {
 
       setManageOpen(null);
       await loadData();
+      
+      Alert.alert("Success", "Staff assignments updated successfully!");
+      
     } catch (e: any) {
-      Alert.alert("Update failed", e?.message || "Could not update assignments");
-      Sentry.Native.captureException(e);
+      const errorMsg = e?.response?.data?.error || e?.message || "Could not update assignments";
+      Alert.alert("Update failed", errorMsg);
+      if (Sentry?.Native?.captureException) {
+        Sentry.Native.captureException(e);
+      }
     }
   }
 
@@ -246,21 +311,74 @@ export default function ServicesIndexScreen() {
   async function saveEdit() {
     try {
       if (!editOpen) return;
+
+      if (!cName.trim() || !cPrice || !cDuration) {
+        return Alert.alert("Missing fields", "Name, price and duration are required.");
+      }
+
+      const priceNum = Number(cPrice);
+      const durationNum = Number(cDuration);
+
+      if (priceNum <= 0 || durationNum <= 0) {
+        return Alert.alert("Invalid values", "Price and duration must be greater than 0.");
+      }
+
       await updateService({
         id: editOpen.id,
         name: cName.trim(),
-        price: Number(cPrice),
-        duration: Number(cDuration),
+        price: priceNum,
+        duration: durationNum,
         category: cCategory,
       });
+      
       setEditOpen(null);
-      setCName(""); setCPrice(""); setCDuration("");
+      setCName(""); 
+      setCPrice(""); 
+      setCDuration("");
+      
       await loadData();
+      
+      Alert.alert("Success", "Service updated successfully!");
+      
     } catch (e: any) {
-      Alert.alert("Save failed", e?.message || "Could not update service");
-      Sentry.Native.captureException(e);
+      const errorMsg = e?.response?.data?.error || e?.message || "Could not update service";
+      Alert.alert("Save failed", errorMsg);
+      if (Sentry?.Native?.captureException) {
+        Sentry.Native.captureException(e);
+      }
     }
   }
+
+  /* -------------------------- Delete service -------------------------- */
+
+  async function deleteServiceHandler(serviceId: string) {
+    try {
+      await deleteService({ id: serviceId });
+      await loadData();
+      Alert.alert("Success", "Service deleted successfully");
+    } catch (e: any) {
+      const errorMsg = e?.response?.data?.error || e?.message || "Could not delete service";
+      Alert.alert("Delete failed", errorMsg);
+      if (Sentry?.Native?.captureException) {
+        Sentry.Native.captureException(e);
+      }
+    }
+  }
+
+  const confirmDelete = (service: ServiceRow) => {
+    Alert.alert(
+      "Delete Service", 
+      `Are you sure you want to delete "${service.name}"? This action cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Delete", 
+          style: "destructive", 
+          onPress: () => deleteServiceHandler(service.id) 
+        }
+      ]
+    );
+  };
 
   /* --------------------------------- UI ---------------------------------- */
 
@@ -268,7 +386,7 @@ export default function ServicesIndexScreen() {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={theme.colors.primary} />
-        <Text style={styles.loadingText}>Loading services…</Text>
+        <Text style={styles.loadingText}>Loading services...</Text>
       </View>
     );
   }
@@ -277,7 +395,12 @@ export default function ServicesIndexScreen() {
     <VerificationGate>
       <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={() => router.back()} />
+          <IconButton 
+            icon="arrow-left" 
+            size={24} 
+            iconColor={theme.colors.onSurface} 
+            onPress={() => router.back()} 
+          />
           <Text style={styles.title}>Services & Bundles</Text>
         </View>
 
@@ -299,7 +422,12 @@ export default function ServicesIndexScreen() {
 
         {/* Actions */}
         <View style={styles.actionContainer}>
-          <Button mode="outlined" onPress={openCreate} style={styles.actionButton} icon="plus">
+          <Button 
+            mode="outlined" 
+            onPress={openCreate} 
+            style={styles.actionButton} 
+            icon="plus"
+          >
             Add Service
           </Button>
           <Button
@@ -338,11 +466,30 @@ export default function ServicesIndexScreen() {
                   )}
 
                   <View style={styles.serviceActions}>
-                    <Button mode="outlined" compact style={styles.serviceActionBtn} onPress={() => openEdit(service)}>
+                    <Button 
+                      mode="outlined" 
+                      compact 
+                      style={styles.serviceActionBtn} 
+                      onPress={() => openEdit(service)}
+                    >
                       Edit
                     </Button>
-                    <Button mode="contained" compact style={styles.serviceActionBtn} onPress={() => openManage(service)}>
+                    <Button 
+                      mode="contained" 
+                      compact 
+                      style={styles.serviceActionBtn} 
+                      onPress={() => openManage(service)}
+                    >
                       Manage
+                    </Button>
+                    <Button 
+                      mode="text" 
+                      compact 
+                      style={styles.serviceActionBtn} 
+                      onPress={() => confirmDelete(service)}
+                      textColor={theme.colors.error}
+                    >
+                      Delete
                     </Button>
                   </View>
                 </Surface>
@@ -351,7 +498,11 @@ export default function ServicesIndexScreen() {
           </Section>
         ) : (
           <Section title="Services">
-            <Text style={{ color: "#6B7280", paddingHorizontal: 16 }}>No services yet.</Text>
+            <Text style={{ color: "#6B7280", paddingHorizontal: 16 }}>
+              {selectedCategory[0] === "All Services" 
+                ? "No services yet. Create your first service above!" 
+                : `No ${selectedCategory[0].toLowerCase()} services yet.`}
+            </Text>
           </Section>
         )}
 
@@ -402,7 +553,9 @@ export default function ServicesIndexScreen() {
           </Section>
         ) : (
           <Section title="Service Bundles">
-            <Text style={{ color: "#6B7280", paddingHorizontal: 16 }}>No bundled services yet.</Text>
+            <Text style={{ color: "#6B7280", paddingHorizontal: 16 }}>
+              No bundled services yet. Create service bundles to offer discounts!
+            </Text>
           </Section>
         ))}
 
@@ -411,17 +564,49 @@ export default function ServicesIndexScreen() {
 
       {/* Create dialog */}
       <Portal>
-        <Dialog visible={createOpen} onDismiss={() => setCreateOpen(false)}>
+        <Dialog 
+          visible={createOpen} 
+          onDismiss={() => setCreateOpen(false)}
+          dismissable={!loadingStaff}
+        >
           <Dialog.Title>Add Service</Dialog.Title>
           <Dialog.Content>
-            <TextInput label="Name" value={cName} onChangeText={setCName} />
+            <TextInput 
+              label="Name *" 
+              value={cName} 
+              onChangeText={setCName}
+              placeholder="e.g. Haircut & Style"
+              disabled={loadingStaff}
+            />
             <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
-              <TextInput style={{ flex: 1 }} label="Price (KES)" keyboardType="numeric" value={cPrice} onChangeText={setCPrice} />
-              <TextInput style={{ flex: 1 }} label="Duration (min)" keyboardType="numeric" value={cDuration} onChangeText={setCDuration} />
+              <TextInput 
+                style={{ flex: 1 }} 
+                label="Price (KES) *" 
+                keyboardType="numeric" 
+                value={cPrice} 
+                onChangeText={setCPrice}
+                placeholder="0"
+                disabled={loadingStaff}
+              />
+              <TextInput 
+                style={{ flex: 1 }} 
+                label="Duration (min) *" 
+                keyboardType="numeric" 
+                value={cDuration} 
+                onChangeText={setCDuration}
+                placeholder="0"
+                disabled={loadingStaff}
+              />
             </View>
             <View style={{ flexDirection: "row", gap: 6, marginTop: 8 }}>
               {(["hair", "spa", "nails"] as Category[]).map((cat) => (
-                <Chip key={cat} selected={cCategory === cat} onPress={() => setCCategory(cat)} compact>
+                <Chip 
+                  key={cat} 
+                  selected={cCategory === cat} 
+                  onPress={() => setCCategory(cat)} 
+                  compact
+                  disabled={loadingStaff}
+                >
                   {cat.toUpperCase()}
                 </Chip>
               ))}
@@ -429,8 +614,10 @@ export default function ServicesIndexScreen() {
 
             <Divider style={{ marginVertical: 12 }} />
             <Text style={{ fontWeight: "600", marginBottom: 8 }}>Assign Staff (optional)</Text>
-            {allStaff.length === 0 ? (
-              <Text style={{ color: "#6B7280" }}>No approved staff yet.</Text>
+            {loadingStaff ? (
+              <Text style={{ color: "#6B7280", fontStyle: "italic" }}>Loading staff...</Text>
+            ) : allStaff.length === 0 ? (
+              <Text style={{ color: "#6B7280" }}>No approved staff available to assign.</Text>
             ) : (
               allStaff.map((s) => (
                 <View key={s.id} style={{ flexDirection: "row", alignItems: "center", marginBottom: 6 }}>
@@ -444,18 +631,28 @@ export default function ServicesIndexScreen() {
             )}
           </Dialog.Content>
           <Dialog.Actions>
-            <Button onPress={() => setCreateOpen(false)}>Cancel</Button>
-            <Button onPress={handleCreate}>Create</Button>
+            <Button onPress={() => setCreateOpen(false)} disabled={loadingStaff}>
+              Cancel
+            </Button>
+            <Button onPress={handleCreate} disabled={loadingStaff}>
+              Create
+            </Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>
 
       {/* Manage staff dialog */}
       <Portal>
-        <Dialog visible={!!manageOpen} onDismiss={() => setManageOpen(null)}>
-          <Dialog.Title>Manage Staff</Dialog.Title>
+        <Dialog 
+          visible={!!manageOpen} 
+          onDismiss={() => setManageOpen(null)}
+          dismissable={!loadingStaff}
+        >
+          <Dialog.Title>Manage Staff - {manageOpen?.name}</Dialog.Title>
           <Dialog.Content>
-            {allStaff.length === 0 ? (
+            {loadingStaff ? (
+              <Text style={{ color: "#6B7280", fontStyle: "italic" }}>Loading staff...</Text>
+            ) : allStaff.length === 0 ? (
               <Text style={{ color: "#6B7280" }}>No approved staff to assign.</Text>
             ) : (
               allStaff.map((s) => (
@@ -470,8 +667,12 @@ export default function ServicesIndexScreen() {
             )}
           </Dialog.Content>
           <Dialog.Actions>
-            <Button onPress={() => setManageOpen(null)}>Close</Button>
-            <Button onPress={saveManage}>Save</Button>
+            <Button onPress={() => setManageOpen(null)} disabled={loadingStaff}>
+              Close
+            </Button>
+            <Button onPress={saveManage} disabled={loadingStaff}>
+              Save
+            </Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>
@@ -479,16 +680,40 @@ export default function ServicesIndexScreen() {
       {/* Edit dialog */}
       <Portal>
         <Dialog visible={!!editOpen} onDismiss={() => setEditOpen(null)}>
-          <Dialog.Title>Edit Service</Dialog.Title>
+          <Dialog.Title>Edit Service - {editOpen?.name}</Dialog.Title>
           <Dialog.Content>
-            <TextInput label="Name" value={cName} onChangeText={setCName} />
+            <TextInput 
+              label="Name *" 
+              value={cName} 
+              onChangeText={setCName}
+              placeholder="e.g. Haircut & Style"
+            />
             <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
-              <TextInput style={{ flex: 1 }} label="Price (KES)" keyboardType="numeric" value={cPrice} onChangeText={setCPrice} />
-              <TextInput style={{ flex: 1 }} label="Duration (min)" keyboardType="numeric" value={cDuration} onChangeText={setCDuration} />
+              <TextInput 
+                style={{ flex: 1 }} 
+                label="Price (KES) *" 
+                keyboardType="numeric" 
+                value={cPrice} 
+                onChangeText={setCPrice}
+                placeholder="0"
+              />
+              <TextInput 
+                style={{ flex: 1 }} 
+                label="Duration (min) *" 
+                keyboardType="numeric" 
+                value={cDuration} 
+                onChangeText={setCDuration}
+                placeholder="0"
+              />
             </View>
             <View style={{ flexDirection: "row", gap: 6, marginTop: 8 }}>
               {(["hair", "spa", "nails"] as Category[]).map((cat) => (
-                <Chip key={cat} selected={cCategory === cat} onPress={() => setCCategory(cat)} compact>
+                <Chip 
+                  key={cat} 
+                  selected={cCategory === cat} 
+                  onPress={() => setCCategory(cat)} 
+                  compact
+                >
                   {cat.toUpperCase()}
                 </Chip>
               ))}
@@ -555,10 +780,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 12,
   },
-  serviceEmoji: {
-    fontSize: 32,
-    marginRight: 12,
-  },
   serviceInfo: {
     flex: 1,
   },
@@ -585,12 +806,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#6B7280",
   },
-  serviceDescription: {
-    fontSize: 14,
-    color: "#374151",
-    marginBottom: 16,
-    lineHeight: 20,
-  },
   serviceActions: {
     flexDirection: "row",
     gap: 8,
@@ -614,10 +829,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 12,
   },
-  bundleEmoji: {
-    fontSize: 32,
-    marginRight: 12,
-  },
   bundleInfo: {
     flex: 1,
   },
@@ -626,15 +837,6 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: "#1F2937",
     marginBottom: 4,
-  },
-  savingsChip: {
-    backgroundColor: "#FFF6EE",
-    alignSelf: "flex-start",
-  },
-  savingsText: {
-    color: "#E66400",
-    fontSize: 10,
-    fontWeight: "bold",
   },
   bundlePricing: {
     alignItems: "flex-end",

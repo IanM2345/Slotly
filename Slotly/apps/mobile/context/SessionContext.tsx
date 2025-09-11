@@ -58,7 +58,7 @@ interface SessionContextType {
   ready: boolean;
   setAuth: (token: string | null, user?: SessionUser | null) => Promise<void>;
   signOut: () => Promise<void>;
-  setUser: (user: SessionUser | null) => void;
+  setUser: React.Dispatch<React.SetStateAction<SessionUser | null>>;
   updateBusiness: (updates: Partial<BusinessProfile>) => void;
   logout?: () => Promise<void>; // deprecated
 }
@@ -74,9 +74,9 @@ const defaultCtx: SessionContextType = {
   async signOut() {
     throw new Error("SessionProvider not mounted");
   },
-  setUser() {
-    throw new Error("SessionProvider not mounted");
-  },
+  setUser: (() => { 
+    throw new Error("SessionProvider not mounted"); 
+  }) as React.Dispatch<React.SetStateAction<SessionUser | null>>,
   updateBusiness() {
     throw new Error("SessionProvider not mounted");
   },

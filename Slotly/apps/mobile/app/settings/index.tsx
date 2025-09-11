@@ -1,9 +1,6 @@
 // apps/mobile/app/settings/index.tsx
-"use client";
-
 import React, { useEffect, useState } from "react";
-import * as Sentry from "sentry-expo"; // mobile Sentry
-import { View, ScrollView, StyleSheet } from "react-native";
+import { View, ScrollView, StyleSheet, Alert } from "react-native";
 import {
   Text,
   Surface,
@@ -13,80 +10,211 @@ import {
   TouchableRipple,
   Button,
   useTheme,
+  ActivityIndicator,
 } from "react-native-paper";
 import { useRouter } from "expo-router";
 import { useSession } from "../../context/SessionContext";
 import { getNotificationsEnabled, setNotificationsEnabled } from "../../lib/settings/api";
 import { meHeartbeat } from "../../lib/api/modules/auth";
 
+// Import Sentry conditionally to avoid the __extends error
+let Sentry: any = null;
+try {
+  Sentry = require("sentry-expo");
+} catch (error) {
+  console.warn("Sentry import failed:", error);
+}
+
 export default function SettingsScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { token, user, setUser, signOut } = useSession(); // Added signOut from context
+  const { token, user, setUser, signOut } = useSession();
   const [notificationsEnabledState, setNotificationsEnabledState] = useState(true);
   const [verifyingRole, setVerifyingRole] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false); // Added loading state
+  const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
-    getNotificationsEnabled().then(setNotificationsEnabledState).catch(() => {});
+    getNotificationsEnabled()
+      .then(setNotificationsEnabledState)
+      .catch(() => {
+        // Silently fail, keep default state
+      });
   }, []);
 
   const ONBOARDING_START = "/business/onboarding" as const;
 
- const handleBack = () => router.replace('/(tabs)/profile' as any);
+  const handleBack = () => router.replace('/(tabs)/profile' as any);
+
+  // Better navigation helper with error handling
   const handleNavigation = (route: string) => {
-    // Keep your existing loose navigation helper
-    router.push(route as any);
-  };
-
-  // 🔐 Verify role from backend using current token -> merge into session
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      if (!token) return;
-      try {
-        setVerifyingRole(true);
-        const fresh = await meHeartbeat(); // server-authoritative user { id, role, ... }
-        if (mounted && fresh) {
-          // Keep any client-only fields, prefer server ones
-          setUser({ ...(user ?? {}), ...fresh });
-        }
-      } catch (e) {
-        // capture but don't block settings
-        Sentry.Native.captureException(e);
-      } finally {
-        mounted && setVerifyingRole(false);
-      }
-    })();
-    return () => { mounted = false; };
-  }, [token]);
-
-  // 🎯 Role-aware primary action
-  const role = user?.role; // 'CUSTOMER' | 'STAFF' | 'BUSINESS_OWNER' | 'ADMIN' | ...
-  const toTitle = (r?: string) => {
-    switch (r) {
-      case "CUSTOMER": return "Switch to Business Account";
-      case "STAFF": return "Go to Staff Dashboard";
-      case "BUSINESS_OWNER": return "Go to Business Dashboard";
-      case "ADMIN": return "Open Admin Console";
-      default: return "Verify Account";
+    try {
+      router.push(route as any);
+    } catch (error) {
+      console.error("Navigation error:", error);
+      Alert.alert("Navigation Error", "Unable to navigate to that page.");
     }
   };
-  const goPrimary = () => {
-    if (role === "CUSTOMER") return router.push("/business/onboarding" as any);
-    if (role === "STAFF") return router.push("/business/dashboard/staff" as any);
-    if (role === "BUSINESS_OWNER") return router.push("/business/dashboard" as any);
-    if (role === "ADMIN") return router.push("/admin" as any);
-    return router.push("/business/onboarding" as any);
+
+  // Role verification from backend using current token
+  useEffect(() => {
+    let mounted = true;
+    
+    const verifyRole = async () => {
+      if (!token) return;
+      
+      try {
+        setVerifyingRole(true);
+        const fresh = await meHeartbeat();
+        
+        if (mounted && fresh) {
+          // Merge server data with client state, prefer server data
+          setUser(prevUser => ({
+            ...(prevUser ?? {}),
+            ...fresh,
+          }));
+        }
+      } catch (e: any) {
+        console.error("Role verification failed:", e?.message);
+        
+        // Don't show error to user for role verification failures
+        // Just capture for monitoring
+        if (Sentry?.Native?.captureException) {
+          Sentry.Native.captureException(e);
+        }
+        
+        // If it's an auth error, might need to logout
+        if (e?.response?.status === 401) {
+          console.warn("Authentication expired during role check");
+          // Could trigger logout here if needed
+        }
+      } finally {
+        if (mounted) {
+          setVerifyingRole(false);
+        }
+      }
+    };
+
+    verifyRole();
+    
+    return () => { 
+      mounted = false; 
+    };
+  }, [token, setUser]);
+
+  // Role-aware primary action
+  const role = user?.role; // 'CUSTOMER' | 'STAFF' | 'BUSINESS_OWNER' | 'ADMIN'
+  
+  const getButtonTitle = (userRole?: string) => {
+    switch (userRole) {
+      case "CUSTOMER": 
+        return "Switch to Business Account";
+      case "STAFF": 
+        return "Go to Staff Dashboard";
+      case "BUSINESS_OWNER": 
+        return "Go to Business Dashboard";
+      case "ADMIN": 
+        return "Open Admin Console";
+      default: 
+        return "Verify Account";
+    }
   };
 
-  // 🚪 Complete logout implementation
-  const handleLogout = async () => {
-    if (loggingOut) return; // Prevent double-clicks
+  const handlePrimaryAction = () => {
+    try {
+      switch (role) {
+        case "CUSTOMER":
+          return handleSwitchToBusiness();
+        case "STAFF":
+          return router.push("/business/dashboard/staff" as any);
+        case "BUSINESS_OWNER":
+          return router.push("/business/dashboard" as any);
+        case "ADMIN":
+          return router.push("/admin" as any);
+        default:
+          return router.push("/business/onboarding" as any);
+      }
+    } catch (error) {
+      console.error("Primary action error:", error);
+      Alert.alert("Navigation Error", "Unable to perform that action.");
+    }
+  };
+
+  // Improved business account switching
+  const handleSwitchToBusiness = async () => {
+    try {
+      setVerifyingRole(true);
+      
+      // Update local state
+      setUser(prevUser => ({
+        ...(prevUser ?? { accountType: "consumer" as const }),
+        accountType: "business" as const,
+        business: { 
+          ...(prevUser?.business ?? {}), 
+          verificationStatus: "unverified" as const
+        },
+      }));
+      
+      // Navigate to onboarding
+      router.push(ONBOARDING_START as any);
+      
+    } catch (error) {
+      console.error("Switch to business error:", error);
+      Alert.alert("Error", "Unable to switch to business account. Please try again.");
+    } finally {
+      setVerifyingRole(false);
+    }
+  };
+
+  // Better notification settings handling
+  const handleNotificationToggle = async (enabled: boolean) => {
+    const previousState = notificationsEnabledState;
     
+    // Optimistic update
+    setNotificationsEnabledState(enabled);
+    
+    try {
+      await setNotificationsEnabled(enabled);
+    } catch (error) {
+      // Revert on error
+      setNotificationsEnabledState(previousState);
+      
+      Alert.alert(
+        "Settings Error",
+        "Failed to update notification settings. Please try again."
+      );
+      
+      console.error("Notification settings error:", error);
+    }
+  };
+
+  // Complete logout with confirmation
+  const handleLogout = async () => {
+    if (loggingOut) return;
+    
+    // Add confirmation dialog
+    Alert.alert(
+      "Sign Out",
+      "Are you sure you want to sign out?",
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: "Sign Out",
+          style: "destructive",
+          onPress: async () => {
+            await performLogout();
+          },
+        },
+      ]
+    );
+  };
+
+  const performLogout = async () => {
     setLoggingOut(true);
     try {
-      console.log("👋 Logging out...");
+      console.log("Logging out...");
       
       // Call the centralized signOut from SessionContext
       // This will:
@@ -96,11 +224,20 @@ export default function SettingsScreen() {
       // 4. Clear Sentry user context
       await signOut();
       
-      console.log("✅ Logout completed successfully");
+      console.log("Logout completed successfully");
+      
+      // Navigate to login screen - using absolute path
+      router.replace("/(auth)/login" as any);
       
     } catch (error) {
-      // signOut() already handles errors gracefully, so this shouldn't happen
-      console.error("❌ Logout error:", error);
+      console.error("Logout error:", error);
+      
+      // Show user-friendly error message
+      Alert.alert(
+        "Logout Error", 
+        "There was an issue signing out. Please try again.",
+        [{ text: "OK" }]
+      );
       
       // Capture for monitoring but don't block logout
       if (Sentry?.Native?.captureException) {
@@ -108,38 +245,38 @@ export default function SettingsScreen() {
       }
     } finally {
       setLoggingOut(false);
-      
-      // Always navigate to login, regardless of logout success/failure
-      // Replace the entire navigation stack so back button can't return
-      router.replace("auth/login" as any);
     }
-  };
-
-  const handleSwitchToBusiness = () => {
-    // Flip session locally (backend partner will persist)
-    setUser({
-      ...(user ?? { accountType: "consumer" }),
-      accountType: "business",
-      business: { ...(user?.business ?? {}), verificationStatus: "unverified" },
-    });
-    router.push(ONBOARDING_START as any);
   };
 
   return (
     <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
       <View style={[styles.header, { backgroundColor: theme.colors.background }]}>
-        <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onBackground} onPress={handleBack} />
+        <IconButton 
+          icon="arrow-left" 
+          size={24} 
+          iconColor={theme.colors.onBackground} 
+          onPress={handleBack} 
+        />
         <View style={styles.headerContent}>
-          <IconButton icon="cog" size={28} iconColor={theme.colors.onBackground} style={styles.gearIcon} />
-          <Text style={[styles.headerTitle, { color: theme.colors.onBackground }]}>Settings</Text>
+          <IconButton 
+            icon="cog" 
+            size={28} 
+            iconColor={theme.colors.onBackground} 
+            style={styles.gearIcon} 
+          />
+          <Text style={[styles.headerTitle, { color: theme.colors.onBackground }]}>
+            Settings
+          </Text>
         </View>
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {/* Business section */}
         <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>Business</Text>
+          <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>
+            Business
+          </Text>
           <Surface
             style={{
               borderRadius: 16,
@@ -153,21 +290,26 @@ export default function SettingsScreen() {
                 Run your services on Slotly with bookings, payments and analytics.
               </Text>
 
-              {/* Small status line */}
-              <Text style={{ color: theme.colors.onSurfaceVariant, fontSize: 12 }}>
-                {verifyingRole ? "Verifying role…" : `Signed in as ${role ?? "unknown role"}`}
-              </Text>
+              {/* Role status line */}
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                {verifyingRole && <ActivityIndicator size={16} />}
+                <Text style={{ color: theme.colors.onSurfaceVariant, fontSize: 12 }}>
+                  {verifyingRole 
+                    ? "Verifying role..." 
+                    : `Signed in as ${role?.toLowerCase().replace('_', ' ') ?? "unknown role"}`}
+                </Text>
+              </View>
 
               <Button
                 mode="contained"
-                onPress={role === "CUSTOMER" ? handleSwitchToBusiness : goPrimary}
+                onPress={role === "CUSTOMER" ? handleSwitchToBusiness : handlePrimaryAction}
                 disabled={verifyingRole}
                 style={{ borderRadius: 28, marginTop: 4 }}
                 contentStyle={{ paddingVertical: 8 }}
                 labelStyle={{ fontWeight: "700", color: theme.colors.primary }}
                 buttonColor={"#FBC02D"}
               >
-                {toTitle(role)}
+                {getButtonTitle(role)}
               </Button>
             </View>
           </Surface>
@@ -175,32 +317,56 @@ export default function SettingsScreen() {
 
         {/* Personal Information */}
         <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>Personal Information</Text>
+          <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>
+            Personal Information
+          </Text>
 
-          <TouchableRipple onPress={() => handleNavigation("/settings/payment-details")} rippleColor="rgba(0,0,0,0.1)">
-            <List.Item title="Payment Details" titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} style={styles.listItem} />
+          <TouchableRipple 
+            onPress={() => handleNavigation("/settings/payment-details")} 
+            rippleColor="rgba(0,0,0,0.1)"
+          >
+            <List.Item 
+              title="Payment Details" 
+              titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} 
+              style={styles.listItem} 
+            />
           </TouchableRipple>
 
-          <TouchableRipple onPress={() => handleNavigation("/settings/family-and-friends")} rippleColor="rgba(0,0,0,0.1)">
-            <List.Item title="Family and Friends" titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} style={styles.listItem} />
+          <TouchableRipple 
+            onPress={() => handleNavigation("/settings/family-and-friends")} 
+            rippleColor="rgba(0,0,0,0.1)"
+          >
+            <List.Item 
+              title="Family and Friends" 
+              titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} 
+              style={styles.listItem} 
+            />
           </TouchableRipple>
 
-          <TouchableRipple onPress={() => handleNavigation("/settings/address")} rippleColor="rgba(0,0,0,0.1)">
-            <List.Item title="Address" titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} style={styles.listItem} />
+          <TouchableRipple 
+            onPress={() => handleNavigation("/settings/address")} 
+            rippleColor="rgba(0,0,0,0.1)"
+          >
+            <List.Item 
+              title="Address" 
+              titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} 
+              style={styles.listItem} 
+            />
           </TouchableRipple>
         </View>
 
         {/* Notification */}
         <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>Notification</Text>
+          <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>
+            Notification
+          </Text>
           <View style={styles.notificationRow}>
-            <Text style={{ color: theme.colors.onBackground, fontSize: 16 }}>Turn on notifications</Text>
+            <Text style={{ color: theme.colors.onBackground, fontSize: 16 }}>
+              Turn on notifications
+            </Text>
             <Switch
               value={notificationsEnabledState}
-              onValueChange={async (v) => {
-                setNotificationsEnabledState(v);
-                try { await setNotificationsEnabled(v); } catch {}
-              }}
+              onValueChange={handleNotificationToggle}
               color={theme.colors.primary}
             />
           </View>
@@ -208,62 +374,132 @@ export default function SettingsScreen() {
 
         {/* Language */}
         <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>Language</Text>
+          <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>
+            Language
+          </Text>
 
-          <TouchableRipple onPress={() => handleNavigation("/settings/language")} rippleColor="rgba(0,0,0,0.1)">
+          <TouchableRipple 
+            onPress={() => handleNavigation("/settings/language")} 
+            rippleColor="rgba(0,0,0,0.1)"
+          >
             <View style={styles.languageItem}>
               <View>
-                <Text style={[styles.languageLabel, { color: theme.colors.onBackground }]}>Language:</Text>
-                <Text style={[styles.languageValue, { color: theme.colors.onBackground }]}>Automatic(English)</Text>
+                <Text style={[styles.languageLabel, { color: theme.colors.onBackground }]}>
+                  Language:
+                </Text>
+                <Text style={[styles.languageValue, { color: theme.colors.onBackground }]}>
+                  Automatic(English)
+                </Text>
               </View>
-              <IconButton icon="chevron-right" size={24} iconColor={theme.colors.onBackground} />
+              <IconButton 
+                icon="chevron-right" 
+                size={24} 
+                iconColor={theme.colors.onBackground} 
+              />
             </View>
           </TouchableRipple>
 
-          <TouchableRipple onPress={() => handleNavigation("/settings/country")} rippleColor="rgba(0,0,0,0.1)">
+          <TouchableRipple 
+            onPress={() => handleNavigation("/settings/country")} 
+            rippleColor="rgba(0,0,0,0.1)"
+          >
             <View style={styles.languageItem}>
               <View>
-                <Text style={[styles.languageLabel, { color: theme.colors.onBackground }]}>Country:</Text>
-                <Text style={[styles.languageValue, { color: theme.colors.onBackground }]}>Kenya</Text>
+                <Text style={[styles.languageLabel, { color: theme.colors.onBackground }]}>
+                  Country:
+                </Text>
+                <Text style={[styles.languageValue, { color: theme.colors.onBackground }]}>
+                  Kenya
+                </Text>
               </View>
-              <IconButton icon="chevron-right" size={24} iconColor={theme.colors.onBackground} />
+              <IconButton 
+                icon="chevron-right" 
+                size={24} 
+                iconColor={theme.colors.onBackground} 
+              />
             </View>
           </TouchableRipple>
         </View>
 
         {/* Others */}
         <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>Others</Text>
+          <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>
+            Others
+          </Text>
 
-          <TouchableRipple onPress={() => handleNavigation("/settings/change-password")} rippleColor="rgba(0,0,0,0.1)">
+          <TouchableRipple 
+            onPress={() => handleNavigation("/settings/change-password")} 
+            rippleColor="rgba(0,0,0,0.1)"
+          >
             <View style={styles.othersItem}>
-              <Text style={{ color: theme.colors.onBackground, fontSize: 16 }}>Change Password</Text>
-              <IconButton icon="chevron-right" size={24} iconColor={theme.colors.onBackground} />
+              <Text style={{ color: theme.colors.onBackground, fontSize: 16 }}>
+                Change Password
+              </Text>
+              <IconButton 
+                icon="chevron-right" 
+                size={24} 
+                iconColor={theme.colors.onBackground} 
+              />
             </View>
           </TouchableRipple>
 
-          <TouchableRipple onPress={() => handleNavigation("/settings/reviews")} rippleColor="rgba(0,0,0,0.1)">
-            <List.Item title="Reviews" titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} style={styles.listItem} />
+          <TouchableRipple 
+            onPress={() => handleNavigation("/settings/reviews")} 
+            rippleColor="rgba(0,0,0,0.1)"
+          >
+            <List.Item 
+              title="Reviews" 
+              titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} 
+              style={styles.listItem} 
+            />
           </TouchableRipple>
 
-          <TouchableRipple onPress={() => handleNavigation("/settings/support")} rippleColor="rgba(0,0,0,0.1)">
-            <List.Item title="Support" titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} style={styles.listItem} />
+          <TouchableRipple 
+            onPress={() => handleNavigation("/settings/support")} 
+            rippleColor="rgba(0,0,0,0.1)"
+          >
+            <List.Item 
+              title="Support" 
+              titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} 
+              style={styles.listItem} 
+            />
           </TouchableRipple>
 
-          <TouchableRipple onPress={() => handleNavigation("/settings/feedback")} rippleColor="rgba(0,0,0,0.1)">
-            <List.Item title="feedback" titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} style={styles.listItem} />
+          <TouchableRipple 
+            onPress={() => handleNavigation("/settings/feedback")} 
+            rippleColor="rgba(0,0,0,0.1)"
+          >
+            <List.Item 
+              title="Feedback" 
+              titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} 
+              style={styles.listItem} 
+            />
           </TouchableRipple>
 
-          <TouchableRipple onPress={() => handleNavigation("/settings/gift-cards")} rippleColor="rgba(0,0,0,0.1)">
-            <List.Item title="Gift Cards" titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} style={styles.listItem} />
+          <TouchableRipple 
+            onPress={() => handleNavigation("/settings/gift-cards")} 
+            rippleColor="rgba(0,0,0,0.1)"
+          >
+            <List.Item 
+              title="Gift Cards" 
+              titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} 
+              style={styles.listItem} 
+            />
           </TouchableRipple>
 
-          <TouchableRipple onPress={() => handleNavigation("/settings/about")} rippleColor="rgba(0,0,0,0.1)">
-            <List.Item title="About" titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} style={styles.listItem} />
+          <TouchableRipple 
+            onPress={() => handleNavigation("/settings/about")} 
+            rippleColor="rgba(0,0,0,0.1)"
+          >
+            <List.Item 
+              title="About" 
+              titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} 
+              style={styles.listItem} 
+            />
           </TouchableRipple>
         </View>
 
-        {/* Logout - Enhanced with loading state and better UX */}
+        {/* Logout - Enhanced with loading state and confirmation */}
         <View style={styles.logoutSection}>
           <TouchableRipple 
             onPress={handleLogout} 
@@ -274,12 +510,15 @@ export default function SettingsScreen() {
               styles.logoutItem, 
               loggingOut && { opacity: 0.6 }
             ]}>
-              <Text style={[
-                styles.logoutText, 
-                { color: theme.colors.onBackground }
-              ]}>
-                {loggingOut ? "Signing out..." : "Log Out"}
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                {loggingOut && <ActivityIndicator size={16} style={{ marginRight: 8 }} />}
+                <Text style={[
+                  styles.logoutText, 
+                  { color: theme.colors.onBackground }
+                ]}>
+                  {loggingOut ? "Signing out..." : "Log Out"}
+                </Text>
+              </View>
               <IconButton 
                 icon={loggingOut ? "loading" : "arrow-right"} 
                 size={24} 
@@ -297,7 +536,9 @@ export default function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: { 
+    flex: 1 
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -312,19 +553,74 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginRight: 48,
   },
-  gearIcon: { marginRight: 8 },
-  headerTitle: { fontSize: 24, fontWeight: "bold" },
-  scrollView: { flex: 1, paddingHorizontal: 16 },
-  section: { marginBottom: 32 },
-  sectionTitle: { fontSize: 20, fontWeight: "bold", marginBottom: 16 },
-  listItem: { paddingHorizontal: 0, paddingVertical: 8 },
-  listItemTitle: { fontSize: 16, fontWeight: "400" },
-  notificationRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12 },
-  languageItem: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12, paddingHorizontal: 4 },
-  languageLabel: { fontSize: 16, marginBottom: 4 },
-  languageValue: { fontSize: 16, fontWeight: "500" },
-  othersItem: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12, paddingHorizontal: 4 },
-  logoutSection: { marginTop: 16, marginBottom: 24 },
-  logoutItem: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 16, paddingHorizontal: 4 },
-  logoutText: { fontSize: 18, fontWeight: "500" },
+  gearIcon: { 
+    marginRight: 8 
+  },
+  headerTitle: { 
+    fontSize: 24, 
+    fontWeight: "bold" 
+  },
+  scrollView: { 
+    flex: 1, 
+    paddingHorizontal: 16 
+  },
+  section: { 
+    marginBottom: 32 
+  },
+  sectionTitle: { 
+    fontSize: 20, 
+    fontWeight: "bold", 
+    marginBottom: 16 
+  },
+  listItem: { 
+    paddingHorizontal: 0, 
+    paddingVertical: 8 
+  },
+  listItemTitle: { 
+    fontSize: 16, 
+    fontWeight: "400" 
+  },
+  notificationRow: { 
+    flexDirection: "row", 
+    justifyContent: "space-between", 
+    alignItems: "center", 
+    paddingVertical: 12 
+  },
+  languageItem: { 
+    flexDirection: "row", 
+    justifyContent: "space-between", 
+    alignItems: "center", 
+    paddingVertical: 12, 
+    paddingHorizontal: 4 
+  },
+  languageLabel: { 
+    fontSize: 16, 
+    marginBottom: 4 
+  },
+  languageValue: { 
+    fontSize: 16, 
+    fontWeight: "500" 
+  },
+  othersItem: { 
+    flexDirection: "row", 
+    justifyContent: "space-between", 
+    alignItems: "center", 
+    paddingVertical: 12, 
+    paddingHorizontal: 4 
+  },
+  logoutSection: { 
+    marginTop: 16, 
+    marginBottom: 24 
+  },
+  logoutItem: { 
+    flexDirection: "row", 
+    justifyContent: "space-between", 
+    alignItems: "center", 
+    paddingVertical: 16, 
+    paddingHorizontal: 4 
+  },
+  logoutText: { 
+    fontSize: 18, 
+    fontWeight: "500" 
+  },
 });

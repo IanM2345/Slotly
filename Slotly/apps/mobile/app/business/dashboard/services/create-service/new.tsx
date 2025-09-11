@@ -1,47 +1,54 @@
-"use client"
+import { useState } from "react";
+import { View, ScrollView, StyleSheet } from "react-native";
+import { Text, Surface, TextInput, Button, IconButton, Snackbar, useTheme } from "react-native-paper";
+import { useRouter } from "expo-router";
+import { createService } from "../../../../../lib/api/modules/manager";
 
-import { useState } from "react"
-import { View, ScrollView, StyleSheet } from "react-native"
-import { Text, Surface, TextInput, Button, IconButton, Snackbar, useTheme } from "react-native-paper"
-import { useRouter } from "expo-router"
-import { createService } from "../../../../../lib/api/modules/manager"
-import * as Sentry from "sentry-expo"
+// Import Sentry conditionally to avoid the __extends error
+let Sentry: any = null;
+try {
+  Sentry = require("sentry-expo");
+} catch (error) {
+  console.warn("Sentry import failed:", error);
+}
 
-export default function ServiceNew() {
-  const theme = useTheme()
-  const router = useRouter()
-  const [name, setName] = useState("")
-  const [price, setPrice] = useState("")
-  const [duration, setDuration] = useState("")
-  const [emoji, setEmoji] = useState("💼")
-  const [desc, setDesc] = useState("")
-  const [saving, setSaving] = useState(false)
-  const [snack, setSnack] = useState<{ visible: boolean; msg: string }>({ visible: false, msg: "" })
+export default function ServiceNewScreen() {
+  const theme = useTheme();
+  const router = useRouter();
+  const [name, setName] = useState("");
+  const [price, setPrice] = useState("");
+  const [duration, setDuration] = useState("");
+  const [emoji, setEmoji] = useState("💼");
+  const [desc, setDesc] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [snack, setSnack] = useState<{ visible: boolean; msg: string }>({ visible: false, msg: "" });
 
-  const isValid = name.trim().length >= 2 && Number(price) > 0 && Number(duration) > 0
+  const isValid = name.trim().length >= 2 && Number(price) > 0 && Number(duration) > 0;
 
   const save = async () => {
-    if (!isValid) return
-    setSaving(true)
+    if (!isValid) return;
+    setSaving(true);
     try {
       await createService({
         name: name.trim(),
         price: Math.max(0, parseInt(price, 10) || 0),     // whole KSh
         duration: Math.max(0, parseInt(duration, 10) || 0), // minutes
         // category/emoji/desc optional for now
-      })
-      setSnack({ visible: true, msg: "Service created" })
-      setTimeout(() => router.replace(".."), 350)
+      });
+      setSnack({ visible: true, msg: "Service created" });
+      setTimeout(() => router.replace(".."), 350);
     } catch (e: any) {
       setSnack({
         visible: true,
         msg: e?.response?.data?.error || e?.message || "Failed to create service",
-      })
-      Sentry.Native.captureException(e)
+      });
+      if (Sentry?.Native?.captureException) {
+        Sentry.Native.captureException(e);
+      }
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
-  }
+  };
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -93,7 +100,7 @@ export default function ServiceNew() {
         {snack.msg}
       </Snackbar>
     </ScrollView>
-  )
+  );
 }
 
 const styles = StyleSheet.create({
@@ -103,4 +110,4 @@ const styles = StyleSheet.create({
   input: { marginBottom: 12 },
   actions: { flexDirection: "row", gap: 12, paddingHorizontal: 16, marginTop: 12 },
   btn: { flex: 1 },
-})
+});
