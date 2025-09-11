@@ -9,7 +9,7 @@ import { useSession } from "../../../context/SessionContext";
 // ✅ manager client (uses axios with token interceptor)
 import {
   getBusinessProfile as getManagerBusiness, // /api/manager/me
-  getPerformance,                            // /api/manager/performance?start=&end=
+  getAnalytics,                              // /api/manager/analytics (NEW)
   listBookings,                              // /api/manager/bookings
   getSubscription,                           // /api/manager/subscription
   listReviews,                               // /api/manager/reviews
@@ -18,14 +18,11 @@ import {
 
 /* ---------- Local types ---------- */
 type DashboardMetrics = {
-  bookingsToday: number;
-  revenueTodayKES: number;
-  bookingsChangePct?: number;
-  revenueChangePct?: number;
-  cancellationsToday: number;
-  cancellationsDelta?: number;
-  noShowsToday: number;
-  noShowsDelta?: number;
+  totalBookings: number;
+  completed: number;
+  cancelled: number;
+  noShow: number;
+  revenueMinor: number;
 };
 
 type BookingPreview = {
@@ -47,13 +44,14 @@ export default function BusinessOverview() {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
+  const [kpis, setKpis] = useState<DashboardMetrics | null>(null);
   const [upcoming, setUpcoming] = useState<BookingPreview[]>([]);
   
   // Additional state from first file
   const [billing, setBilling] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
   const [reviews, setReviews] = useState<any[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   // Get business logo from user context or profile
   const bizLogo = useMemo(() => {
@@ -77,9 +75,26 @@ export default function BusinessOverview() {
       setLoading(false);
       return;
     }
-    setLoading(true);
+    
+    let mounted = true;
+    
     try {
-      // 1) Get profile first so we have the businessId
+      setLoading(true);
+      setError(null);
+
+      // 1) Get 30-day analytics for KPI cards
+      const { kpis } = await getAnalytics(undefined, { period: "30d" });
+      if (!mounted) return;
+
+      setKpis({
+        totalBookings: kpis.totalBookings,
+        completed: kpis.completed,
+        cancelled: kpis.cancelled,
+        noShow: kpis.noShow,
+        revenueMinor: kpis.revenueMinor,
+      });
+
+      // 2) Get profile first so we have the businessId
       const profileData = await getManagerBusiness();
       setProfile(profileData);
       const businessId =
@@ -94,32 +109,14 @@ export default function BusinessOverview() {
         return;
       }
 
-      // 2) ✅ UPDATED: Use getSubscription instead of getBilling
-      const [perfRes, bookingsRes, subscriptionRes, reviewsRes] = await Promise.allSettled([
-        getPerformance({ start: todayISO, end: todayISO }),   // KPIs for today
+      // 3) Get additional data
+      const [bookingsRes, subscriptionRes, reviewsRes] = await Promise.allSettled([
         listBookings({ businessId }),                         // ✅ pass businessId
         getSubscription(),                                    // ⬅️ use subscription route instead
         listReviews(),                                        // latest reviews
       ]);
 
-      // ----- KPIs -----
-      let bookingsToday = 0;
-      let revenueTodayMinor = 0;
-      let cancellationsToday = 0;
-      let noShowsToday = 0;
-
-      if (perfRes.status === "fulfilled" && perfRes.value) {
-        // Expect either { analytics: { bookings: {YYYY-MM-DD}, revenue: {YYYY-MM-DD} } }
-        // or any shape with today buckets — be defensive:
-        const a = (perfRes.value as any).analytics ?? perfRes.value ?? {};
-        const b = typeof a.bookings === "object" ? a.bookings : {};
-        const r = typeof a.revenue === "object" ? a.revenue : {};
-        bookingsToday = Number.isFinite(b[todayISO]) ? Number(b[todayISO]) : 0;
-        revenueTodayMinor = Number.isFinite(r[todayISO]) ? Number(r[todayISO]) : 0;
-      }
-      const revenueTodayKES = Math.round(revenueTodayMinor / 100);
-
-      // ----- Upcoming bookings (next 5) + cancellations/no-shows -----
+      // ----- Upcoming bookings (next 5) -----
       const nowMs = Date.now();
       if (bookingsRes.status === "fulfilled" && Array.isArray(bookingsRes.value)) {
         const safe = bookingsRes.value as any[];
@@ -145,23 +142,6 @@ export default function BusinessOverview() {
             startTime: b?.startTime,
           }))
         );
-
-        // Calculate same-day cancellations and no-shows
-        const yyyy = new Date().getFullYear();
-        const mm = new Date().getMonth() + 1;
-        const dd = new Date().getDate();
-        
-        for (const b of safe) {
-          if (!b?.startTime) continue;
-          const bookingDate = new Date(b.startTime);
-          if (bookingDate.getFullYear() === yyyy && 
-              bookingDate.getMonth() + 1 === mm && 
-              bookingDate.getDate() === dd) {
-            const status = String(b?.status || "").toUpperCase();
-            if (status === "CANCELLED") cancellationsToday++;
-            if (status === "NO_SHOW") noShowsToday++;
-          }
-        }
       } else {
         setUpcoming([]);
         if (bookingsRes.status === "rejected") {
@@ -209,30 +189,15 @@ export default function BusinessOverview() {
           console.error("Reviews fetch failed:", reviewsRes.reason);
         }
       }
-
-      setMetrics({
-        bookingsToday,
-        revenueTodayKES,
-        bookingsChangePct: 0, // Could calculate from historical data
-        revenueChangePct: 0,  // Could calculate from historical data
-        cancellationsToday,
-        cancellationsDelta: 0, // Could calculate from yesterday's data
-        noShowsToday,
-        noShowsDelta: 0, // Could calculate from yesterday's data
-      });
-    } catch (err) {
-      console.warn("Dashboard fetch failed:", err);
-      setMetrics({
-        bookingsToday: 0,
-        revenueTodayKES: 0,
-        cancellationsToday: 0,
-        noShowsToday: 0,
-      });
-      setUpcoming([]);
+    } catch (e: any) {
+      if (!mounted) return;
+      setError(e?.message || "Failed to load dashboard");
     } finally {
-      setLoading(false);
+      if (mounted) setLoading(false);
     }
-  }, [token, todayISO]);
+    
+    return () => { mounted = false; };
+  }, [token]);
 
   useEffect(() => {
     fetchAll();
@@ -299,128 +264,143 @@ export default function BusinessOverview() {
         </View>
       </View>
 
-      {/* METRICS */}
-      <View style={[styles.metricsGrid, oneCol && { gap: 14 }]}>
-        <MetricCard
-          title="TODAY'S BOOKINGS"
-          value={metrics?.bookingsToday ?? (loading ? "…" : 0)}
-          tone="info"
-          pill={`${sign(metrics?.bookingsChangePct)}% from yesterday`}
-        />
-        <MetricCard
-          title="TODAY'S REVENUE"
-          value={`KSh ${(metrics?.revenueTodayKES ?? 0).toLocaleString()}`}
-          tone="info"
-          pill={`${sign(metrics?.revenueChangePct)}% from yesterday`}
-        />
-        <MetricCard
-          title="CANCELLATIONS"
-          value={metrics?.cancellationsToday ?? (loading ? "…" : 0)}
-          tone="danger"
-          pill={`${delta(metrics?.cancellationsDelta)} from yesterday`}
-        />
-        <MetricCard
-          title="NO SHOWS"
-          value={metrics?.noShowsToday ?? (loading ? "…" : 0)}
-          tone="success"
-          pill={`${delta(metrics?.noShowsDelta)} from yesterday`}
-        />
-      </View>
-
-      {/* QUICK LINKS - REMOVED COUPONS AND BILLING */}
-      <View style={styles.quickLinks}>
-        <QuickLink href="/business/dashboard/analytics" label="Analytics" icon="chart-box" />
-        <QuickLink href="/business/dashboard/team" label="Staff" icon="account-group" />
-        <QuickLink href="/business/dashboard/bookings/manage" label="Bookings" icon="calendar" />
-        <QuickLink href="/business/dashboard/services" label="Services" icon="briefcase" />
-        <QuickLink href="/business/dashboard/reports" label="Reports" icon="file-chart" />
-        <QuickLink href="/business/dashboard/profile" label="Profile" icon="store" />
-      </View>
-
-      {/* UPCOMING LIST */}
-      <Surface elevation={1} style={[styles.sectionCard, { backgroundColor: theme.colors.surface }]}>
-        <View style={styles.sectionHeader}>
-          <Text variant="titleLarge" style={{ fontWeight: "800", color: "#0F4BAC" }}>Next 5 Upcoming Bookings</Text>
-          <Link href="./bookings/manage" asChild><Button mode="text">View all</Button></Link>
+      {loading && !kpis ? (
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Loading dashboard...</Text>
         </View>
-        <Divider />
-        <View style={{ paddingVertical: 8 }}>
-          {upcoming.map((b) => (
-            <Surface key={b.id} elevation={0} style={styles.upcomingRow}>
-              <Text style={styles.upcomingText}>{`${b.service} - ${b.customer}`}</Text>
-              <Text style={styles.upcomingTime}>{b.time}</Text>
-            </Surface>
-          ))}
-          {(!upcoming || upcoming.length === 0) && !loading && (
-            <Text style={{ marginTop: 12, color: theme.colors.onSurfaceVariant }}>
-              No bookings have been made yet.
-            </Text>
-          )}
+      ) : error ? (
+        <View style={styles.loadingContainer}>
+          <Text style={[styles.loadingText, { color: theme.colors.error }]}>{error}</Text>
+          <Button onPress={fetchAll} style={{ marginTop: 12 }}>
+            Retry
+          </Button>
         </View>
-      </Surface>
+      ) : (
+        <>
+          {/* METRICS */}
+          <View style={[styles.metricsGrid, oneCol && { gap: 14 }]}>
+            <MetricCard
+              title="TOTAL BOOKINGS"
+              value={kpis?.totalBookings ?? 0}
+              tone="info"
+              pill="Last 30 days"
+            />
+            <MetricCard
+              title="REVENUE (KES)"
+              value={`${((kpis?.revenueMinor ?? 0) / 100).toLocaleString()}`}
+              tone="info"
+              pill="Last 30 days"
+            />
+            <MetricCard
+              title="CANCELLATIONS"
+              value={kpis?.cancelled ?? 0}
+              tone="danger"
+              pill="Last 30 days"
+            />
+            <MetricCard
+              title="NO SHOWS"
+              value={kpis?.noShow ?? 0}
+              tone="success"
+              pill="Last 30 days"
+            />
+          </View>
 
-      {/* Business Profile Section */}
-      <Surface elevation={1} style={[styles.sectionCard, { backgroundColor: theme.colors.surface }]}>
-        <Text variant="titleLarge" style={{ fontWeight: "800", color: "#0F4BAC" }}>Business Profile</Text>
-        <Divider style={{ marginVertical: 8 }} />
-        {profile ? (
-          <>
-            <Text>Name: <Text style={styles.bold}>{profile?.name}</Text></Text>
-            {!!profile?.type && <Text>Type: {profile.type}</Text>}
-            {!!profile?.address && <Text>Address: {profile.address}</Text>}
-            {!!profile?.createdAt && <Text>Since: {new Date(profile.createdAt).toDateString()}</Text>}
-            <View style={{ marginTop: 8 }}>
-              <Button mode="outlined" onPress={() => router.push("/business/dashboard/profile")}>
-                Edit Profile
-              </Button>
+          {/* QUICK LINKS - REMOVED COUPONS AND BILLING */}
+          <View style={styles.quickLinks}>
+            <QuickLink href="/business/dashboard/analytics" label="Analytics" icon="chart-box" />
+            <QuickLink href="/business/dashboard/team" label="Staff" icon="account-group" />
+            <QuickLink href="/business/dashboard/bookings/manage" label="Bookings" icon="calendar" />
+            <QuickLink href="/business/dashboard/services" label="Services" icon="briefcase" />
+            <QuickLink href="/business/dashboard/reports" label="Reports" icon="file-chart" />
+            <QuickLink href="/business/dashboard/profile" label="Profile" icon="store" />
+          </View>
+
+          {/* UPCOMING LIST */}
+          <Surface elevation={1} style={[styles.sectionCard, { backgroundColor: theme.colors.surface }]}>
+            <View style={styles.sectionHeader}>
+              <Text variant="titleLarge" style={{ fontWeight: "800", color: "#0F4BAC" }}>Next 5 Upcoming Bookings</Text>
+              <Link href="./bookings/manage" asChild><Button mode="text">View all</Button></Link>
             </View>
-          </>
-        ) : (
-          <Text>{loading ? "Loading…" : "No profile data"}</Text>
-        )}
-      </Surface>
+            <Divider />
+            <View style={{ paddingVertical: 8 }}>
+              {upcoming.map((b) => (
+                <Surface key={b.id} elevation={0} style={styles.upcomingRow}>
+                  <Text style={styles.upcomingText}>{`${b.service} - ${b.customer}`}</Text>
+                  <Text style={styles.upcomingTime}>{b.time}</Text>
+                </Surface>
+              ))}
+              {(!upcoming || upcoming.length === 0) && !loading && (
+                <Text style={{ marginTop: 12, color: theme.colors.onSurfaceVariant }}>
+                  No bookings have been made yet.
+                </Text>
+              )}
+            </View>
+          </Surface>
 
-      {/* Reviews Section */}
-      <Surface elevation={1} style={[styles.sectionCard, { backgroundColor: theme.colors.surface }]}>
-        <View style={styles.sectionHeader}>
-          <Text variant="titleLarge" style={{ fontWeight: "800", color: "#0F4BAC" }}>Recent Reviews</Text>
-          <Button onPress={() => router.push("/business/dashboard/reviews")}>View all</Button>
-        </View>
-        <Divider />
-        <View style={{ paddingVertical: 8 }}>
-          {!reviews.length && !loading ? (
-            <Text style={{ marginTop: 12, color: theme.colors.onSurfaceVariant }}>No reviews yet.</Text>
-          ) : (
-            reviews.map((r: any) => (
-              <View key={r.id} style={styles.reviewRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.bold}>{r?.user?.name || "Anonymous"}</Text>
-                  <Text>{"★".repeat(Number(r?.rating || 0))}</Text>
-                  {!!r?.comment && <Text>{r.comment}</Text>}
-                  <Text style={{ opacity: 0.6, marginTop: 2 }}>
-                    {new Date(r.createdAt).toDateString()}
-                  </Text>
-                </View>
-                {!!r?.flagged ? (
-                  <Chip compact>Flagged</Chip>
-                ) : (
-                  <Button
-                    mode="text"
-                    onPress={async () => {
-                      try {
-                        await flagReview(r.id);
-                        onRefresh();
-                      } catch {}
-                    }}
-                  >
-                    Flag
+          {/* Business Profile Section */}
+          <Surface elevation={1} style={[styles.sectionCard, { backgroundColor: theme.colors.surface }]}>
+            <Text variant="titleLarge" style={{ fontWeight: "800", color: "#0F4BAC" }}>Business Profile</Text>
+            <Divider style={{ marginVertical: 8 }} />
+            {profile ? (
+              <>
+                <Text>Name: <Text style={styles.bold}>{profile?.name}</Text></Text>
+                {!!profile?.type && <Text>Type: {profile.type}</Text>}
+                {!!profile?.address && <Text>Address: {profile.address}</Text>}
+                {!!profile?.createdAt && <Text>Since: {new Date(profile.createdAt).toDateString()}</Text>}
+                <View style={{ marginTop: 8 }}>
+                  <Button mode="outlined" onPress={() => router.push("/business/dashboard/profile")}>
+                    Edit Profile
                   </Button>
-                )}
-              </View>
-            ))
-          )}
-        </View>
-      </Surface>
+                </View>
+              </>
+            ) : (
+              <Text>{loading ? "Loading…" : "No profile data"}</Text>
+            )}
+          </Surface>
+
+          {/* Reviews Section */}
+          <Surface elevation={1} style={[styles.sectionCard, { backgroundColor: theme.colors.surface }]}>
+            <View style={styles.sectionHeader}>
+              <Text variant="titleLarge" style={{ fontWeight: "800", color: "#0F4BAC" }}>Recent Reviews</Text>
+              <Button onPress={() => router.push("/business/dashboard/reviews")}>View all</Button>
+            </View>
+            <Divider />
+            <View style={{ paddingVertical: 8 }}>
+              {!reviews.length && !loading ? (
+                <Text style={{ marginTop: 12, color: theme.colors.onSurfaceVariant }}>No reviews yet.</Text>
+              ) : (
+                reviews.map((r: any) => (
+                  <View key={r.id} style={styles.reviewRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.bold}>{r?.user?.name || "Anonymous"}</Text>
+                      <Text>{"★".repeat(Number(r?.rating || 0))}</Text>
+                      {!!r?.comment && <Text>{r.comment}</Text>}
+                      <Text style={{ opacity: 0.6, marginTop: 2 }}>
+                        {new Date(r.createdAt).toDateString()}
+                      </Text>
+                    </View>
+                    {!!r?.flagged ? (
+                      <Chip compact>Flagged</Chip>
+                    ) : (
+                      <Button
+                        mode="text"
+                        onPress={async () => {
+                          try {
+                            await flagReview(r.id);
+                            onRefresh();
+                          } catch {}
+                        }}
+                      >
+                        Flag
+                      </Button>
+                    )}
+                  </View>
+                ))
+              )}
+            </View>
+          </Surface>
+        </>
+      )}
     </ScrollView>
   );
 }
@@ -474,10 +454,6 @@ function QuickLink({ href, label, icon }: { href: string; label: string; icon: s
     </Link>
   );
 }
-
-/* ---------- Helpers ---------- */
-const sign = (n?: number) => (n == null ? "0" : n > 0 ? `+${n}` : `${n}`);
-const delta = (n?: number) => (n == null ? "0" : n > 0 ? `+${n}` : `${n}`);
 
 /* ---------- Styles ---------- */
 const styles = StyleSheet.create({
@@ -544,4 +520,16 @@ const styles = StyleSheet.create({
     gap: 8 
   },
   bold: { fontWeight: "700" },
+
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 60,
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: "#6B7280",
+  },
 });

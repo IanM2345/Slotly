@@ -33,7 +33,7 @@ export default function SettingsScreen() {
 
   const ONBOARDING_START = "/business/onboarding" as const;
 
-  const handleBack = () => router.back();
+ const handleBack = () => router.replace('/(tabs)/profile' as any);
   const handleNavigation = (route: string) => {
     // Keep your existing loose navigation helper
     router.push(route as any);

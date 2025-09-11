@@ -74,14 +74,19 @@ interface AnalyticsResponse {
   }
   series?: {
     byDay: Array<{
-      date: string
-      bookings: number
-      revenue: number
+      date?: string
+      d?: string
+      day?: string
+      bookings?: number
+      count?: number
+      revenue?: number
+      revenueMinor?: number
     }>
     byService: Array<{
       serviceId: string | null
       name: string
-      count: number
+      count?: number
+      bookings?: number
       revenue: number
     }>
   }
@@ -205,6 +210,9 @@ export default function AnalyticsScreen() {
         })
       }
 
+      // Quick sanity check - log raw analytics for debugging
+      console.log("RAW analytics:", JSON.stringify(res).slice(0, 1500));
+
       // The backend now returns both shapes - normalize for consistency
       let adapted: AnalyticsResponse
       if (res?.analytics) {
@@ -216,22 +224,28 @@ export default function AnalyticsScreen() {
         const revenue: Record<string, number> = {}
         const bookings: Record<string, number> = {}
         
-        series.byDay.forEach((item) => {
-          if (item.date) {
-            revenue[item.date] = item.revenue || 0
-            bookings[item.date] = item.bookings || 0
-          }
-        })
+        // Tolerant adapter - handle both {date, revenue} and {d, revenueMinor} shapes
+        series.byDay.forEach((item: any) => {
+          const day = item.date || item.d || item.day;
+          if (!day) return;
+          const rev = item.revenue ?? item.revenueMinor ?? 0;
+          const cnt = item.bookings ?? item.count ?? 0;
+          revenue[day] = Number(rev);
+          bookings[day] = Number(cnt);
+        });
+
+        // Also fix byService -> use count OR bookings
+        const popularServices = (series.byService || []).map((s: any) => ({
+          name: s.name,
+          count: Number(s.count ?? s.bookings ?? 0),
+        }));
         
         adapted = {
           analytics: {
             revenue,
             bookings,
             clients: res.kpis.bookings || 0,
-            popularServices: series.byService.map((s) => ({
-              name: s.name,
-              count: s.count,
-            })),
+            popularServices,
             staffPerformance: [],
             noShows: {},
           },

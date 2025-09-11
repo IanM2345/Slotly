@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
-import { Text, TextInput, Button, useTheme, Surface, IconButton } from "react-native-paper";
-import { useRouter } from "expo-router";
+import { Text, TextInput, Button, useTheme, Surface, IconButton, Banner } from "react-native-paper";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 // API + Session
@@ -45,6 +45,7 @@ function getPostLoginRoute(u?: Pick<SessionUser, "role" | "business">) {
 export default function LoginScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const params = useLocalSearchParams();
   const { setAuth, token, user, ready } = useSession();
 
   const [email, setEmail] = useState("");
@@ -54,8 +55,17 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; phone?: string; password?: string }>({});
   const [serverError, setServerError] = useState<string | null>(null);
+  const [showCreatedBanner, setShowCreatedBanner] = useState(false);
 
   const redirectingRef = useRef(false);
+
+  // Handle email parameter from OTP verification and show success banner
+  useEffect(() => {
+    if (typeof params.email === "string" && params.email) {
+      setEmail(params.email);
+      setShowCreatedBanner(true);
+    }
+  }, [params]);
 
   // If user lands on login while already authenticated, route them.
   useEffect(() => {
@@ -144,6 +154,20 @@ export default function LoginScreen() {
             <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onBackground} onPress={handleBack} style={styles.backButton} />
             <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onBackground }]}>Sign In</Text>
           </View>
+
+          {showCreatedBanner && (
+            <Banner
+              visible
+              icon="check"
+              actions={[{ label: "Dismiss", onPress: () => setShowCreatedBanner(false) }]}
+              style={[styles.banner, { backgroundColor: theme.colors.primaryContainer }]}
+              contentStyle={styles.bannerContent}
+            >
+              <Text style={[styles.bannerText, { color: theme.colors.onPrimaryContainer }]}>
+                Account created successfully! Please sign in.
+              </Text>
+            </Banner>
+          )}
 
           <Surface style={[styles.formContainer, { backgroundColor: theme.colors.surface }]} elevation={2}>
             <View style={styles.form}>
@@ -241,6 +265,16 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", paddingTop: 16, paddingBottom: 32 },
   backButton: { marginLeft: -8, marginRight: 8 },
   title: { fontWeight: "bold" },
+  banner: { 
+    marginBottom: 16, 
+    borderRadius: 12,
+  },
+  bannerContent: {
+    paddingVertical: 4,
+  },
+  bannerText: {
+    fontWeight: "500",
+  },
   formContainer: { borderRadius: 16, marginBottom: 32 },
   form: { padding: 24 },
   input: { marginBottom: 8 },

@@ -1,4 +1,4 @@
-import api from "../client";
+import api, { getTokens, API_BASE_URL } from "../client";
 import { jsonFetch } from "./_fetch";
 
 /** Helper to attach Bearer token per-call (if your api client doesn't do it globally). */
@@ -197,25 +197,18 @@ export async function getMyReviews(token) {
 /** POST /api/users/reviews — upsert by businessId or bookingId */
 export async function createOrUpdateReview({ businessId, bookingId, rating, comment, imageUrl }) {
   const payload = { businessId, bookingId, rating, comment, imageUrl };
+  const { accessToken } = await getTokens();
+  if (!accessToken) throw new Error("Not signed in");
 
-  // Pull the latest access token straight from SecureStore
-  const token = await getAccessToken();
-  if (!token) throw new Error("Not signed in");
-
-  // Use absolute URL to avoid any baseURL confusion
-  const url = `${API_BASE_URL}/api/users/reviews`;
-
-  const res = await jsonFetch(url, {
+  return jsonFetch(`${API_BASE_URL}/api/users/reviews`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Accept": "application/json",
-      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify(payload),
   });
-
-  return res;
 }
 
 /** DELETE /api/users/reviews?businessId=... */

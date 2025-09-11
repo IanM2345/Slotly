@@ -16,6 +16,7 @@ import {
 import { useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system";
+import Constants from "expo-constants";
 
 import { useSession } from "../../../context/SessionContext";
 import { Section } from "../../../components/Section";
@@ -25,6 +26,7 @@ import {
   getBusinessProfile,
   updateBusinessProfile,
 } from "../../../lib/api/modules/manager";
+import { uploadToCloudinary } from "../../../lib/api/modules/users";
 import { placesAutocomplete, geocode, createDebouncedSearch } from "../../../lib/api/map";
 
 type Suggestion = { description: string; place_id: string };
@@ -49,7 +51,7 @@ export default function BusinessProfileScreen() {
   const [longitude, setLongitude] = useState<number | null>(null);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
 
-  // image picked locally (to upload as base64 if no upload service)
+  // image picked locally (to upload to Cloudinary)
   const [logoLocalUri, setLogoLocalUri] = useState<string | null>(null);
 
   // place autocomplete
@@ -158,10 +160,26 @@ export default function BusinessProfileScreen() {
         longitude: longitude ?? undefined,
       };
 
-      // prefer uploading a picked file (base64 data URL) when logoLocalUri set
+      // Upload picked image to Cloudinary (unsigned), then save resulting URL
       if (logoLocalUri) {
-        const base64 = await FileSystem.readAsStringAsync(logoLocalUri, { encoding: FileSystem.EncodingType.Base64 });
-        payload.logoDataUrl = `data:image/${logoLocalUri.endsWith(".png") ? "png" : "jpeg"};base64,${base64}`;
+        const CLOUD_NAME =
+          process.env.EXPO_PUBLIC_CLOUDINARY_CLOUD_NAME ||
+          (Constants?.expoConfig?.extra as any)?.EXPO_PUBLIC_CLOUDINARY_CLOUD_NAME;
+        const UPLOAD_PRESET =
+          process.env.EXPO_PUBLIC_CLOUDINARY_UPLOAD_PRESET ||
+          (Constants?.expoConfig?.extra as any)?.EXPO_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+
+        if (!CLOUD_NAME || !UPLOAD_PRESET) {
+          throw new Error("Missing Cloudinary config (cloud name / preset)");
+        }
+
+        const uploadedUrl = await uploadToCloudinary({
+          fileUri: logoLocalUri,
+          uploadPreset: UPLOAD_PRESET,
+          cloudName: CLOUD_NAME,
+        });
+
+        payload.logoUrl = uploadedUrl;
       } else if (logoUrl) {
         payload.logoUrl = logoUrl;
       }
@@ -169,13 +187,14 @@ export default function BusinessProfileScreen() {
       const updated = await updateBusinessProfile(payload);
       setSavedMsg("Profile updated");
 
-      // update SessionContext — keep it lightweight
+      // update SessionContext – ensure context has the new logo
       updateBusiness?.({
         id: updated?.id,
         businessName: updated?.name,
-      });
+        logoUrl: updated?.logoUrl,   // 👈 ensure context has the new logo
+      } as any);
 
-      // reflect logo URL returned by backend (if it saved the upload)
+      // reflect logo URL returned by backend
       if (updated?.logoUrl) setLogoUrl(updated.logoUrl);
       if (logoLocalUri) setLogoLocalUri(null);
     } catch (e: any) {

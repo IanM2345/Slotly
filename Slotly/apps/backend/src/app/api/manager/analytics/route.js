@@ -1,415 +1,142 @@
-import { NextResponse } from 'next/server';
-import * as Sentry from '@sentry/nextjs';
-import { PrismaClient } from '@/generated/prisma';
-import { verifyToken } from '@/middleware/auth';
-import { getPlanFeatures } from '@/shared/subscriptionPlanUtils';
-import { Parser } from 'json2csv'; 
+// apps/backend/src/app/api/manager/analytics/route.js
+import { NextResponse } from "next/server";
+import { PrismaClient } from "@/generated/prisma";
+import * as Sentry from "@sentry/nextjs";
+import { verifyToken } from "@/middleware/auth";
 
-const prisma = new PrismaClient();
-const inMemoryCache = new Map();
-const cacheTTL = 1000 * 60 * 5;
+export const dynamic = "force-dynamic";
+const prisma = globalThis._prisma ?? new PrismaClient();
+if (process.env.NODE_ENV !== "production") globalThis._prisma = prisma;
 
-function groupByUnit(date, view) {
-  const d = new Date(date);
-  switch (view) {
-    case 'daily':
-      return d.toISOString().slice(0, 10);
-    case 'weekly': {
-      const start = new Date(d.setDate(d.getDate() - d.getDay()));
-      return start.toISOString().slice(0, 10);
-    }
-    case 'monthly':
-    default:
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  }
+function startOfDay(d = new Date()) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
+function endOfDay(d = new Date())   { const x = new Date(d); x.setHours(23,59,59,999); return x; }
+
+function rangeFromPeriod(period = "30d") {
+  const now = new Date();
+  if (period === "today") return { from: startOfDay(now), to: endOfDay(now) };
+  const days = period === "7d" ? 7 : 30;
+  const from = new Date(now);
+  from.setDate(now.getDate() - (days - 1));
+  from.setHours(0,0,0,0);
+  return { from, to: endOfDay(now) };
 }
 
-function rollingAverage(data, window = 7) {
-  const keys = Object.keys(data).sort();
-  const result = {};
-  for (let i = 0; i < keys.length; i++) {
-    const slice = keys.slice(Math.max(0, i - window + 1), i + 1);
-    const avg = slice.reduce((sum, key) => sum + data[key], 0) / slice.length;
-    result[keys[i]] = avg;
-  }
-  return result;
+function dayKey(date) { return new Date(date).toISOString().slice(0,10); } // YYYY-MM-DD
+
+function bucketDate(b) {
+  // prefer completedAt, then startTime, then createdAt
+  return b.completedAt || b.startTime || b.createdAt;
 }
 
-async function getBusinessFromToken(request) {
-  const authHeader = request.headers.get('authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return { error: 'Unauthorized', status: 401 };
-  }
-  const token = authHeader.split(' ')[1];
-  const { valid, decoded } = await verifyToken(token);
-  if (!valid || decoded.role !== 'BUSINESS_OWNER') {
-    return { error: 'Forbidden', status: 403 };
-  }
-  const business = await prisma.business.findFirst({
-    where: { ownerId: decoded.userId },
-  });
-  if (!business) {
-    return { error: 'Business not found', status: 404 };
-  }
-  return { business, userId: decoded.userId };
-}
-
-export async function GET(request) {
+export async function GET(req) {
   try {
-    const { business, error, status } = await getBusinessFromToken(request);
-    if (error) return NextResponse.json({ error }, { status });
+    const auth = req.headers.get("authorization");
+    if (!auth?.startsWith("Bearer ")) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const token = auth.split(" ")[1];
 
-    const features = getPlanFeatures(business.plan);
-    if (!features.canUseAnalytics) {
-      return NextResponse.json(
-        {
-          error: 'Your subscription does not support analytics access.',
-          suggestion: 'Upgrade your plan to unlock analytics.',
-        },
-        { status: 403 }
-      );
+    const { valid, decoded } = await verifyToken(token).catch(() => ({ valid: false }));
+    if (!valid) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const userId = decoded?.userId || decoded?.sub || decoded?.id;
+    if (!userId || decoded.role !== "BUSINESS_OWNER") {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { searchParams } = new URL(request.url);
-    // Support both legacy (view/startDate/endDate) and new (period/tz)
-    const period = searchParams.get('period'); // "7d" | "30d" | "90d"
-    const tz = searchParams.get('tz') || 'Africa/Nairobi';
+    Sentry.setUser({ id: userId, role: decoded.role });
 
-    let view = searchParams.get('view') || 'monthly';
-    let startDateParam = searchParams.get('startDate');
-    let endDateParam = searchParams.get('endDate');
+    const biz = await prisma.business.findFirst({
+      where: { ownerId: userId },
+      select: { id: true },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!biz) return NextResponse.json({ error: "No business found" }, { status: 404 });
 
-    const now = new Date();
-    let startDate = startDateParam ? new Date(startDateParam) : new Date(new Date().getFullYear(), 0, 1);
-    let endDate = endDateParam ? new Date(endDateParam) : now;
+    const { searchParams } = new URL(req.url);
+    const period = searchParams.get("period") || "30d";
+    const { from, to } = rangeFromPeriod(period);
 
-    if (period) {
-      // Map period → view + rolling window
-      const map = { '7d': { days: 7, view: 'daily' }, '30d': { days: 30, view: 'weekly' }, '90d': { days: 90, view: 'monthly' } };
-      const cfg = map[period] || map['30d'];
-      view = cfg.view;
-      endDate = now;
-      startDate = new Date(endDate);
-      startDate.setDate(endDate.getDate() - (cfg.days - 1));
-    }
-
-    if (isNaN(startDate) || isNaN(endDate)) {
-      return NextResponse.json({ error: 'Invalid date format' }, { status: 400 });
-    }
-
-    const metrics = (searchParams.get('metrics') || 'bookings,revenue,clients,services,staffPerformance,noShows').split(',');
-    const smoothing = searchParams.get('smoothing') === 'true'; // for rolling average
-    const abTestGroup = searchParams.get('abGroup');
-    
-    // FIXED: Cap staff analytics to plan limit
-    const requestedStaff = parseInt(searchParams.get('staffLimit')) || 5;
-    const staffLimit = Math.max(1, Math.min(requestedStaff, features.maxStaff || requestedStaff));
-    
-    const exportCsv = searchParams.get('export') === 'csv';
-
-    const cacheKey = `${business.id}:${view}:${startDate.toISOString()}:${endDate.toISOString()}:${metrics.sort().join(',')}:${smoothing}:${abTestGroup}:${staffLimit}:${period || ''}:${tz}`;
-    const cached = inMemoryCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < cacheTTL) {
-      if (exportCsv) {
-        const parser = new Parser();
-        const csv = parser.parse(cached.data.analytics);
-        return new NextResponse(csv, {
-          headers: { 'Content-Type': 'text/csv' },
-          status: 200,
-        });
-      }
-      return NextResponse.json(cached.data, { status: 200 });
-    }
-
-    const analytics = {};
-    const nowNow = new Date(); // avoid shadowing "now" if used above
-
-    if (metrics.includes('bookings')) {
-      const bookings = await prisma.booking.findMany({
-        where: {
-          businessId: business.id,
-          startTime: { gte: startDate, lte: endDate < nowNow ? endDate : nowNow },
-        },
-        select: { startTime: true },
-      });
-      const grouped = bookings.reduce((acc, item) => {
-        const key = groupByUnit(item.startTime, view);
-        acc[key] = (acc[key] || 0) + 1;
-        return acc;
-      }, {});
-      analytics.bookings = grouped;
-      if (smoothing) {
-        analytics.bookingsSmoothed = rollingAverage(grouped, 7);
-      }
-    }
-
-    if (metrics.includes('revenue')) {
-      const payments = await prisma.payment.findMany({
-        where: {
-          businessId: business.id,
-          status: 'SUCCESS',
-          createdAt: { gte: startDate, lte: endDate },
-        },
-        select: { amount: true, createdAt: true },
-      });
-      const grouped = payments.reduce((acc, item) => {
-        const key = groupByUnit(item.createdAt, view);
-        acc[key] = (acc[key] || 0) + item.amount;
-        return acc;
-      }, {});
-      analytics.revenue = grouped;
-      if (smoothing) {
-        analytics.revenueSmoothed = rollingAverage(grouped, 7);
-      }
-    }
-
-    if (metrics.includes('clients')) {
-      const clients = await prisma.booking.findMany({
-        where: {
-          businessId: business.id,
-          startTime: { gte: startDate, lte: endDate },
-        },
-        select: { userId: true },
-        distinct: ['userId'],
-      });
-      analytics.clients = clients.length;
-    }
-
-    if (metrics.includes('services')) {
-      const serviceBookings = await prisma.booking.groupBy({
-        by: ['serviceId'],
-        where: {
-          businessId: business.id,
-          startTime: { gte: startDate, lte: endDate },
-        },
-        _count: true,
-        orderBy: {
-          _count: { serviceId: 'desc' },
-        },
-        take: 5,
-      });
-
-      const serviceIds = serviceBookings.map((s) => s.serviceId);
-      const serviceNames = await prisma.service.findMany({
-        where: { id: { in: serviceIds } },
-        select: { id: true, name: true },
-      });
-
-      analytics.popularServices = serviceBookings.map((entry) => ({
-        serviceId: entry.serviceId,
-        count: entry._count,
-        name: serviceNames.find((s) => s.id === entry.serviceId)?.name || 'Unknown',
-      }));
-    }
-
-    if (metrics.includes('noShows')) {
-      const noShows = await prisma.booking.findMany({
-        where: {
-          businessId: business.id,
-          status: 'CONFIRMED',
-          startTime: { gte: startDate, lte: endDate < nowNow ? endDate : nowNow },
-        },
-        select: { startTime: true },
-      });
-
-      const grouped = noShows.reduce((acc, item) => {
-        const key = groupByUnit(item.startTime, view);
-        acc[key] = (acc[key] || 0) + 1;
-        return acc;
-      }, {});
-      analytics.noShows = grouped;
-      if (smoothing) {
-        analytics.noShowsSmoothed = rollingAverage(grouped, 7);
-      }
-    }
-
-    if (metrics.includes('staffPerformance')) {
-      const [completed, cancelled, noShows] = await Promise.all([
-        prisma.booking.groupBy({
-          by: ['staffId'],
-          where: {
-            businessId: business.id,
-            staffId: { not: null },
-            status: 'COMPLETED',
-            startTime: { gte: startDate, lte: endDate },
-          },
-          _count: true,
-        }),
-        prisma.booking.groupBy({
-          by: ['staffId'],
-          where: {
-            businessId: business.id,
-            staffId: { not: null },
-            status: 'CANCELLED',
-            startTime: { gte: startDate, lte: endDate },
-          },
-          _count: true,
-        }),
-        prisma.booking.groupBy({
-          by: ['staffId'],
-          where: {
-            businessId: business.id,
-            staffId: { not: null },
-            status: 'CONFIRMED',
-            startTime: { gte: startDate, lte: endDate < nowNow ? endDate : nowNow },
-          },
-          _count: true,
-        }),
-      ]);
-
-      const staffMap = {};
-      completed.forEach(({ staffId, _count }) => {
-        staffMap[staffId] = { staffId, completed: _count, cancelled: 0, noShows: 0 };
-      });
-      cancelled.forEach(({ staffId, _count }) => {
-        staffMap[staffId] = staffMap[staffId] || { staffId, completed: 0, cancelled: 0, noShows: 0 };
-        staffMap[staffId].cancelled = _count;
-      });
-      noShows.forEach(({ staffId, _count }) => {
-        staffMap[staffId] = staffMap[staffId] || { staffId, completed: 0, cancelled: 0, noShows: 0 };
-        staffMap[staffId].noShows = _count;
-      });
-
-      const allStaffIds = Object.keys(staffMap);
-      const staffDetails = await prisma.user.findMany({
-        where: { id: { in: allStaffIds } },
-        select: { id: true, name: true },
-      });
-
-      const performanceList = allStaffIds.map((staffId) => {
-        const entry = staffMap[staffId];
-        const total = entry.completed + entry.cancelled + entry.noShows;
-        const score = total > 0 ? Math.round((entry.completed / total) * 100) : 0;
-        return {
-          staffId,
-          name: staffDetails.find((s) => s.id === staffId)?.name || 'Unknown',
-          completed: entry.completed,
-          cancelled: entry.cancelled,
-          noShows: entry.noShows,
-          performanceScore: score,
-        };
-      });
-
-      const sorted = [...performanceList].sort((a, b) => b.performanceScore - a.performanceScore);
-      const count = sorted.length;
-      const cutoffGood = Math.floor(count * 0.25);
-      const cutoffPoor = Math.floor(count * 0.75);
-
-      const colorCoded = sorted.map((entry, i) => ({
-        ...entry,
-        performanceLevel:
-          i < cutoffGood ? 'good' : i >= cutoffPoor ? 'poor' : 'average',
-      }));
-
-      analytics.staffPerformance = colorCoded.slice(0, staffLimit);
-    }
-
-    if (metrics.includes('dropOff')) {
-      const dropOffs = await prisma.booking.findMany({
-        where: {
-          businessId: business.id,
-          status: 'CANCELLED',
-          startTime: { gte: startDate, lte: endDate },
-        },
-        select: { startTime: true },
-      });
-      const grouped = dropOffs.reduce((acc, item) => {
-        const key = groupByUnit(item.startTime, view);
-        acc[key] = (acc[key] || 0) + 1;
-        return acc;
-      }, {});
-      analytics.dropOffs = grouped;
-      if (smoothing) {
-        analytics.dropOffsSmoothed = rollingAverage(grouped, 7);
-      }
-    }
-
-    if (metrics.includes('abTest') && abTestGroup) {
-      const bookings = await prisma.booking.findMany({
-        where: {
-          businessId: business.id,
-          abTestGroup: abTestGroup,
-          startTime: { gte: startDate, lte: endDate },
-        },
-        select: { startTime: true },
-      });
-      const grouped = bookings.reduce((acc, item) => {
-        const key = groupByUnit(item.startTime, view);
-        acc[key] = (acc[key] || 0) + 1;
-        return acc;
-      }, {});
-      analytics[`bookings_ab_${abTestGroup}`] = grouped;
-    }
-
-    const responseData = {
-      analytics,
-      meta: { startDate, endDate, view, cached: false },
-    };
-
-    inMemoryCache.set(cacheKey, { data: responseData, timestamp: Date.now() });
-
-    // ---- Build forward-compat "kpis" + "series" from analytics ----
-    // bookings/revenue keyed buckets → totals
-    const sumDict = (d) => Object.values(d || {}).reduce((s, v) => s + (Number.isFinite(+v) ? +v : 0), 0);
-
-    // Compute totals for KPIs (use what we already queried)
-    const kBookings = sumDict(analytics.bookings);
-    const kRevenue = sumDict(analytics.revenue);
-
-    // Cancellations total in window
-    let kCancellations = 0;
-    try {
-      kCancellations = await prisma.booking.count({
-        where: { businessId: business.id, status: 'CANCELLED', startTime: { gte: startDate, lte: endDate } },
-      });
-    } catch {}
-
-    // No-shows total (derived if present)
-    const kNoShows = sumDict(analytics.noShows);
-    const kAvgTicket = kBookings > 0 ? Math.round(kRevenue / kBookings) : 0;
-
-    // byDay series (normalize date key as returned by groupByUnit)
-    const byDay = [];
-    const allKeys = new Set([
-      ...Object.keys(analytics.bookings || {}),
-      ...Object.keys(analytics.revenue || {}),
-    ]);
-    Array.from(allKeys).sort().forEach((key) => {
-      byDay.push({
-        date: key,
-        bookings: Number.isFinite(+analytics.bookings?.[key]) ? +analytics.bookings[key] : 0,
-        revenue: Number.isFinite(+analytics.revenue?.[key]) ? +analytics.revenue[key] : 0,
-      });
+    // Pull all bookings that touched the period (startTime, createdAt, OR completedAt)
+    const bookings = await prisma.booking.findMany({
+      where: {
+        businessId: biz.id,
+        OR: [
+          { startTime: { gte: from, lte: to } },
+          { createdAt: { gte: from, lte: to } },
+          { completedAt: { gte: from, lte: to } },
+        ],
+      },
+      select: {
+        id: true,
+        status: true,
+        createdAt: true,
+        startTime: true,
+        completedAt: true,
+        service: { select: { id: true, name: true, price: true } },
+        payments: {
+          where: { status: "SUCCESS", type: "BOOKING" },
+          select: { amount: true }
+        }
+      },
+      orderBy: { startTime: "asc" },
     });
 
-    // byService series from popularServices (revenue not computed here, default 0)
-    const byService = (analytics.popularServices || []).map((s) => ({
-      serviceId: s.serviceId || null,
-      name: s.name || 'Unknown',
-      count: Number.isFinite(+s.count) ? +s.count : 0,
-      revenue: 0,
-    }));
+    // Aggregate
+    let total = 0, completed = 0, cancelled = 0, noShow = 0, revenueMinor = 0;
+    const byDay = {};
+    const byService = {};
 
-    const compatPayload = {
-      ...responseData,
-      kpis: { bookings: kBookings, revenue: kRevenue, cancellations: kCancellations, noShows: kNoShows, avgTicket: kAvgTicket },
-      series: { byDay, byService },
-      tz, period: period || null, // echo back for clients
-    };
+    for (const b of bookings) {
+      total += 1;
+      if (b.status === "COMPLETED") completed += 1;
+      else if (b.status === "CANCELLED") cancelled += 1;
+      else if (b.status === "NO_SHOW") noShow += 1;
 
-    if (exportCsv) {
-      const parser = new Parser();
-      const csv = parser.parse(analytics);
-      return new NextResponse(csv, {
-        headers: { 'Content-Type': 'text/csv' },
-        status: 200,
-      });
+      // revenue from successful payment; if none & completed, fall back to service price
+      const paid = Number(b.payments?.[0]?.amount || 0);
+      const fallback = b.status === "COMPLETED" ? Number(b.service?.price || 0) : 0;
+      const add = paid > 0 ? paid : fallback;
+      revenueMinor += add;
+
+      // Use bucketDate for the day key
+      const d = dayKey(bucketDate(b));
+      if (!byDay[d]) byDay[d] = { d, bookings: 0, revenueMinor: 0 };
+      byDay[d].bookings += 1;
+      byDay[d].revenueMinor += add;
+
+      const svcName = b.service?.name || "Unknown";
+      if (!byService[svcName]) byService[svcName] = { name: svcName, bookings: 0, revenueMinor: 0 };
+      byService[svcName].bookings += 1;
+      byService[svcName].revenueMinor += add;
     }
 
-    return NextResponse.json(compatPayload, { status: 200 });
+    // Ensure series covers all days in range (helps charts)
+    for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
+      const key = dayKey(d);
+      if (!byDay[key]) byDay[key] = { d: key, bookings: 0, revenueMinor: 0 };
+    }
+
+    // KPIs expected by mobile frontend
+    const kpis = {
+      totalBookings: total,
+      completed,
+      cancelled,
+      noShow,
+      revenueMinor,            // cents/minor units
+      period,
+    };
+
+    const payload = {
+      meta: { businessId: biz.id, from, to, period },
+      kpis,
+      series: {
+        byDay: Object.values(byDay).sort((a, b) => (a.d < b.d ? -1 : 1)),
+        byService: Object.values(byService).sort((a, b) => b.bookings - a.bookings),
+      },
+    };
+
+    return NextResponse.json(payload, { status: 200 });
   } catch (err) {
+    console.error("GET /api/manager/analytics error:", err);
     Sentry.captureException(err);
-    console.error('⚠ Analytics error:', err);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }

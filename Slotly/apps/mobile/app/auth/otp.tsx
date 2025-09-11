@@ -168,8 +168,12 @@ export default function OTPScreen() {
       console.log('Verification successful, cleaning up session');
       await storage.removeItem("signupSessionData");
       
-      // Navigate to dashboard
-      router.replace("/(tabs)");
+      // Go to Login so the user signs in
+      // (we also pass the email so you can prefill the field)
+      router.replace({
+        pathname: "/auth/login",
+        params: { email: sessionData.email || String(email || "") }
+      } as any);
       
     } catch (e: any) {
       console.error('OTP verification error:', e);
