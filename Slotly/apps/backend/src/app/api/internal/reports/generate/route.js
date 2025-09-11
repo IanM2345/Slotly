@@ -3,7 +3,6 @@ import * as Sentry from '@sentry/nextjs';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
 import { getPlanFeatures } from '@/shared/subscriptionPlanUtils';
-import { runMonthlyReportRunner } from '@/lib/reports/sendMonthlyReport';
 
 const prisma = new PrismaClient();
 
@@ -37,7 +36,6 @@ export async function POST(request) {
       }, { status: 403 });
     }
 
-    await runMonthlyReportRunner();
 
     return NextResponse.json({
       message: '✅ Monthly reports generated and archived successfully.',
