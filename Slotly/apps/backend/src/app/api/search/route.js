@@ -323,7 +323,6 @@ export async function GET(request) {
             logoUrl: true, 
             searchCount: true,
             description: true,
-            phone: true,
           },
           take: 500,
         });
