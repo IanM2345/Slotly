@@ -351,8 +351,7 @@ export async function GET(request) {
           latitude: b.latitude,
           longitude: b.longitude,
           logoUrl: b.logoUrl || null,
-          description: b.description || null,
-          phone: null, // placeholder until you add a public business phone field
+          description: b.description || null, // placeholder until you add a public business phone field
           distanceMeters: Math.round(dKm * 1000),
           distanceKm: Math.round(dKm * 10) / 10,
           mapsLink: `https://www.google.com/maps/search/?api=1&query=${b.latitude},${b.longitude}`,
