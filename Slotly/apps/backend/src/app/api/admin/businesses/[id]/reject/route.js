@@ -1,11 +1,11 @@
-/* import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
 import { PrismaClient } from '@/generated/prisma';
 import { verifyToken } from '@/middleware/auth';
 import { createNotification } from '@/shared/notifications/createNotification';
 import { sendNotification } from '@/shared/notifications/sendNotification';
 import { sendAdminEmailLog } from '@/shared/notifications/sendAdminEmailLog';
-import { deleteStorageFile } from '@/shared/storage/cleanup';
+
 
 const prisma = globalThis.__prisma ?? new PrismaClient();
 if (process.env.NODE_ENV !== 'production') globalThis.__prisma = prisma;
@@ -131,18 +131,6 @@ async function handleReject(req, ctx) {
       return { business: found, purged, deletedFiles };
     });
 
-    // Storage cleanup if purged
-    if (result.purged && result.deletedFiles.length) {
-      await Promise.allSettled(
-        result.deletedFiles.map(async (fileUrl) => {
-          try { await deleteStorageFile(fileUrl); }
-          catch (e) {
-            console.error(`File delete failed: ${fileUrl}`, e);
-            Sentry.captureException(e, { extra: { fileUrl, businessId, action: 'storage_cleanup' } });
-          }
-        })
-      );
-    }
 
     // Notify
     const message = result.purged
@@ -204,4 +192,4 @@ async function handleReject(req, ctx) {
 // Support both POST and PATCH so the client doesn't 405
 export async function POST(req, ctx) { return handleReject(req, ctx); }
 export async function PATCH(req, ctx) { return handleReject(req, ctx); }
-export async function OPTIONS() { return NextResponse.json({}, { status: 204 }); } */
+export async function OPTIONS() { return NextResponse.json({}, { status: 204 }); }
