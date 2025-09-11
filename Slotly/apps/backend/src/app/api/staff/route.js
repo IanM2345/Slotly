@@ -2,11 +2,11 @@
 // Main staff context helper and introspection endpoint
 
 import * as Sentry from '@sentry/nextjs';
-import { PrismaClient } from '@/generated/prisma';
+import prisma from '@/generated/prisma';
 import { NextResponse } from 'next/server';
 import { verifyToken } from '@/middleware/auth';
 
-const prisma = new PrismaClient();
+
 
 // Small helper to format JSON consistently
 function j(data, status = 200, headers = {}) {
@@ -25,7 +25,7 @@ function j(data, status = 200, headers = {}) {
  *   if (ctx.error) return ctx.response; // early exit with proper HTTP status
  *   // else ctx.userId, ctx.business, ctx.enrollments
  */
-export async function getStaffContext(request) {
+async function getStaffContext(request) {
   try {
     const auth =
       request.headers.get('authorization') ||
