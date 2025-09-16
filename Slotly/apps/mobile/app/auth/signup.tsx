@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, TouchableOpacity } from "react-native"
+import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform } from "react-native"
 import { Text, TextInput, Button, useTheme, Surface, IconButton, Checkbox } from "react-native-paper"
 import { useRouter } from "expo-router"
 import { SafeAreaView } from "react-native-safe-area-context"
@@ -122,11 +122,6 @@ export default function SignupScreen() {
     }
   }
 
-  const handleSocialLogin = (provider: "google" | "facebook" | "apple") => {
-    console.log(`Login with ${provider}`)
-    // TODO: Implement social login
-  }
-
   const handleSignIn = () => router.push("../auth/login")
   const handleBack = () => router.back()
 
@@ -157,37 +152,6 @@ export default function SignupScreen() {
             <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onBackground }]}>
               Create Your Account
             </Text>
-          </View>
-
-          {/* Social Login Options */}
-          <View style={styles.socialContainer}>
-            <TouchableOpacity
-              style={[styles.socialButton, { borderColor: theme.colors.outline }]}
-              onPress={() => handleSocialLogin("google")}
-            >
-              <Text style={styles.socialButtonText}>Continue with Google</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.socialButton, { borderColor: theme.colors.outline, backgroundColor: "#1877F2" }]}
-              onPress={() => handleSocialLogin("facebook")}
-            >
-              <Text style={[styles.socialButtonText, { color: "#FFFFFF" }]}>Continue with Facebook</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.socialButton, { borderColor: theme.colors.outline, backgroundColor: "#000000" }]}
-              onPress={() => handleSocialLogin("apple")}
-            >
-              <Text style={[styles.socialButtonText, { color: "#FFFFFF" }]}>Continue with Apple</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Divider */}
-          <View style={styles.dividerContainer}>
-            <View style={[styles.dividerLine, { backgroundColor: theme.colors.outline }]} />
-            <Text style={[styles.dividerText, { color: theme.colors.onSurfaceVariant }]}>or</Text>
-            <View style={[styles.dividerLine, { backgroundColor: theme.colors.outline }]} />
           </View>
 
           {/* Form */}
@@ -389,7 +353,7 @@ const styles = StyleSheet.create({
   header: {
     alignItems: 'center',
     paddingTop: 16,
-    paddingBottom: 24,
+    paddingBottom: 32,
   },
   backButton: {
     position: 'absolute',
@@ -409,35 +373,6 @@ const styles = StyleSheet.create({
   title: {
     fontWeight: "bold",
     textAlign: 'center',
-  },
-  socialContainer: {
-    marginBottom: 24,
-    gap: 12,
-  },
-  socialButton: {
-    borderWidth: 1,
-    borderRadius: 28,
-    paddingVertical: 14,
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-  },
-  socialButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#374151',
-  },
-  dividerContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-  },
-  dividerText: {
-    marginHorizontal: 16,
-    fontSize: 14,
   },
   formContainer: {
     borderRadius: 16,

@@ -5,8 +5,8 @@ import { Pressable, Platform } from 'react-native';
 import { PaperProvider } from 'react-native-paper';
 import { slotlyTheme } from "../theme/paper";
 
-import Colors from '@/constants/Colors';
-import { useColorScheme } from '@/components/useColorScheme';
+import Colors from '../../constants/Colors';
+import { useColorScheme } from '../../components/useColorScheme';
 import { useClientOnlyValue } from '@/components/useClientOnlyValue';
 
 function TabBarIcon(props: {

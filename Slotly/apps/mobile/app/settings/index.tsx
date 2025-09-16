@@ -314,63 +314,8 @@ export default function SettingsScreen() {
             </View>
           </Surface>
         </View>
-
-        {/* Personal Information */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>
-            Personal Information
-          </Text>
-
-          <TouchableRipple 
-            onPress={() => handleNavigation("/settings/payment-details")} 
-            rippleColor="rgba(0,0,0,0.1)"
-          >
-            <List.Item 
-              title="Payment Details" 
-              titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} 
-              style={styles.listItem} 
-            />
-          </TouchableRipple>
-
-          <TouchableRipple 
-            onPress={() => handleNavigation("/settings/family-and-friends")} 
-            rippleColor="rgba(0,0,0,0.1)"
-          >
-            <List.Item 
-              title="Family and Friends" 
-              titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} 
-              style={styles.listItem} 
-            />
-          </TouchableRipple>
-
-          <TouchableRipple 
-            onPress={() => handleNavigation("/settings/address")} 
-            rippleColor="rgba(0,0,0,0.1)"
-          >
-            <List.Item 
-              title="Address" 
-              titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} 
-              style={styles.listItem} 
-            />
-          </TouchableRipple>
-        </View>
-
-        {/* Notification */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>
-            Notification
-          </Text>
-          <View style={styles.notificationRow}>
-            <Text style={{ color: theme.colors.onBackground, fontSize: 16 }}>
-              Turn on notifications
-            </Text>
-            <Switch
-              value={notificationsEnabledState}
-              onValueChange={handleNotificationToggle}
-              color={theme.colors.primary}
-            />
-          </View>
-        </View>
+      
+    
 
         {/* Language */}
         <View style={styles.section}>
@@ -399,50 +344,14 @@ export default function SettingsScreen() {
             </View>
           </TouchableRipple>
 
-          <TouchableRipple 
-            onPress={() => handleNavigation("/settings/country")} 
-            rippleColor="rgba(0,0,0,0.1)"
-          >
-            <View style={styles.languageItem}>
-              <View>
-                <Text style={[styles.languageLabel, { color: theme.colors.onBackground }]}>
-                  Country:
-                </Text>
-                <Text style={[styles.languageValue, { color: theme.colors.onBackground }]}>
-                  Kenya
-                </Text>
-              </View>
-              <IconButton 
-                icon="chevron-right" 
-                size={24} 
-                iconColor={theme.colors.onBackground} 
-              />
-            </View>
-          </TouchableRipple>
+      
         </View>
 
         {/* Others */}
         <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.onBackground }]}>
-            Others
-          </Text>
+         
 
-          <TouchableRipple 
-            onPress={() => handleNavigation("/settings/change-password")} 
-            rippleColor="rgba(0,0,0,0.1)"
-          >
-            <View style={styles.othersItem}>
-              <Text style={{ color: theme.colors.onBackground, fontSize: 16 }}>
-                Change Password
-              </Text>
-              <IconButton 
-                icon="chevron-right" 
-                size={24} 
-                iconColor={theme.colors.onBackground} 
-              />
-            </View>
-          </TouchableRipple>
-
+          
           <TouchableRipple 
             onPress={() => handleNavigation("/settings/reviews")} 
             rippleColor="rgba(0,0,0,0.1)"
@@ -471,17 +380,6 @@ export default function SettingsScreen() {
           >
             <List.Item 
               title="Feedback" 
-              titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} 
-              style={styles.listItem} 
-            />
-          </TouchableRipple>
-
-          <TouchableRipple 
-            onPress={() => handleNavigation("/settings/gift-cards")} 
-            rippleColor="rgba(0,0,0,0.1)"
-          >
-            <List.Item 
-              title="Gift Cards" 
               titleStyle={[styles.listItemTitle, { color: theme.colors.onBackground }]} 
               style={styles.listItem} 
             />

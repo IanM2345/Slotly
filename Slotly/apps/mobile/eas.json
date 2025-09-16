@@ -1,0 +1,42 @@
+{
+  "cli": {
+    "version": ">= 14.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "production": {
+      "developmentClient": false,
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://slotly.onrender.com",
+        "EXPO_PUBLIC_API_URL": "https://slotly.onrender.com",
+        "EXPO_PUBLIC_API_URL_WEB": "https://slotly.onrender.com",
+        "EXPO_PUBLIC_GOOGLE_MAPS_KEY_ANDROID": "AIzaSyDHEOkX11BzJk1b7hi-MyPsjpLQK_8zxZo",
+        "EXPO_PUBLIC_GOOGLE_MAPS_KEY_IOS": "AIzaSyCdM1qFJVnpaHzmhxvOpY60rQuwoRjCono",
+        "EXPO_PUBLIC_CLOUDINARY_CLOUD_NAME": "dp2cnzafj",
+        "EXPO_PUBLIC_CLOUDINARY_UPLOAD_PRESET": "Business Registartion",
+        "EXPO_PUBLIC_PAYMENTS_ENABLED": "false",
+        "EXPO_PUBLIC_SENTRY_DSN": "https://893d7159c5b5424af1dd87f5dbecffe8@o4509682862129152.ingest.de.sentry.io/4509682864291920"
+      },
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "ios": {
+        "resourceClass": "m-medium"
+      }
+    },
+    "preview": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "autoIncrement": true
+    }
+  },
+  "submit": {
+    "production": {
+      "android": {
+        "track": "internal"
+      },
+      "ios": {}
+    }
+  }
+}

@@ -1,34 +1,39 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "Slotly",
+    "slug": "slotly",
     "version": "1.0.0",
+    "scheme": "slotly",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "mobile",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#0A58D8"
     },
     "ios": {
+      "bundleIdentifier": "com.slotly.app",
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "We use the camera to capture your ID and selfie for verification.",
-        "NSPhotoLibraryUsageDescription": "We access your photo library to let you pick verification images.",
-        "NSPhotoLibraryAddUsageDescription": "We may save captured images to your library."
+        "NSCameraUsageDescription": "We use the camera to let you upload photos.",
+        "NSPhotoLibraryUsageDescription": "We access your photo library so you can pick images.",
+        "NSPhotoLibraryAddUsageDescription": "We may save generated images to your library.",
+        "NSLocationWhenInUseUsageDescription": "We use your location to show nearby businesses and services."
       }
     },
     "android": {
+      "package": "com.slotly.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#0A58D8"
       },
       "softwareKeyboardLayoutMode": "resize",
       "edgeToEdgeEnabled": true,
       "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
         "READ_MEDIA_IMAGES",
         "READ_MEDIA_VIDEO",
         "CAMERA"
@@ -44,13 +49,23 @@
       "expo-font",
       "expo-web-browser",
       "expo-secure-store",
-      ["sentry-expo", { "organization": "slotlyltd", "project": "javascript-nextjs" }]
+      [
+        "sentry-expo",
+        {
+          "organization": "slotlyltd",
+          "project": "javascript-nextjs"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
     },
     "extra": {
-      "sentryDsn": "USE_EXPO_PUBLIC_SENTRY_DSN_ENV"
+      "sentryDsn": "USE_EXPO_PUBLIC_SENTRY_DSN_ENV",
+      "router": {},
+      "eas": {
+        "projectId": "c276dcab-7503-46c4-881f-a5f4265aa136"
+      }
     }
   }
 }

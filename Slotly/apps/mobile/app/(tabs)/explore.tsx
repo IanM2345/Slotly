@@ -63,53 +63,55 @@ const SEARCH_THROTTLE_MS = 300;
 const SEARCH_DEBOUNCE_MS = 500;
 const API_TIMEOUT_MS = 2000;
 
+// --- helpers to coerce numbers/distances/images safely ---
+const toNum = (v: any) => (v === undefined || v === null ? undefined : Number(v));
+const metersFrom = (v: any) => {
+  const n = toNum(v);
+  if (!Number.isFinite(n) || n === undefined) return undefined;
+  // if the number is tiny, assume it was km and convert to meters
+  return n > 100 ? n : Math.round(n * 1000);
+};
+const pick = (...candidates: any[]) => candidates.find(v => v !== undefined && v !== null);
+
 // --- Utility functions ---
 const uniqById = <T extends { id: string }>(arr: T[]): T[] =>
   Array.from(new Map(arr.map(x => [x.id, x])).values());
 
 const normalizeServiceResults = (arr: any[]): ServiceItem[] =>
   arr.map((s: any, i: number) => {
-    const bizRaw = s.business ?? {};
+    const b = s.business ?? {};
     const bizId = String(
-      bizRaw.id ??
-      bizRaw._id ??
-      s.businessId ??
-      `biz-${s.name ?? "unknown"}-${i}`
+      pick(b.id, b._id, s.businessId, `biz-${s.name ?? "unknown"}-${i}`)
     );
 
     return {
-      id: String(
-        s.id ??
-        s._id ??
-        s.serviceId ??
-        `${bizId}-svc-${i}`
-      ),
+      id: String(pick(s.id, s._id, s.serviceId, `${bizId}-svc-${i}`)),
       name: s.name ?? "Service",
-      price: typeof s.price === "number" ? s.price : undefined,
-      duration: typeof s.duration === "number" ? s.duration : undefined,
+      price: toNum(pick(s.price, s.amount, s.cost)),
+      duration: toNum(pick(s.duration, s.minutes, s.lengthMin)),
       business: s.business
         ? {
             id: bizId,
             name: s.business.name ?? "Business",
-            address: s.business.address,
-            latitude: s.business.latitude,
-            longitude: s.business.longitude,
+            address: pick(s.business.address, s.business.formattedAddress),
+            latitude: toNum(pick(s.business.latitude, s.business.lat)),
+            longitude: toNum(pick(s.business.longitude, s.business.lon, s.business.lng)),
           }
         : undefined,
-      distanceMeters: typeof s.distanceMeters === "number" ? s.distanceMeters : undefined,
-      imageUrl: s.imageUrl,
+      distanceMeters: metersFrom(pick(s.distanceMeters, s.distance_m, s.distanceKm, s.distance)),
+      imageUrl: pick(s.imageUrl, s.image, s.photoUrl, s.coverUrl),
     };
   });
 
 const normalizeBusinessResults = (arr: any[]): BusinessItem[] =>
   arr.map((b: any, i: number) => ({
-    id: String(b.id ?? b._id ?? `biz-${b.name ?? "unknown"}-${i}`),
+    id: String(pick(b.id, b._id, `biz-${b.name ?? "unknown"}-${i}`)),
     name: b.name ?? "Business",
-    address: b.address,
-    latitude: b.latitude,
-    longitude: b.longitude,
-    distanceMeters: typeof b.distanceMeters === "number" ? b.distanceMeters : undefined,
-    logoUrl: b.logoUrl,
+    address: pick(b.address, b.formattedAddress),
+    latitude: toNum(pick(b.latitude, b.lat)),
+    longitude: toNum(pick(b.longitude, b.lon, b.lng)),
+    distanceMeters: metersFrom(pick(b.distanceMeters, b.distance_m, b.distanceKm, b.distance)),
+    logoUrl: pick(b.logoUrl, b.logo, b.image, b.photoUrl, b.coverUrl),
   }));
 
 const sortByDistance = <T extends { distanceMeters?: number }>(arr: T[]): T[] =>
@@ -230,6 +232,8 @@ export default function ExploreScreen() {
       refreshing: isRefresh,
     }));
     
+    setBizState(prev => ({ ...prev, loading: true }));
+    
     lastSearchRef.current = now;
 
     try {
@@ -254,18 +258,38 @@ export default function ExploreScreen() {
       }, { timeoutMs: API_TIMEOUT_MS });
 
       const rawServices = Array.isArray(res?.services) ? res.services : [];
-      const rawBusinesses = Array.isArray(res?.businesses) ? res.businesses : [];
+      let rawBusinesses = Array.isArray(res?.businesses) ? res.businesses : [];
 
-      // Normalize and sort by distance
+      // Fallback: if backend didn't send businesses, derive them from service.business
+      if (rawBusinesses.length === 0 && rawServices.length > 0) {
+        const bizMap = new Map<string, any>();
+        for (const s of rawServices) {
+          if (!s?.business) continue;
+          const bid = String(pick(s.business.id, s.business._id));
+          if (!bid || bizMap.has(bid)) continue;
+          bizMap.set(bid, s.business);
+        }
+        rawBusinesses = Array.from(bizMap.values());
+      }
+
+      // Normalize + sort
       const services = sortByDistance(uniqById(normalizeServiceResults(rawServices)));
       const businesses = sortByDistance(uniqById(normalizeBusinessResults(rawBusinesses)));
 
+      // limit if we're using fallback coords
       const usingFilteredLocation = Number.isFinite(filters.lat!);
       const shouldLimitResults = !canUseDevice && !usingFilteredLocation;
-      
       const finalServices = shouldLimitResults ? services.slice(0, FALLBACK_LIMIT) : services;
       const finalBusinesses = shouldLimitResults ? businesses.slice(0, FALLBACK_LIMIT) : businesses;
 
+      // Prefer rating info embedded from API if present
+      const withApiRatings = finalBusinesses.map(b => ({
+        ...b,
+        _avgRating: toNum(((res as any).raw?.ratingByBusiness?.[b.id]?.avg) ?? (b as any).avgRating),
+        _ratingCount: toNum(((res as any).raw?.ratingByBusiness?.[b.id]?.count) ?? (b as any).ratingCount),
+      }));
+
+      // set state
       setSearchState(prev => ({
         ...prev,
         services: finalServices,
@@ -273,13 +297,14 @@ export default function ExploreScreen() {
         loading: false,
         refreshing: false,
       }));
-      
-      setBizState({ 
-        loading: false, 
-        businesses: finalBusinesses 
-      });
 
-      // Set suggestions only when no query
+      setBizState(prev => ({
+        ...prev,
+        loading: false,
+        businesses: withApiRatings,
+      }));
+
+      // suggestions
       if (!searchQuery && res?.suggested) {
         setSuggested({
           businesses: normalizeBusinessResults(res.suggested.businesses || []).slice(0, 5),
@@ -288,10 +313,16 @@ export default function ExploreScreen() {
       } else {
         setSuggested(null);
       }
+
+      if (__DEV__) {
+        console.log(`🔎 services=${services.length} businesses=${businesses.length}`);
+        console.log("   first business:", businesses[0]);
+      }
     } catch (error: any) {
       // Handle aborted fetches quietly
       if (error?.name === 'AbortError' || error?.message === 'ABORTED') {
         setSearchState(prev => ({ ...prev, loading: false, refreshing: false }));
+        setBizState(prev => ({ ...prev, loading: false }));
         return;
       }
       
@@ -400,9 +431,20 @@ export default function ExploreScreen() {
   useEffect(() => {
     (async () => {
       if (bizState.businesses.length === 0) return;
-      
-      const entries = await Promise.all(
-        bizState.businesses.slice(0, 10).map(async (b) => {
+
+      // seed from API if present
+      const seeded: Record<string, { avg: number; count: number }> = {};
+      for (const b of bizState.businesses) {
+        const avg = (b as any)._avgRating;
+        const count = (b as any)._ratingCount;
+        if (Number.isFinite(avg) || Number.isFinite(count)) {
+          seeded[b.id] = { avg: Number(avg) || 0, count: Number(count) || 0 };
+        }
+      }
+
+      const missing = bizState.businesses.filter(b => !(b.id in seeded)).slice(0, 10);
+      const fetched = await Promise.all(
+        missing.map(async (b) => {
           try {
             const s = await getBusinessReviewSummary(b.id);
             return [b.id, { avg: Math.round((s.averageRating || 0) * 10) / 10, count: s.reviewCount || 0 }];
@@ -411,7 +453,8 @@ export default function ExploreScreen() {
           }
         })
       );
-      setRatingMap(Object.fromEntries(entries));
+
+      setRatingMap({ ...seeded, ...Object.fromEntries(fetched) });
     })();
   }, [bizState.businesses]);
 

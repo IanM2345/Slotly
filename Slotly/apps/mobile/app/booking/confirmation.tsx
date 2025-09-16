@@ -351,21 +351,21 @@ export default function ConfirmationScreen() {
 
         {/* Action Buttons */}
         <View style={{ gap: 12 }}>
-          <ActionButton
-            onPress={() => router.push('/(tabs)/bookings' as any)}
-            style={{ backgroundColor: theme.colors.primary }}
-          >
-            View My Bookings
-          </ActionButton>
-          
-          <ActionButton
-            mode="outlined"
-            onPress={() => router.push('/(tabs)/explore' as any)}
-            style={{ borderColor: theme.colors.outline }}
-          >
-            Book Another Service
-          </ActionButton>
-        </View>
+  <ActionButton
+    onPress={() => router.replace('/(tabs)/history' as any)}
+    style={{ backgroundColor: theme.colors.primary }}
+  >
+    View My Bookings
+  </ActionButton>
+
+  <ActionButton
+    mode="outlined"
+    onPress={() => router.push('/(tabs)/explore' as any)}
+    style={{ borderColor: theme.colors.outline }}
+  >
+    Book Another Service
+  </ActionButton>
+</View>
 
         {/* Contact Support */}
         <View style={{ marginTop: 24, alignItems: 'center' }}>

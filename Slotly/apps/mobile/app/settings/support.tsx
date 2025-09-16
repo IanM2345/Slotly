@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, ScrollView, StyleSheet, Linking } from 'react-native';
+import { View, ScrollView, StyleSheet, Linking, Platform, Alert } from 'react-native';
 import {
   Text,
   Surface,
@@ -10,27 +10,81 @@ import {
 } from 'react-native-paper';
 import { useRouter } from 'expo-router';
 
+const SUPPORT_PHONE_E164 = '+254768088198'; // for tel: and sms:
+const SUPPORT_PHONE_WA   = '254768088198';  // WhatsApp uses no '+' sign
+const SUPPORT_EMAIL      = 'keslotly@gmail.com';
+
 export default function SupportScreen() {
   const theme = useTheme();
   const router = useRouter();
 
-  const handleBack = () => {
-    router.back();
+  const handleBack = () => router.back();
+  const handleFAQs = () => router.push('/settings/FAQs' as any);
+  const handleRateUs = () => router.push('/settings/feedback' as any);
+
+  const openMail = async () => {
+    const subject = 'Slotly Support';
+    const body = `Hi Slotly Support,%0D%0A%0D%0A` + 
+                 `I need help with ...%0D%0A%0D%0A` + 
+                 `Thanks.`;
+    const url = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
+    try {
+      const can = await Linking.canOpenURL(url);
+      if (!can) throw new Error('No mail app available');
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert('Email not available', 'Please email us at ' + SUPPORT_EMAIL);
+    }
   };
 
-  const handleFAQs = () => { router.push('/settings/FAQs' as any); };
+  const openTel = async () => {
+    const url = `tel:${SUPPORT_PHONE_E164}`;
+    try {
+      const can = await Linking.canOpenURL(url);
+      if (!can) throw new Error('No dialer available');
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert('Call not available', 'Please call ' + SUPPORT_PHONE_E164);
+    }
+  };
 
-  const handleRateUs = () => { router.push('/settings/feedback' as any); };
-
-  const openMail = () => Linking.openURL('mailto:support@slotly.app');
-  const openTel = () => Linking.openURL('tel:+254700000000');
-  const openChat = () => router.push('/settings/feedback' as any);
+  const openChat = async () => {
+    const msg = 'Hello Slotly support, I need assistance with my booking.';
+    // sms: scheme differs on iOS vs Android (&body vs ?body)
+    const smsUrl = `sms:${SUPPORT_PHONE_E164}${Platform.OS === 'ios' ? '&' : '?'}body=${encodeURIComponent(msg)}`;
+    try {
+      const canSms = await Linking.canOpenURL('sms:');
+      if (canSms) {
+        await Linking.openURL(smsUrl);
+        return;
+      }
+      // Fallback to WhatsApp if available
+      const waUrl = `https://wa.me/${SUPPORT_PHONE_WA}?text=${encodeURIComponent(msg)}`;
+      const canWa = await Linking.canOpenURL(waUrl);
+      if (canWa) {
+        await Linking.openURL(waUrl);
+        return;
+      }
+      throw new Error('No messaging app available');
+    } catch {
+      Alert.alert(
+        'Messaging not available',
+        `Please text or WhatsApp us at ${SUPPORT_PHONE_E164}`
+      );
+    }
+  };
 
   return (
     <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
-        <IconButton icon="arrow-left" size={24} iconColor={theme.colors.onSurface} onPress={handleBack} style={styles.backButton} />
+        <IconButton
+          icon="arrow-left"
+          size={24}
+          iconColor={theme.colors.onSurface}
+          onPress={handleBack}
+          style={styles.backButton}
+        />
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
@@ -47,13 +101,24 @@ export default function SupportScreen() {
         {/* Support Options */}
         <View style={styles.optionsContainer}>
           <TouchableRipple onPress={openChat} style={styles.optionButton} rippleColor="rgba(0, 0, 0, 0.1)">
-            <View style={styles.optionContent}><Text style={styles.optionText}>Chat Support</Text><IconButton icon="chevron-right" size={20} /></View>
+            <View style={styles.optionContent}>
+              <Text style={styles.optionText}>Chat Support</Text>
+              <IconButton icon="chevron-right" size={20} />
+            </View>
           </TouchableRipple>
+
           <TouchableRipple onPress={openMail} style={styles.optionButton} rippleColor="rgba(0, 0, 0, 0.1)">
-            <View style={styles.optionContent}><Text style={styles.optionText}>Email Support</Text><IconButton icon="chevron-right" size={20} /></View>
+            <View style={styles.optionContent}>
+              <Text style={styles.optionText}>Email Support</Text>
+              <IconButton icon="chevron-right" size={20} />
+            </View>
           </TouchableRipple>
+
           <TouchableRipple onPress={openTel} style={styles.optionButton} rippleColor="rgba(0, 0, 0, 0.1)">
-            <View style={styles.optionContent}><Text style={styles.optionText}>Phone Support</Text><IconButton icon="chevron-right" size={20} /></View>
+            <View style={styles.optionContent}>
+              <Text style={styles.optionText}>Phone Support</Text>
+              <IconButton icon="chevron-right" size={20} />
+            </View>
           </TouchableRipple>
 
           {/* FAQs Button */}
@@ -67,11 +132,17 @@ export default function SupportScreen() {
           {/* Rate Us Button */}
           <TouchableRipple onPress={handleRateUs} style={styles.optionButton} rippleColor="rgba(0, 0, 0, 0.1)">
             <View style={styles.optionContent}>
-              <View style={styles.rateUsContent}><Text style={styles.optionText}>Rate us</Text><Text style={styles.starIcon}>⭐</Text></View>
+              <View style={styles.rateUsContent}>
+                <Text style={styles.optionText}>Rate us</Text>
+                <Text style={styles.starIcon}>⭐</Text>
+              </View>
               <IconButton icon="chevron-right" size={20} style={styles.chevronIcon} />
             </View>
           </TouchableRipple>
-          <Button mode="contained" style={{ marginTop: 16, borderRadius: 28 }} onPress={openChat}>Start Chat</Button>
+
+          <Button mode="contained" style={{ marginTop: 16, borderRadius: 28 }} onPress={openChat}>
+            Start Chat
+          </Button>
         </View>
 
         {/* Bottom Spacing */}

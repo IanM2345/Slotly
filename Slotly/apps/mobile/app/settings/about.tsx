@@ -18,11 +18,10 @@ export default function AboutUsScreen() {
     router.back();
   };
 
-  const openWebsite = () => Linking.openURL('https://slotly.app');
-  const openTerms = () => Linking.openURL('https://slotly.app/terms');
-  const openPrivacy = () => Linking.openURL('https://slotly.app/privacy');
-  const openLicenses = () => Linking.openURL('https://slotly.app/licenses');
-
+  const openWebsite = () => Linking.openURL('https://slolty.com/');
+  const openTerms = () => Linking.openURL('https://slolty.com/terms-of-service');
+  const openPrivacy = () => Linking.openURL('https://slolty.com/privacy-policy');
+  
   return (
     <Surface style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Header */}
@@ -64,13 +63,6 @@ export default function AboutUsScreen() {
           <TouchableRipple onPress={openPrivacy} style={styles.listItem} rippleColor="rgba(0,0,0,0.1)">
             <View style={styles.listItemContent}>
               <Text style={styles.listItemText}>Privacy Policy</Text>
-              <IconButton icon="chevron-right" size={20} />
-            </View>
-          </TouchableRipple>
-          
-          <TouchableRipple onPress={openLicenses} style={styles.listItem} rippleColor="rgba(0,0,0,0.1)">
-            <View style={styles.listItemContent}>
-              <Text style={styles.listItemText}>Open Source Licenses</Text>
               <IconButton icon="chevron-right" size={20} />
             </View>
           </TouchableRipple>

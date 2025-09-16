@@ -27,11 +27,6 @@ export default function AboutUsScreen() {
       id: '3',
       title: 'Privacy Policy',
       route: '/settings/privacy-policy'
-    },
-    {
-      id: '4',
-      title: 'Licenses',
-      route: '/settings/licenses'
     }
   ];
 
